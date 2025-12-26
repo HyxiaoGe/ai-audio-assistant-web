@@ -1,0 +1,185 @@
+{
+  "project": "AI 音视频内容助手",
+  "version": "1.0.0",
+  "lastUpdated": "2025-12-24",
+  "phases": {
+    "phase1_mvp": {
+      "name": "Phase 1 - MVP",
+      "status": "in_progress",
+      "frontend": {
+        "status": "completed",
+        "framework": "Next.js 16 + React 19",
+        "ui": "shadcn/ui + Tailwind v4",
+        "auth": "Auth.js v5 (mock mode)",
+        "completedAt": "2024-12-22",
+        "notes": "Mock 数据，待接入后端 API"
+      },
+      "backend": {
+        "status": "completed",
+        "framework": "FastAPI + Celery",
+        "database": "PostgreSQL + Redis",
+        "storage": "MinIO"
+      }
+    }
+  },
+  "backend_tasks": {
+    "infrastructure": {
+      "name": "基础设施",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "be-001",
+          "name": "FastAPI 骨架",
+          "status": "completed"
+        },
+        {
+          "id": "be-002",
+          "name": "配置管理",
+          "status": "completed"
+        },
+        {
+          "id": "be-003",
+          "name": "统一响应格式",
+          "status": "completed"
+        },
+        {
+          "id": "be-004",
+          "name": "错误码定义",
+          "status": "completed"
+        },
+        {
+          "id": "be-005",
+          "name": "异常处理",
+          "status": "completed"
+        },
+        {
+          "id": "be-006",
+          "name": "中间件",
+          "status": "completed"
+        },
+        {
+          "id": "be-007",
+          "name": "数据库连接",
+          "status": "completed"
+        },
+        {
+          "id": "be-008",
+          "name": "用户模型",
+          "status": "completed"
+        },
+        {
+          "id": "be-009",
+          "name": "JWT 验证",
+          "status": "completed"
+        },
+        {
+          "id": "be-010",
+          "name": "认证依赖",
+          "status": "completed"
+        }
+      ]
+    },
+    "core_api": {
+      "name": "核心 API",
+      "status": "completed",
+      "depends_on": [
+        "infrastructure"
+      ],
+      "tasks": [
+        {
+          "id": "be-011",
+          "name": "POST /upload/presign",
+          "status": "completed"
+        },
+        {
+          "id": "be-012",
+          "name": "任务模型",
+          "status": "completed"
+        },
+        {
+          "id": "be-013",
+          "name": "POST /tasks",
+          "status": "completed"
+        },
+        {
+          "id": "be-014",
+          "name": "GET /tasks",
+          "status": "completed"
+        },
+        {
+          "id": "be-015",
+          "name": "GET /tasks/:id",
+          "status": "completed"
+        },
+        {
+          "id": "be-016",
+          "name": "DELETE /tasks/:id",
+          "status": "completed"
+        }
+      ]
+    },
+    "async_processing": {
+      "name": "异步处理",
+      "status": "completed",
+      "depends_on": [
+        "core_api"
+      ],
+      "tasks": [
+        {
+          "id": "be-017",
+          "name": "Celery 配置",
+          "status": "completed"
+        },
+        {
+          "id": "be-018",
+          "name": "处理任务",
+          "status": "completed"
+        },
+        {
+          "id": "be-019",
+          "name": "状态更新",
+          "status": "completed"
+        },
+        {
+          "id": "be-020",
+          "name": "WebSocket",
+          "status": "completed"
+        }
+      ]
+    },
+    "third_party": {
+      "name": "第三方服务",
+      "status": "completed",
+      "depends_on": [
+        "async_processing"
+      ],
+      "tasks": [
+        {
+          "id": "be-021",
+          "name": "MinIO 存储",
+          "status": "completed"
+        },
+        {
+          "id": "be-022",
+          "name": "ASR 服务",
+          "status": "completed"
+        },
+        {
+          "id": "be-023",
+          "name": "LLM 服务",
+          "status": "completed"
+        },
+        {
+          "id": "be-024",
+          "name": "YouTube 下载",
+          "status": "completed"
+        }
+      ]
+    }
+  },
+  "next_tasks": [],
+  "blocked": [],
+  "notes": {
+    "2024-12-22": "前端迁移完成，开始后端开发准备"
+  }
+}
