@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import mimetypes
 
 from minio import Minio
 
@@ -41,4 +42,18 @@ class MinioStorageService(StorageService):
             bucket_name=bucket,
             object_name=object_name,
             expires=timedelta(seconds=expires_in),
+        )
+
+    def upload_file(
+        self, object_name: str, file_path: str, content_type: str | None = None
+    ) -> None:
+        bucket = settings.MINIO_BUCKET
+        if not bucket:
+            raise RuntimeError("MINIO_BUCKET is not set")
+        resolved_type = content_type or mimetypes.guess_type(file_path)[0]
+        self._client.fput_object(
+            bucket_name=bucket,
+            object_name=object_name,
+            file_path=file_path,
+            content_type=resolved_type or "application/octet-stream",
         )

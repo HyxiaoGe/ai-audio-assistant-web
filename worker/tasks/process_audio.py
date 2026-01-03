@@ -41,7 +41,7 @@ async def _update_task(
     request_id: Optional[str],
 ) -> None:
     task.status = status
-    task.progress = progress
+    task.progress = max(task.progress or 0, progress)
     task.stage = stage
     if request_id:
         task.request_id = request_id
@@ -71,7 +71,7 @@ async def _mark_failed(
     task.status = "failed"
     task.progress = 0
     task.error_code = error.code.value
-    task.error_message = str(error)
+    task.error_message = error.kwargs.get("reason") or str(error)
     if request_id:
         task.request_id = request_id
     await session.commit()
@@ -97,6 +97,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
         try:
             await _update_task(session, task, "extracting", 10, "extracting", request_id)
 
+            audio_candidates: list[str] = []
             if task.source_type == "upload":
                 if not task.source_key:
                     raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_key")
@@ -106,17 +107,69 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                         ErrorCode.INVALID_PARAMETER, detail="upload_presign_expires"
                     )
                 storage_service = get_storage_service()
-                audio_url = storage_service.generate_presigned_url(
-                    task.source_key, expires_in
+                audio_candidates.append(
+                    storage_service.generate_presigned_url(task.source_key, expires_in)
                 )
             else:
-                if not task.source_url:
-                    raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_url")
-                audio_url = task.source_url
+                if task.source_key:
+                    expires_in = settings.UPLOAD_PRESIGN_EXPIRES
+                    if not expires_in:
+                        raise BusinessError(
+                            ErrorCode.INVALID_PARAMETER, detail="upload_presign_expires"
+                        )
+                    storage_service = get_storage_service()
+                    audio_candidates.append(
+                        storage_service.generate_presigned_url(
+                            task.source_key, expires_in
+                        )
+                    )
+                direct_url = None
+                if isinstance(task.source_metadata, dict):
+                    direct_url = task.source_metadata.get("direct_url")
+                if isinstance(direct_url, str) and direct_url:
+                    audio_candidates.append(direct_url)
+                if not audio_candidates:
+                    if not task.source_url:
+                        raise BusinessError(
+                            ErrorCode.INVALID_PARAMETER, detail="source_url"
+                        )
+                    audio_candidates.append(task.source_url)
 
             await _update_task(session, task, "transcribing", 40, "transcribing", request_id)
             asr_service = get_asr_service()
-            segments = await asr_service.transcribe(audio_url)
+            last_error: Optional[BusinessError] = None
+            segments: list[TranscriptSegment] = []
+
+            async def _asr_status(stage: str) -> None:
+                if stage == "asr_submitting":
+                    await _update_task(
+                        session, task, "asr_submitting", 45, "asr_submitting", request_id
+                    )
+                elif stage == "asr_polling":
+                    await _update_task(
+                        session, task, "asr_polling", 55, "asr_polling", request_id
+                    )
+
+            for audio_url in audio_candidates:
+                try:
+                    segments = await asr_service.transcribe(
+                        audio_url, status_callback=_asr_status
+                    )
+                    last_error = None
+                    break
+                except BusinessError as exc:
+                    last_error = exc
+                    if exc.code not in {
+                        ErrorCode.ASR_SERVICE_FAILED,
+                        ErrorCode.ASR_SERVICE_TIMEOUT,
+                        ErrorCode.ASR_SERVICE_UNAVAILABLE,
+                    }:
+                        raise
+                    logger.warning(
+                        "asr failed for url, trying fallback: %s", exc.code.value
+                    )
+            if last_error is not None and not segments:
+                raise last_error
 
             transcripts = []
             for idx, segment in enumerate(segments, start=1):

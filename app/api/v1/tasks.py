@@ -47,7 +47,23 @@ async def list_tasks(
     page_size: int = Query(default=20, ge=1, le=100),
     status: str = Query(default="all"),
 ) -> JSONResponse:
-    allowed_status = {"all", "pending", "processing", "completed", "failed"}
+    allowed_status = {
+        "all",
+        "pending",
+        "queued",
+        "resolving",
+        "downloading",
+        "downloaded",
+        "transcoding",
+        "uploading",
+        "uploaded",
+        "resolved",
+        "processing",
+        "asr_submitting",
+        "asr_polling",
+        "completed",
+        "failed",
+    }
     if status not in allowed_status:
         status = "all"
     items, total = await TaskService.list_tasks(db, user, page, page_size, status)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 
 @dataclass(frozen=True)
@@ -16,5 +16,9 @@ class TranscriptSegment:
 
 class ASRService(ABC):
     @abstractmethod
-    async def transcribe(self, audio_url: str) -> list[TranscriptSegment]:
+    async def transcribe(
+        self,
+        audio_url: str,
+        status_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> list[TranscriptSegment]:
         raise NotImplementedError

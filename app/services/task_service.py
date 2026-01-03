@@ -52,14 +52,30 @@ class TaskService:
             source_key=data.file_key if data.source_type == "upload" else None,
             source_metadata={},
             options=data.options.model_dump(),
-            status="pending",
-            progress=0,
+            status="queued",
+            progress=1,
+            stage="queued",
             request_id=trace_id,
             created_at=datetime.now(timezone.utc),
         )
         db.add(task)
         await db.commit()
         await db.refresh(task)
+
+        from worker.celery_app import celery_app
+
+        if data.source_type == "youtube":
+            celery_app.send_task(
+                "worker.tasks.process_youtube",
+                args=[task.id],
+                kwargs={"request_id": trace_id},
+            )
+        else:
+            celery_app.send_task(
+                "worker.tasks.process_audio",
+                args=[task.id],
+                kwargs={"request_id": trace_id},
+            )
         return task
 
     @staticmethod
@@ -74,7 +90,28 @@ class TaskService:
             Task.user_id == user.id,
             Task.deleted_at.is_(None),
         )
-        if status_filter != "all":
+        if status_filter == "processing":
+            base_query = base_query.where(
+                Task.status.in_(
+                    [
+                        "pending",
+                        "queued",
+                        "resolving",
+                        "downloading",
+                        "downloaded",
+                        "transcoding",
+                        "uploading",
+                        "uploaded",
+                        "resolved",
+                        "extracting",
+                        "asr_submitting",
+                        "asr_polling",
+                        "transcribing",
+                        "summarizing",
+                    ]
+                )
+            )
+        elif status_filter != "all":
             base_query = base_query.where(Task.status == status_filter)
 
         count_query = select(func.count()).select_from(base_query.subquery())

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
+import urllib.request
 from typing import Optional
 
 from tencentcloud.common import credential
@@ -20,6 +22,8 @@ from app.services.asr.base import ASRService, TranscriptSegment
 
 
 class TencentASRService(ASRService):
+    _BASE64_MAX_BYTES = 9 * 1024 * 1024
+
     def __init__(self) -> None:
         secret_id = settings.TENCENT_SECRET_ID
         secret_key = settings.TENCENT_SECRET_KEY
@@ -32,10 +36,16 @@ class TencentASRService(ASRService):
         self._secret_key = secret_key
         self._region = region
 
-    async def transcribe(self, audio_url: str) -> list[TranscriptSegment]:
+    async def transcribe(
+        self, audio_url: str, status_callback=None
+    ) -> list[TranscriptSegment]:
         if not audio_url:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="audio_url")
+        if status_callback:
+            await status_callback("asr_submitting")
         task_id = await asyncio.to_thread(self._create_task, audio_url)
+        if status_callback:
+            await status_callback("asr_polling")
         result = await self._poll_task(task_id)
         return self._parse_result(result)
 
@@ -66,7 +76,25 @@ class TencentASRService(ASRService):
         request.EngineModelType = engine_model_type
         request.ChannelNum = channel_num
         request.SourceType = source_type
-        request.Url = audio_url
+        if source_type == 1:
+            if self._should_use_url(audio_url):
+                request.SourceType = 0
+                request.Url = self._ensure_http_url(audio_url)
+            else:
+                try:
+                    with urllib.request.urlopen(audio_url, timeout=30) as response:
+                        payload = response.read()
+                except Exception as exc:
+                    raise BusinessError(
+                        ErrorCode.ASR_SERVICE_FAILED, reason=f"fetch audio failed: {exc}"
+                    ) from exc
+                if len(payload) > self._BASE64_MAX_BYTES:
+                    request.SourceType = 0
+                    request.Url = self._ensure_http_url(audio_url)
+                else:
+                    request.Data = base64.b64encode(payload).decode("ascii")
+        else:
+            request.Url = audio_url
         request.ResTextFormat = res_text_format
         request.SpeakerDiarization = speaker_dia
         request.SpeakerNumber = speaker_number
@@ -79,6 +107,22 @@ class TencentASRService(ASRService):
         if not task_id:
             raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="missing task id")
         return str(task_id)
+
+    def _should_use_url(self, audio_url: str) -> bool:
+        try:
+            request = urllib.request.Request(audio_url, method="HEAD")
+            with urllib.request.urlopen(request, timeout=10) as response:
+                content_length = response.headers.get("Content-Length")
+            if not content_length:
+                return False
+            return int(content_length) > self._BASE64_MAX_BYTES
+        except Exception:
+            return False
+
+    def _ensure_http_url(self, audio_url: str) -> str:
+        if audio_url.startswith("https://") and ".cos." in audio_url:
+            return "http://" + audio_url[len("https://") :]
+        return audio_url
 
     async def _poll_task(self, task_id: str) -> dict[str, object]:
         poll_interval = settings.TENCENT_ASR_POLL_INTERVAL

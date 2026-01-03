@@ -13,7 +13,9 @@ class AliyunASRService(ASRService):
         if not access_key_id or not access_key_secret:
             raise RuntimeError("ALIYUN_ACCESS_KEY_ID or ALIYUN_ACCESS_KEY_SECRET is not set")
 
-    async def transcribe(self, audio_url: str) -> list[TranscriptSegment]:
+    async def transcribe(
+        self, audio_url: str, status_callback=None
+    ) -> list[TranscriptSegment]:
         if not audio_url:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="audio_url")
         raise BusinessError(ErrorCode.ASR_SERVICE_UNAVAILABLE)

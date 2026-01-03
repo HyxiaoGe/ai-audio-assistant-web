@@ -23,4 +23,8 @@ celery_app.conf.result_serializer = "json"
 celery_app.conf.accept_content = ["json"]
 celery_app.conf.timezone = "UTC"
 
-celery_app.autodiscover_tasks(["worker.tasks"])
+# Import tasks to register them with Celery
+# Must import after celery_app is created to avoid circular imports
+from worker.tasks import download_youtube  # noqa: F401, E402
+from worker.tasks import process_audio  # noqa: F401, E402
+from worker.tasks import process_youtube  # noqa: F401, E402

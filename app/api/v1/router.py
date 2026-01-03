@@ -1,9 +1,13 @@
 ﻿from fastapi import APIRouter
 
-from app.api.v1 import health, tasks, upload, ws
+from app.api.v1 import auth, health, summaries, tasks, transcripts, upload, users, ws
 
-api_router = APIRouter()
+api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(auth.router)
 api_router.include_router(health.router)
 api_router.include_router(upload.router)
 api_router.include_router(tasks.router)
+api_router.include_router(transcripts.router)
+api_router.include_router(summaries.router)
+api_router.include_router(users.router)
 api_router.include_router(ws.router)

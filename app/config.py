@@ -24,11 +24,21 @@ class Settings(BaseSettings):
     JWT_SECRET: Optional[str] = Field(default=None)
     JWT_ALGORITHM: Optional[str] = Field(default=None)
 
+    STORAGE_PROVIDER: Optional[Literal["minio", "cos"]] = Field(default="minio")
+
     MINIO_ENDPOINT: Optional[str] = Field(default=None)
     MINIO_ACCESS_KEY: Optional[str] = Field(default=None)
     MINIO_SECRET_KEY: Optional[str] = Field(default=None)
     MINIO_BUCKET: Optional[str] = Field(default=None)
     MINIO_USE_SSL: Optional[bool] = Field(default=None)
+
+    COS_REGION: Optional[str] = Field(default=None)
+    COS_BUCKET: Optional[str] = Field(default=None)
+    COS_SECRET_ID: Optional[str] = Field(default=None)
+    COS_SECRET_KEY: Optional[str] = Field(default=None)
+    COS_ENDPOINT: Optional[str] = Field(default=None)
+    COS_USE_SSL: Optional[bool] = Field(default=True)
+    COS_PUBLIC_READ: Optional[bool] = Field(default=False)
 
     ASR_PROVIDER: Optional[Literal["tencent", "aliyun"]] = Field(default=None)
     TENCENT_SECRET_ID: Optional[str] = Field(default=None)
