@@ -1,0 +1,84 @@
+# Pre-commit hooks for code quality
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # 基础检查
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace        # 移除行尾空格
+      - id: end-of-file-fixer          # 确保文件以换行符结尾
+      - id: check-yaml                 # 检查 YAML 语法
+      - id: check-added-large-files    # 防止提交大文件（默认 500KB）
+        args: ['--maxkb=1000']
+      - id: check-json                 # 检查 JSON 语法
+      - id: check-toml                 # 检查 TOML 语法
+      - id: check-merge-conflict       # 检查合并冲突标记
+      - id: check-case-conflict        # 检查文件名大小写冲突
+      - id: mixed-line-ending          # 检查混合换行符
+        args: ['--fix=lf']
+
+  # Python import 排序
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        name: isort (import sorting)
+        args: ["--profile", "black", "--line-length", "100"]
+
+  # Python 代码格式化
+  - repo: https://github.com/psf/black
+    rev: 24.1.1
+    hooks:
+      - id: black
+        name: black (code formatter)
+        args: ["--line-length", "100"]
+        language_version: python3.11
+
+  # Python 代码质量检查
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        name: flake8 (linting)
+        args:
+          - "--max-line-length=100"
+          - "--extend-ignore=E203,W503,E501"  # E203: black 兼容, W503: 二元运算符换行, E501: 行长度（由 black 处理）
+          - "--exclude=.git,__pycache__,alembic/versions,tests"
+
+  # Python 类型检查（可选，因为可能比较严格）
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        name: mypy (type checking)
+        args:
+          - "--ignore-missing-imports"
+          - "--no-strict-optional"
+          - "--warn-no-return"
+          - "--warn-redundant-casts"
+          - "--exclude=alembic/versions"
+        additional_dependencies:
+          - types-redis
+          - types-PyYAML
+          - pydantic
+
+  # 安全检查（可选）
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.7.6
+    hooks:
+      - id: bandit
+        name: bandit (security)
+        args: ["-c", "pyproject.toml"]
+        additional_dependencies: ["bandit[toml]"]
+        exclude: "tests/.*"
+
+# 跳过某些文件/目录
+exclude: |
+  (?x)^(
+      alembic/versions/.*\.py|
+      \.git/.*|
+      \.venv/.*|
+      __pycache__/.*
+  )$
