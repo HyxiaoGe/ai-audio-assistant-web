@@ -19,6 +19,8 @@
   "40900": "Task with same content already exists",
   "40901": "Task is being processed, please do not resubmit",
   "40902": "Task already completed, cannot reprocess",
+  "40903": "Task cannot be retried, only failed tasks can be retried",
+  "40904": "Task retry limit exceeded, please create a new task",
   "50000": "Internal server error, please try again later",
   "50001": "Database service error",
   "50002": "Cache service error",
@@ -30,6 +32,7 @@
   "51101": "AI summary service timeout",
   "51102": "AI summary generation failed: {reason}",
   "51200": "File storage service error",
+  "40404": "Notification not found or has been deleted",
   "51201": "File upload failed",
   "51300": "YouTube video download failed: {reason}",
   "51301": "YouTube video unavailable or deleted"

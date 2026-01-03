@@ -33,10 +33,14 @@ class LocaleMiddleware(BaseHTTPMiddleware):
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
         accept_language = request.headers.get("Accept-Language", "zh")
+        # 提取第一个语言标签（逗号前的部分）
         locale = accept_language.split(",")[0].strip().lower()
-        if locale not in {"zh", "en"}:
-            locale = "zh"
-        request.state.locale = locale
+        # 提取语言前缀（如 zh-CN -> zh, en-US -> en）
+        lang = locale.split("-")[0]
+        # 只支持 zh 和 en
+        if lang not in {"zh", "en"}:
+            lang = "zh"
+        request.state.locale = lang
         return await call_next(request)
 
 
