@@ -23,8 +23,15 @@ celery_app.conf.result_serializer = "json"
 celery_app.conf.accept_content = ["json"]
 celery_app.conf.timezone = "UTC"
 
+# Import all service modules to trigger @register_service decorators
+# This ensures services are registered in the ServiceRegistry
+from app.services.llm import doubao, qwen, moonshot, deepseek  # noqa: F401, E402
+from app.services.asr import tencent, aliyun  # noqa: F401, E402
+from app.services.storage import cos, minio, oss  # noqa: F401, E402
+
 # Import tasks to register them with Celery
 # Must import after celery_app is created to avoid circular imports
 from worker.tasks import download_youtube  # noqa: F401, E402
 from worker.tasks import process_audio  # noqa: F401, E402
 from worker.tasks import process_youtube  # noqa: F401, E402
+from worker.tasks import regenerate_summary  # noqa: F401, E402

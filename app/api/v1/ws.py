@@ -135,8 +135,57 @@ async def _forward_pubsub(websocket: WebSocket, channel: str) -> None:
         await pubsub.close()
 
 
+@router.websocket("/user")
+async def user_updates(websocket: WebSocket) -> None:
+    """
+    Global WebSocket endpoint for user-level updates.
+    Subscribes to all task updates and notifications for the authenticated user.
+    """
+    await websocket.accept()
+    locale = _get_locale(websocket)
+    trace_id = uuid4().hex
+    async with async_session_factory() as session:
+        user, error_code = await _authenticate_header(
+            websocket, session, locale, trace_id
+        )
+        if user is None:
+            user, error_code = await _authenticate_in_band(
+                websocket, session, locale, trace_id
+            )
+            if user is None:
+                if error_code == ErrorCode.AUTH_TOKEN_NOT_PROVIDED:
+                    await websocket.close(code=CLOSE_CODE_AUTH_TIMEOUT)
+                    return
+                await _send_error(websocket, error_code, locale, trace_id)
+                await websocket.close(code=_get_close_code(error_code))
+                return
+        await _send_ok(
+            websocket,
+            "authenticated",
+            {"type": "authenticated", "user_id": str(user.id)},
+            trace_id,
+        )
+
+    # Subscribe to user's global channel for all task updates and notifications
+    channel = f"user:{user.id}:updates"
+    forward_task = asyncio.create_task(_forward_pubsub(websocket, channel))
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        forward_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await forward_task
+
+
 @router.websocket("/tasks/{task_id}")
 async def task_progress(websocket: WebSocket, task_id: str) -> None:
+    """
+    Legacy WebSocket endpoint for single task updates.
+    Kept for backward compatibility.
+    """
     await websocket.accept()
     locale = _get_locale(websocket)
     trace_id = uuid4().hex

@@ -18,13 +18,14 @@ class Settings(BaseSettings):
     )
     DEBUG: bool = Field(default=True)
 
+    # API 外部访问地址（用于生成媒体文件 URL）
+    API_BASE_URL: Optional[str] = Field(default="http://localhost:8000")
+
     DATABASE_URL: Optional[str] = Field(default=None)
     REDIS_URL: Optional[str] = Field(default=None)
 
     JWT_SECRET: Optional[str] = Field(default=None)
     JWT_ALGORITHM: Optional[str] = Field(default=None)
-
-    STORAGE_PROVIDER: Optional[Literal["minio", "cos"]] = Field(default="minio")
 
     MINIO_ENDPOINT: Optional[str] = Field(default=None)
     MINIO_ACCESS_KEY: Optional[str] = Field(default=None)
@@ -40,7 +41,11 @@ class Settings(BaseSettings):
     COS_USE_SSL: Optional[bool] = Field(default=True)
     COS_PUBLIC_READ: Optional[bool] = Field(default=False)
 
-    ASR_PROVIDER: Optional[Literal["tencent", "aliyun"]] = Field(default=None)
+    OSS_ENDPOINT: Optional[str] = Field(default=None)
+    OSS_REGION: Optional[str] = Field(default=None)
+    OSS_BUCKET: Optional[str] = Field(default=None)
+    OSS_USE_SSL: Optional[bool] = Field(default=True)
+
     TENCENT_SECRET_ID: Optional[str] = Field(default=None)
     TENCENT_SECRET_KEY: Optional[str] = Field(default=None)
     TENCENT_REGION: Optional[str] = Field(default=None)
@@ -55,13 +60,20 @@ class Settings(BaseSettings):
     ALIYUN_ACCESS_KEY_ID: Optional[str] = Field(default=None)
     ALIYUN_ACCESS_KEY_SECRET: Optional[str] = Field(default=None)
 
-    LLM_PROVIDER: Optional[Literal["doubao", "qwen"]] = Field(default=None)
     DOUBAO_API_KEY: Optional[str] = Field(default=None)
     DOUBAO_BASE_URL: Optional[str] = Field(default=None)
     DOUBAO_MODEL: Optional[str] = Field(default=None)
     DOUBAO_MAX_TOKENS: Optional[int] = Field(default=None)
     QWEN_API_KEY: Optional[str] = Field(default=None)
     QWEN_MODEL: Optional[str] = Field(default=None)
+    MOONSHOT_API_KEY: Optional[str] = Field(default=None)
+    MOONSHOT_BASE_URL: Optional[str] = Field(default="https://api.moonshot.cn/v1")
+    MOONSHOT_MODEL: Optional[str] = Field(default="moonshot-v1-8k")
+    MOONSHOT_MAX_TOKENS: Optional[int] = Field(default=4096)
+    DEEPSEEK_API_KEY: Optional[str] = Field(default=None)
+    DEEPSEEK_BASE_URL: Optional[str] = Field(default="https://api.deepseek.com")
+    DEEPSEEK_MODEL: Optional[str] = Field(default="deepseek-chat")
+    DEEPSEEK_MAX_TOKENS: Optional[int] = Field(default=4096)
 
     UPLOAD_ALLOWED_EXTENSIONS: Optional[str] = Field(default=None)
     UPLOAD_MAX_SIZE_BYTES: Optional[int] = Field(default=None)

@@ -1,0 +1,60 @@
+{
+  "version": "1.1.0",
+  "supported_content_styles": [
+    "meeting",
+    "lecture",
+    "podcast",
+    "video",
+    "general"
+  ],
+  "content_style_descriptions": {
+    "meeting": "会议、讨论、头脑风暴 / Meetings, discussions, brainstorming",
+    "lecture": "讲座、课程、培训 / Lectures, courses, training",
+    "podcast": "播客、访谈、对话节目 / Podcasts, interviews, talk shows",
+    "video": "视频教程、解说视频 / Video tutorials, commentary videos",
+    "general": "通用内容 / General content"
+  },
+  "model_params": {
+    "overview": {
+      "temperature": 0.7,
+      "max_tokens": 500,
+      "top_p": 0.9,
+      "frequency_penalty": 0.0,
+      "presence_penalty": 0.0
+    },
+    "key_points": {
+      "temperature": 0.5,
+      "max_tokens": 800,
+      "top_p": 0.9,
+      "frequency_penalty": 0.2,
+      "presence_penalty": 0.0
+    },
+    "action_items": {
+      "temperature": 0.3,
+      "max_tokens": 600,
+      "top_p": 0.9,
+      "frequency_penalty": 0.0,
+      "presence_penalty": 0.0
+    }
+  },
+  "default_locale": "zh-CN",
+  "supported_locales": ["zh-CN", "en-US"],
+  "changelog": {
+    "1.1.0": {
+      "date": "2026-01-02",
+      "changes": [
+        "Added content_style support (meeting/lecture/podcast/video/general)",
+        "Different system roles for different content types",
+        "Improved context-aware prompts"
+      ]
+    },
+    "1.0.0": {
+      "date": "2026-01-02",
+      "changes": [
+        "Initial version with optimized prompts",
+        "Added clear distinction between key_points and action_items",
+        "Added examples and formatting requirements"
+      ]
+    }
+  }
+}

@@ -14,11 +14,11 @@ from app.api.deps import get_current_user, get_db
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.response import success
+from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
 from app.models.user import User
 from app.schemas.upload import UploadPresignRequest
-from app.services.storage.factory import get_storage_service
 
 router = APIRouter(prefix="/upload")
 
@@ -56,14 +56,16 @@ def _format_size_bytes(size_bytes: int) -> str:
     return f"{size_mb}MB"
 
 
-def _build_file_key(filename: str) -> str:
+def _build_file_key(filename: str, user_id: str) -> str:
     now = datetime.now(timezone.utc)
-    safe_name = Path(filename).name.replace(" ", "_")
-    return f"uploads/{now:%Y/%m}/{uuid4().hex}_{safe_name}"
+    ext = Path(filename).suffix.lower()
+    file_id = uuid4().hex
+    return f"upload/{user_id}/{now:%Y/%m/%d}/{file_id}{ext}"
 
 
-def _build_upload_url(file_key: str, expires_in: int) -> str:
-    storage = get_storage_service()
+async def _build_upload_url(file_key: str, expires_in: int) -> str:
+    # 使用 SmartFactory 获取 storage 服务（默认使用 COS）
+    storage = await SmartFactory.get_service("storage", provider="cos")
     return storage.presign_put_object(file_key, expires_in)
 
 
@@ -100,8 +102,8 @@ async def presign_upload(
         return success(data={"exists": True, "task_id": task_id})
 
     expires_in = _get_presign_expires()
-    file_key = _build_file_key(data.filename)
-    upload_url = _build_upload_url(file_key, expires_in)
+    file_key = _build_file_key(data.filename, user.id)
+    upload_url = await _build_upload_url(file_key, expires_in)
 
     return success(
         data={

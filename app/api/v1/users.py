@@ -6,8 +6,8 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from app.api.deps import get_current_user
 from app.core.response import success
 from app.config import settings
+from app.core.smart_factory import SmartFactory
 from app.schemas.user import UserProfileResponse
-from app.services.storage.factory import get_storage_service
 
 router = APIRouter(prefix="/users")
 
@@ -28,7 +28,8 @@ async def get_my_avatar(
     user=Depends(get_current_user),
 ) -> Response:
     if user.avatar_url and not user.avatar_url.startswith("http"):
-        storage = get_storage_service()
+        # 使用 SmartFactory 获取 storage 服务（默认使用 COS）
+        storage = await SmartFactory.get_service("storage", provider="cos")
         expires_in = settings.UPLOAD_PRESIGN_EXPIRES or 300
         url = storage.generate_presigned_url(user.avatar_url, expires_in)
         return RedirectResponse(url, status_code=307)

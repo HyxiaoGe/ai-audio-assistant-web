@@ -11,7 +11,7 @@ from typing import Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
-from app.services.storage.factory import get_storage_service
+from app.core.smart_factory import SmartFactory
 
 logger = logging.getLogger("app.avatar")
 
@@ -34,7 +34,7 @@ async def _download_avatar_async(url: str) -> Tuple[Optional[str], Optional[str]
 
 def _build_avatar_key(user_id: str, content_type: Optional[str]) -> str:
     extension = mimetypes.guess_extension(content_type or "") or ".png"
-    return f"avatars/{user_id}{extension}"
+    return f"users/{user_id}/avatar{extension}"
 
 
 class AvatarService:
@@ -52,7 +52,8 @@ class AvatarService:
         if not file_path:
             return
         try:
-            storage = get_storage_service()
+            # 使用 SmartFactory 获取 storage 服务（默认使用 COS）
+            storage = await SmartFactory.get_service("storage", provider="cos")
             object_key = _build_avatar_key(user.id, content_type)
             storage.upload_file(object_key, file_path, content_type)
             if user.avatar_url != object_key:

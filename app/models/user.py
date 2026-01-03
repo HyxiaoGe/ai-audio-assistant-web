@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from sqlalchemy import Index, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
+
+if TYPE_CHECKING:
+    from app.models.notification import Notification
 
 
 class User(BaseModel):
@@ -35,4 +38,9 @@ class User(BaseModel):
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     settings: Mapped[dict[str, object]] = mapped_column(
         JSONB, default=dict, server_default=text("'{}'::jsonb"), nullable=False
+    )
+
+    # Relationships
+    notifications: Mapped[list["Notification"]] = relationship(
+        "Notification", back_populates="user", cascade="all, delete-orphan"
     )

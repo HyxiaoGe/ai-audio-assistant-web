@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
+
+if TYPE_CHECKING:
+    from app.models.notification import Notification
+    from app.models.task_stage import TaskStage
 
 
 class Task(BaseModel):
@@ -70,3 +74,15 @@ class Task(BaseModel):
 
     asr_provider: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     llm_provider: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Relationships
+    notifications: Mapped[list["Notification"]] = relationship(
+        "Notification", back_populates="task", cascade="all, delete-orphan"
+    )
+    stages: Mapped[list["TaskStage"]] = relationship(
+        "TaskStage",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="TaskStage.created_at",
+    )

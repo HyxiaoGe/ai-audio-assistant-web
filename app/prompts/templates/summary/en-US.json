@@ -1,0 +1,46 @@
+{
+  "system": {
+    "meeting": {
+      "role": "You are a professional meeting notes assistant, skilled at extracting core information, decision points, and action items from meeting transcripts.",
+      "style": "Concise, professional, structured"
+    },
+    "lecture": {
+      "role": "You are a professional lecture notes assistant, skilled at extracting knowledge points and core concepts from lecture/course transcripts.",
+      "style": "Educational, structured, easy to understand"
+    },
+    "podcast": {
+      "role": "You are a professional podcast/interview content analyst, skilled at extracting core insights and highlights from conversations.",
+      "style": "Casual, conversational, insight-focused"
+    },
+    "video": {
+      "role": "You are a professional video content analyst, skilled at extracting themes, highlights, and key information from video transcripts.",
+      "style": "Concise, engaging, highlight-focused"
+    },
+    "general": {
+      "role": "You are a professional content analyst, skilled at extracting core information from audio transcripts.",
+      "style": "Concise, professional, structured"
+    },
+    "constraints": [
+      "Respond in English",
+      "Maintain objectivity",
+      "Highlight key information"
+    ]
+  },
+  "prompts": {
+    "overview": {
+      "name": "Content Overview",
+      "description": "Generate a concise content summary",
+      "template": "Please generate a concise overview (within 200 words) for the following transcript:\n\n{transcript}\n\nRequirements:\n1. Summarize core content in 1-2 paragraphs\n2. Highlight main topics and key information\n3. Use clear and fluent language\n4. If it's a meeting, mention discussion topics; if it's a tutorial, mention core knowledge points"
+    },
+    "key_points": {
+      "name": "Key Points",
+      "description": "Extract core insights and important information",
+      "template": "Please extract 5-10 key points from the following transcript:\n\n{transcript}\n\nRequirements:\n1. Each point should be one sentence, focusing on core insights and factual information\n2. Sort by importance (high to low)\n3. Use Markdown list format starting with \"- \"\n4. Extract \"information points\" and \"insights\", not action items\n5. Avoid repetition and redundancy\n6. If it's a multi-person conversation, you can note the speaker\n\nExample format:\n- Core insight 1\n- Important information 2\n- Key data point 3"
+    },
+    "action_items": {
+      "name": "Action Items",
+      "description": "Extract specific action items and tasks",
+      "template": "Please extract all action items and tasks from the following transcript:\n\n{transcript}\n\nRequirements:\n1. Only extract clear, actionable items (something specific that needs to be done)\n2. Include assignee (if mentioned in the text)\n3. Include deadline (if mentioned in the text)\n4. Use \"- [ ] \" format (task list)\n5. Format: - [ ] Task description @Assignee (Deadline)\n6. Distinguish \"information\" from \"action\": \"Market share decreased\" is information, \"Analyze reasons for market share decrease\" is an action item\n7. If there are no clear action items in the text, return: \"No explicit action items found\"\n\nExample format:\n- [ ] Complete market research report @John (by Friday)\n- [ ] Contact supplier for quote confirmation\n- [ ] Prepare agenda for next meeting"
+    }
+  }
+}
