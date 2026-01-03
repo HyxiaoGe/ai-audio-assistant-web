@@ -1,0 +1,29 @@
+services:
+  api:
+    environment:
+      APP_ENV: development
+      DEBUG: "true"
+    volumes:
+      - .:/app:cached
+      - ./data:/app/data
+
+  worker:
+    environment:
+      APP_ENV: development
+      DEBUG: "true"
+    volumes:
+      - .:/app:cached
+      - ./data:/app/data
+
+  db:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  minio:
+    ports:
+      - "9000:9000"
+      - "9001:9001"
