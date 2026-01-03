@@ -37,3 +37,4 @@ class Summary(BaseRecord):
     model_used: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     prompt_version: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     token_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    comparison_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
