@@ -1,4 +1,4 @@
-"""通义千问 LLM 服务实现（DashScope API）"""
+"""DeepSeek LLM 服务实现（API 兼容 OpenAI）"""
 from __future__ import annotations
 
 import json
@@ -18,25 +18,25 @@ from app.services.llm.base import LLMService
 
 @register_service(
     "llm",
-    "qwen",
+    "deepseek",
     metadata=ServiceMetadata(
-        name="qwen",
+        name="deepseek",
         service_type="llm",
-        priority=8,  # 高性价比
-        description="通义千问 LLM 服务 (阿里云)",
-        display_name="通义千问",
-        cost_per_million_tokens=0.4,  # 约 0.4 元/百万tokens（qwen2.5-72b-instruct）
+        priority=5,  # 最高优先级（性价比极高）
+        description="DeepSeek LLM 服务（高性价比）",
+        display_name="DeepSeek",
+        cost_per_million_tokens=0.14,  # 0.14 元/百万tokens（输入+输出平均）
         rate_limit=60,  # 60 req/min (需根据实际调整)
     ),
 )
-class QwenLLMService(LLMService):
-    """通义千问 LLM 服务实现（DashScope API）
+class DeepSeekLLMService(LLMService):
+    """DeepSeek LLM 服务实现（API 兼容 OpenAI）
 
-    官方文档：https://help.aliyun.com/zh/dashscope/developer-reference/api-details
+    官方文档：https://platform.deepseek.com/docs
     """
 
     _circuit_breaker = CircuitBreaker.get_or_create(
-        "qwen_llm",
+        "deepseek_llm",
         CircuitBreakerConfig(
             failure_threshold=5,
             success_threshold=2,
@@ -46,15 +46,18 @@ class QwenLLMService(LLMService):
     )
 
     def __init__(self) -> None:
-        api_key = settings.QWEN_API_KEY
-        model = settings.QWEN_MODEL or "qwen2.5-72b-instruct"
+        api_key = settings.DEEPSEEK_API_KEY
+        base_url = settings.DEEPSEEK_BASE_URL or "https://api.deepseek.com"
+        model = settings.DEEPSEEK_MODEL or "deepseek-chat"
+        max_tokens = settings.DEEPSEEK_MAX_TOKENS or 4096
 
         if not api_key:
-            raise RuntimeError("Qwen settings are not set")
+            raise RuntimeError("DeepSeek settings are not set")
 
         self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
         self._model = model
-        self._base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        self._max_tokens = max_tokens
 
     @property
     def model_name(self) -> str:
@@ -62,15 +65,15 @@ class QwenLLMService(LLMService):
 
     @property
     def provider(self) -> str:
-        return "qwen"
+        return "deepseek"
 
     @retry(
         RetryConfig(max_attempts=3, initial_delay=0.5, max_delay=5.0),
         exceptions=(httpx.TimeoutException, httpx.NetworkError),
     )
-    @monitor("llm", "qwen")
+    @monitor("llm", "deepseek")
     async def _call_llm_api(self, payload: dict, headers: dict) -> str:
-        """调用通义千问 API（非流式）"""
+        """调用 DeepSeek API（非流式）"""
         try:
             async with httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client:
                 response = await client.post("/chat/completions", json=payload, headers=headers)
@@ -82,7 +85,7 @@ class QwenLLMService(LLMService):
                 if not content:
                     raise BusinessError(
                         ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                        reason="Qwen returned empty content",
+                        reason="DeepSeek returned empty content",
                     )
 
                 return content
@@ -90,32 +93,32 @@ class QwenLLMService(LLMService):
         except httpx.TimeoutException as exc:
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                reason=f"Qwen request timeout: {exc}",
+                reason=f"DeepSeek request timeout: {exc}",
             ) from exc
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
             if status_code == 429:
                 raise BusinessError(
                     ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                    reason=f"Qwen rate limit exceeded (HTTP {status_code})",
+                    reason=f"DeepSeek rate limit exceeded (HTTP {status_code})",
                 ) from exc
             elif 500 <= status_code < 600:
                 raise BusinessError(
                     ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                    reason=f"Qwen server error (HTTP {status_code})",
+                    reason=f"DeepSeek server error (HTTP {status_code})",
                 ) from exc
             else:
                 raise BusinessError(
                     ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                    reason=f"Qwen request failed (HTTP {status_code}): {exc.response.text}",
+                    reason=f"DeepSeek request failed (HTTP {status_code}): {exc.response.text}",
                 ) from exc
         except httpx.HTTPError as exc:
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                reason=f"Qwen network error: {exc}",
+                reason=f"DeepSeek network error: {exc}",
             ) from exc
 
-    @monitor("llm", "qwen")
+    @monitor("llm", "deepseek")
     async def summarize(
         self, text: str, summary_type: str, content_style: str = "meeting"
     ) -> str:
@@ -136,14 +139,14 @@ class QwenLLMService(LLMService):
                 {"role": "system", "content": prompt_config["system"]},
                 {"role": "user", "content": prompt_config["user_prompt"]},
             ],
-            "max_tokens": prompt_config["model_params"].get("max_tokens", 4096),
+            "max_tokens": prompt_config["model_params"].get("max_tokens", self._max_tokens),
             "temperature": prompt_config["model_params"].get("temperature", 0.7),
         }
         headers = {"Authorization": f"Bearer {self._api_key}"}
 
         return await self._call_llm_api(payload, headers)
 
-    @monitor("llm", "qwen")
+    @monitor("llm", "deepseek")
     async def summarize_stream(
         self, text: str, summary_type: str, content_style: str = "meeting"
     ) -> AsyncIterator[str]:
@@ -165,7 +168,7 @@ class QwenLLMService(LLMService):
                 {"role": "system", "content": prompt_config["system"]},
                 {"role": "user", "content": prompt_config["user_prompt"]},
             ],
-            "max_tokens": prompt_config["model_params"].get("max_tokens", 4096),
+            "max_tokens": prompt_config["model_params"].get("max_tokens", self._max_tokens),
             "temperature": prompt_config["model_params"].get("temperature", 0.7),
             "stream": True,
         }
@@ -201,32 +204,32 @@ class QwenLLMService(LLMService):
         except httpx.TimeoutException as exc:
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                reason=f"Qwen stream request timeout: {exc}",
+                reason=f"DeepSeek stream request timeout: {exc}",
             ) from exc
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
             if status_code == 429:
                 raise BusinessError(
                     ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                    reason=f"Qwen rate limit exceeded (HTTP {status_code})",
+                    reason=f"DeepSeek rate limit exceeded (HTTP {status_code})",
                 ) from exc
             elif 500 <= status_code < 600:
                 raise BusinessError(
                     ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                    reason=f"Qwen server error (HTTP {status_code})",
+                    reason=f"DeepSeek server error (HTTP {status_code})",
                 ) from exc
             else:
                 raise BusinessError(
                     ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                    reason=f"Qwen stream request failed (HTTP {status_code})",
+                    reason=f"DeepSeek stream request failed (HTTP {status_code})",
                 ) from exc
         except httpx.HTTPError as exc:
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                reason=f"Qwen network error: {exc}",
+                reason=f"DeepSeek network error: {exc}",
             ) from exc
 
-    @monitor("llm", "qwen")
+    @monitor("llm", "deepseek")
     async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
         """通用对话功能
 
@@ -243,14 +246,14 @@ class QwenLLMService(LLMService):
         payload = {
             "model": self._model,
             "messages": messages,
-            "max_tokens": kwargs.get("max_tokens", 4096),
+            "max_tokens": kwargs.get("max_tokens", self._max_tokens),
             "temperature": kwargs.get("temperature", 0.7),
         }
         headers = {"Authorization": f"Bearer {self._api_key}"}
 
         return await self._call_llm_api(payload, headers)
 
-    @monitor("llm", "qwen")
+    @monitor("llm", "deepseek")
     async def chat_stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
         """流式对话功能
 
@@ -267,7 +270,7 @@ class QwenLLMService(LLMService):
         payload = {
             "model": self._model,
             "messages": messages,
-            "max_tokens": kwargs.get("max_tokens", 4096),
+            "max_tokens": kwargs.get("max_tokens", self._max_tokens),
             "temperature": kwargs.get("temperature", 0.7),
             "stream": True,
         }
@@ -303,7 +306,7 @@ class QwenLLMService(LLMService):
         except httpx.HTTPError as exc:
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                reason=f"Qwen stream error: {exc}",
+                reason=f"DeepSeek stream error: {exc}",
             ) from exc
 
     async def health_check(self) -> bool:
@@ -322,9 +325,9 @@ class QwenLLMService(LLMService):
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """估算成本（人民币元）
 
-        通义千问定价（参考 2024 年）：
-        - qwen2.5-72b-instruct: 输入 ¥0.0004/1K, 输出 ¥0.0004/1K
-        - qwen-turbo: 输入 ¥0.0008/1K, 输出 ¥0.002/1K
+        DeepSeek 定价（参考 2024 年）：
+        - 输入: ¥0.0001 / 1K tokens
+        - 输出: ¥0.0002 / 1K tokens
 
         Args:
             input_tokens: 输入 token 数
@@ -333,9 +336,9 @@ class QwenLLMService(LLMService):
         Returns:
             估算成本（人民币元）
         """
-        # 使用 qwen2.5-72b-instruct 的价格作为基准
-        input_price_per_1k = 0.0004
-        output_price_per_1k = 0.0004
+        # 价格单位：元/1K tokens
+        input_price_per_1k = 0.0001
+        output_price_per_1k = 0.0002
 
         input_cost = (input_tokens / 1000) * input_price_per_1k
         output_cost = (output_tokens / 1000) * output_price_per_1k
