@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import tempfile
 import urllib.request
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -19,8 +20,11 @@ logger = logging.getLogger("app.avatar")
 def _download_avatar(url: str) -> Tuple[Optional[str], Optional[str]]:
     if not url:
         return None, None
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("unsupported avatar URL scheme")
     req = urllib.request.Request(url, headers={"User-Agent": "ai-audio-assistant/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
         content_type = resp.headers.get_content_type()
         suffix = mimetypes.guess_extension(content_type) or ""
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:

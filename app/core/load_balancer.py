@@ -167,7 +167,7 @@ class RandomBalancer(LoadBalancer):
     ) -> Optional[str]:
         if not available_services:
             return None
-        return random.choice(available_services)
+        return random.choice(available_services)  # nosec B311
 
 
 class ConnectionTracker:
@@ -218,7 +218,7 @@ class LeastConnectionsBalancer(LoadBalancer):
         counts = {name: self.tracker.get_count(service_type, name) for name in available_services}
         min_count = min(counts.values())
         candidates = [name for name, count in counts.items() if count == min_count]
-        return random.choice(candidates)
+        return random.choice(candidates)  # nosec B311
 
     @asynccontextmanager
     async def track_request(self, service_type: str, service_name: str):
@@ -288,7 +288,7 @@ class CostAwareBalancer(LoadBalancer):
     ) -> Optional[str]:
         if not available_services:
             return None
-        return random.choice(available_services)
+        return random.choice(available_services)  # nosec B311
 
     def select_with_params(
         self,
@@ -309,4 +309,4 @@ class CostAwareBalancer(LoadBalancer):
         selected = self.cost_optimizer.select_service(service_type, request_params)
         if selected in available:
             return selected
-        return random.choice(available)
+        return random.choice(available)  # nosec B311

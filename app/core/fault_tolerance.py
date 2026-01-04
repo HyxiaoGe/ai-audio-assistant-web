@@ -117,7 +117,7 @@ def retry(
                         if config.jitter:
                             import random
 
-                            delay = delay * (0.5 + random.random() * 0.5)
+                            delay = delay * (0.5 + random.random() * 0.5)  # nosec B311
 
                         logger.warning(
                             f"Retry {attempt}/{config.max_attempts} for {func.__name__} "
