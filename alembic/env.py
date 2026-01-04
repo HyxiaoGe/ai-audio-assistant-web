@@ -4,16 +4,15 @@ from logging.config import fileConfig
 from pathlib import Path
 from typing import Optional
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from alembic import context
 from app.config import settings
-from app.models.base import Base
 from app.models import summary as _summary  # noqa: F401
 from app.models import task as _task  # noqa: F401
 from app.models import transcript as _transcript  # noqa: F401
 from app.models import user as _user  # noqa: F401
-
+from app.models.base import Base
 
 config = context.config
 if config.config_file_name is not None:

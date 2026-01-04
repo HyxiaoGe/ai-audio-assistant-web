@@ -27,6 +27,7 @@
 - Keep functions typed; prefer explicit return types for service and API layers.
 - Tests follow Pytest defaults: `test_*.py`, `Test*` classes, `test_*` functions.
 - Use `snake_case` for modules/functions and `CamelCase` for classes.
+ - Default to mainstream, industry-standard conventions. Avoid asking the user to choose between common patterns; pick the most standard option and proceed.
 
 ## Testing Guidelines
 - Frameworks: `pytest`, `pytest-asyncio`, `pytest-cov`.
