@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import subprocess
+import subprocess  # nosec B404
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -156,7 +156,7 @@ def _get_audio_duration(file_path: str) -> Optional[int]:
         Duration in seconds (rounded), or None if failed to get duration
     """
     try:
-        result = subprocess.run(  # nosec B603,B607 - fixed binary/args
+        result = subprocess.run(  # nosec
             [
                 "ffprobe",
                 "-v",
@@ -181,7 +181,7 @@ def _get_audio_duration(file_path: str) -> Optional[int]:
 
 def _transcode_to_wav_16k(input_path: str) -> str:
     output_path = str(Path(input_path).with_suffix(".wav"))
-    result = subprocess.run(  # nosec B603,B607 - fixed binary/args
+    result = subprocess.run(  # nosec
         [
             "ffmpeg",
             "-y",

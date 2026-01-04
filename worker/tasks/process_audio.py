@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import json
 import logging
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -286,7 +286,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                         )
 
                         # 提取音频时长
-                        result = subprocess.run(  # nosec B603,B607 - fixed binary/args
+                        result = subprocess.run(  # nosec
                             [
                                 "ffprobe",
                                 "-v",
