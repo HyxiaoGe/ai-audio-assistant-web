@@ -9,13 +9,13 @@ from app.core.i18n import get_message
 from app.core.middleware import LocaleMiddleware, LoggingMiddleware, RequestIDMiddleware
 from app.core.monitoring import MonitoringSystem
 from app.core.response import error
-from app.core.smart_factory import SmartFactory, SmartFactoryConfig, SelectionStrategy
+from app.core.smart_factory import SelectionStrategy, SmartFactory, SmartFactoryConfig
 from app.i18n.codes import ErrorCode
+from app.services.asr import aliyun, tencent  # noqa: F401
 
 # 导入所有服务模块以触发 @register_service 装饰器
 # 必须在模块顶层导入，而不是在函数内部，这样装饰器才会正确执行
-from app.services.llm import doubao, qwen, moonshot, deepseek  # noqa: F401
-from app.services.asr import tencent, aliyun  # noqa: F401
+from app.services.llm import deepseek, doubao, moonshot, qwen  # noqa: F401
 from app.services.storage import cos, minio, oss  # noqa: F401
 
 
@@ -57,17 +57,13 @@ def create_app() -> FastAPI:
         MonitoringSystem.get_instance().stop()
 
     @app.exception_handler(BusinessError)
-    async def business_error_handler(
-        request: Request, exc: BusinessError
-    ) -> JSONResponse:
+    async def business_error_handler(request: Request, exc: BusinessError) -> JSONResponse:
         locale = getattr(request.state, "locale", "zh")
         message = get_message(exc.code, locale, **exc.kwargs)
         return error(exc.code.value, message)
 
     @app.exception_handler(DBAPIError)
-    async def database_error_handler(
-        request: Request, exc: DBAPIError
-    ) -> JSONResponse:
+    async def database_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
         locale = getattr(request.state, "locale", "zh")
         if "invalid UUID" in str(exc):
             # 无效的ID直接当作资源不存在处理，用户不需要知道ID格式问题
@@ -77,10 +73,9 @@ def create_app() -> FastAPI:
         return error(ErrorCode.DATABASE_SERVICE_ERROR.value, message)
 
     @app.exception_handler(Exception)
-    async def general_exception_handler(
-        request: Request, exc: Exception
-    ) -> JSONResponse:
+    async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         import logging
+
         logger = logging.getLogger(__name__)
 
         # 记录详细的异常信息

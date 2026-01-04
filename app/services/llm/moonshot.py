@@ -112,9 +112,7 @@ class MoonshotLLMService(LLMService):
             ) from exc
 
     @monitor("llm", "moonshot")
-    async def summarize(
-        self, text: str, summary_type: str, content_style: str = "meeting"
-    ) -> str:
+    async def summarize(self, text: str, summary_type: str, content_style: str = "meeting") -> str:
         if not text:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="text")
 

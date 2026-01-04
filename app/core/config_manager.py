@@ -22,7 +22,7 @@ import logging
 from threading import Lock
 from typing import Any, Dict, Optional, Type
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.config import settings
 
@@ -39,16 +39,15 @@ class ServiceConfig(BaseModel):
         timeout: 超时时间（秒）
         retry_count: 重试次数
     """
+
     enabled: bool = True
     timeout: int = 30
     retry_count: int = 3
 
-    class Config:
-        """Pydantic 配置"""
-        # 允许额外字段（向后兼容）
-        extra = "allow"
-        # 验证赋值
-        validate_assignment = True
+    model_config = ConfigDict(
+        extra="allow",
+        validate_assignment=True,
+    )
 
 
 class ConfigManager:
@@ -208,15 +207,13 @@ class ConfigManager:
 
         if not issubclass(config_class, ServiceConfig):
             raise ValueError(
-                f"config_class must be a subclass of ServiceConfig, "
-                f"got {config_class}"
+                f"config_class must be a subclass of ServiceConfig, " f"got {config_class}"
             )
 
         with cls._lock:
             cls._schemas[service_type][name] = config_class
             logger.info(
-                f"Registered config schema for {service_type}/{name}: "
-                f"{config_class.__name__}"
+                f"Registered config schema for {service_type}/{name}: " f"{config_class.__name__}"
             )
 
     @classmethod
@@ -252,8 +249,7 @@ class ConfigManager:
         if name not in cls._schemas[service_type]:
             available = list(cls._schemas[service_type].keys())
             raise ValueError(
-                f"No config schema registered for {service_type}/{name}. "
-                f"Available: {available}"
+                f"No config schema registered for {service_type}/{name}. " f"Available: {available}"
             )
 
         with cls._lock:
@@ -268,9 +264,7 @@ class ConfigManager:
                 try:
                     config_instance = config_class(**config_data)
                     cls._configs[service_type][name] = config_instance
-                    logger.debug(
-                        f"Loaded and validated config for {service_type}/{name}"
-                    )
+                    logger.debug(f"Loaded and validated config for {service_type}/{name}")
                 except ValidationError as exc:
                     logger.error(
                         f"Config validation failed for {service_type}/{name}: {exc}",
@@ -295,9 +289,7 @@ class ConfigManager:
             cls.get_config(service_type, name, reload=True)
             return True
         except (ValueError, ValidationError) as exc:
-            logger.warning(
-                f"Config validation failed for {service_type}/{name}: {exc}"
-            )
+            logger.warning(f"Config validation failed for {service_type}/{name}: {exc}")
             return False
 
     @classmethod
@@ -311,10 +303,7 @@ class ConfigManager:
         Returns:
             True 如果已注册，否则 False
         """
-        return (
-            service_type in cls._schemas
-            and name in cls._schemas[service_type]
-        )
+        return service_type in cls._schemas and name in cls._schemas[service_type]
 
     @classmethod
     def list_schemas(cls, service_type: str) -> list[str]:
@@ -405,8 +394,7 @@ class ConfigManager:
                 config_data[field_name] = value
 
         logger.debug(
-            f"Loaded config for {service_type}/{name}: "
-            f"{list(config_data.keys())} fields"
+            f"Loaded config for {service_type}/{name}: " f"{list(config_data.keys())} fields"
         )
 
         return config_data
@@ -434,6 +422,7 @@ def register_config_schema(
             base_url: str
             model: str
     """
+
     def decorator(cls: Type[ServiceConfig]) -> Type[ServiceConfig]:
         ConfigManager.register_schema(service_type, name, cls)
         return cls

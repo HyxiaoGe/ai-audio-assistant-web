@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import timedelta
 import mimetypes
+from datetime import timedelta
 from typing import Any, Dict, List
 
 from minio import Minio
@@ -188,6 +188,7 @@ class MinioStorageService(StorageService):
         if not bucket:
             raise RuntimeError("MINIO_BUCKET is not set")
         from minio.commonconfig import CopySource
+
         self._client.copy_object(
             bucket_name=bucket,
             object_name=dst,

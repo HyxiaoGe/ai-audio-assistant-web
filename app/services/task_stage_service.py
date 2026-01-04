@@ -72,9 +72,7 @@ class TaskStageService:
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def start_stage(
-        db: AsyncSession, task_id: str, stage_type: StageType
-    ) -> TaskStage:
+    async def start_stage(db: AsyncSession, task_id: str, stage_type: StageType) -> TaskStage:
         """开始执行某个阶段"""
         stage = await TaskStageService.get_stage(db, task_id, stage_type)
         if not stage:
@@ -156,9 +154,7 @@ class TaskStageService:
         return stage
 
     @staticmethod
-    async def prepare_retry(
-        db: AsyncSession, task: Task, retry_mode: RetryMode
-    ) -> StageType:
+    async def prepare_retry(db: AsyncSession, task: Task, retry_mode: RetryMode) -> StageType:
         """
         准备重试：根据重试模式清理阶段状态
         返回应该开始执行的阶段
@@ -211,6 +207,8 @@ class TaskStageService:
 
         else:
             # 显式指定要清空的阶段列表
+            if isinstance(clear_stages, str):
+                raise ValueError(f"Invalid retry mode stages: {clear_stages}")
             for stage_type in clear_stages:
                 stage = await TaskStageService.get_stage(db, task.id, stage_type)
                 if stage:
@@ -235,9 +233,7 @@ class TaskStageService:
         return start_stage
 
     @staticmethod
-    async def should_execute_stage(
-        db: AsyncSession, task_id: str, stage_type: StageType
-    ) -> bool:
+    async def should_execute_stage(db: AsyncSession, task_id: str, stage_type: StageType) -> bool:
         """
         判断是否应该执行某个阶段
         如果阶段已完成或已跳过，返回 False
@@ -252,9 +248,7 @@ class TaskStageService:
         ]
 
     @staticmethod
-    async def clean_stage_artifacts(
-        db: AsyncSession, task: Task, stage_type: StageType
-    ) -> None:
+    async def clean_stage_artifacts(db: AsyncSession, task: Task, stage_type: StageType) -> None:
         """
         清理阶段产生的数据和文件
         用于显式重试某个阶段时，清理旧数据

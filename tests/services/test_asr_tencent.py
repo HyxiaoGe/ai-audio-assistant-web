@@ -11,7 +11,9 @@ from app.services.asr.tencent import TencentASRService
 
 
 class _FakeData:
-    def __init__(self, task_id: int | None = None, payload: dict[str, object] | None = None) -> None:
+    def __init__(
+        self, task_id: int | None = None, payload: dict[str, object] | None = None
+    ) -> None:
         self.TaskId = task_id
         self._payload = payload or {}
 
@@ -20,7 +22,9 @@ class _FakeData:
 
 
 class _FakeResponse:
-    def __init__(self, task_id: int | None = None, payload: dict[str, object] | None = None) -> None:
+    def __init__(
+        self, task_id: int | None = None, payload: dict[str, object] | None = None
+    ) -> None:
         if task_id is not None:
             self.Data = _FakeData(task_id=task_id)
         else:

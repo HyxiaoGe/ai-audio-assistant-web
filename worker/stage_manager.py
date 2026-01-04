@@ -5,7 +5,7 @@
 
 import logging
 from contextlib import contextmanager
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
@@ -61,9 +61,7 @@ class StageManager:
             stage.started_at = datetime.utcnow()
 
         session.commit()
-        logger.info(
-            f"[{self.request_id}] Stage {stage_type.value} started for task {self.task_id}"
-        )
+        logger.info(f"[{self.request_id}] Stage {stage_type.value} started for task {self.task_id}")
 
     def complete_stage(
         self, session: Session, stage_type: StageType, metadata: Optional[dict] = None
@@ -108,7 +106,11 @@ class StageManager:
 
         session.commit()
         logger.error(
-            f"[{self.request_id}] Stage {stage_type.value} failed for task {self.task_id}: {error_message}"
+            "[%s] Stage %s failed for task %s: %s",
+            self.request_id,
+            stage_type.value,
+            self.task_id,
+            error_message,
         )
 
     def skip_stage(
@@ -120,7 +122,10 @@ class StageManager:
         stage = self._get_stage(session, stage_type)
         if not stage:
             logger.warning(
-                f"[{self.request_id}] Stage {stage_type.value} not found for task {self.task_id}"
+                "[%s] Stage %s not found for task %s",
+                self.request_id,
+                stage_type.value,
+                self.task_id,
             )
             return
 
@@ -130,7 +135,11 @@ class StageManager:
 
         session.commit()
         logger.info(
-            f"[{self.request_id}] Stage {stage_type.value} skipped for task {self.task_id}: {reason}"
+            "[%s] Stage %s skipped for task %s: %s",
+            self.request_id,
+            stage_type.value,
+            self.task_id,
+            reason,
         )
 
     @contextmanager
@@ -181,7 +190,7 @@ class StageManager:
                 from app.core.exceptions import BusinessError
 
                 if isinstance(exc, BusinessError):
-                    self.fail_stage(session, stage_type, exc.code, exc.message)
+                    self.fail_stage(session, stage_type, exc.code, str(exc))
                 else:
                     self.fail_stage(session, stage_type, 50000, str(exc))
             raise

@@ -71,8 +71,8 @@ class TaskDetailResponse(BaseModel):
 class TaskRetryRequest(BaseModel):
     """任务重试请求"""
 
-    mode: Literal["full", "auto", "from_transcribe", "transcribe_only", "summarize_only"] = (
-        Field(default="auto")
+    mode: Literal["full", "auto", "from_transcribe", "transcribe_only", "summarize_only"] = Field(
+        default="auto"
     )
     """
     重试模式：

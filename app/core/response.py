@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from fastapi.responses import JSONResponse
 
-
 DataPayload = Optional[object]
 
 _request_id_ctx: ContextVar[Optional[str]] = ContextVar("request_id", default=None)

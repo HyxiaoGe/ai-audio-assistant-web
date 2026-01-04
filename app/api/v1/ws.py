@@ -13,10 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.i18n import get_message
 from app.core.redis import get_redis_client
 from app.core.security import decode_access_token, extract_bearer_token
+from app.db import async_session_factory
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
 from app.models.user import User
-from app.db import async_session_factory
 
 router = APIRouter(prefix="/ws")
 
@@ -34,9 +34,7 @@ def _get_locale(websocket: WebSocket) -> str:
     return locale
 
 
-async def _send_error(
-    websocket: WebSocket, code: ErrorCode, locale: str, trace_id: str
-) -> None:
+async def _send_error(websocket: WebSocket, code: ErrorCode, locale: str, trace_id: str) -> None:
     message = get_message(code, locale)
     payload = {"code": code.value, "message": message, "data": None, "traceId": trace_id}
     await websocket.send_text(json.dumps(payload, ensure_ascii=False))
@@ -95,9 +93,7 @@ async def _authenticate_in_band(
     websocket: WebSocket, session: AsyncSession, locale: str, trace_id: str
 ) -> tuple[Optional[User], Optional[ErrorCode]]:
     try:
-        raw_message = await asyncio.wait_for(
-            websocket.receive_text(), timeout=AUTH_TIMEOUT_SECONDS
-        )
+        raw_message = await asyncio.wait_for(websocket.receive_text(), timeout=AUTH_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         return None, ErrorCode.AUTH_TOKEN_NOT_PROVIDED
 
@@ -122,9 +118,7 @@ async def _forward_pubsub(websocket: WebSocket, channel: str) -> None:
     await pubsub.subscribe(channel)
     try:
         while True:
-            message = await pubsub.get_message(
-                ignore_subscribe_messages=True, timeout=1.0
-            )
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message and message.get("type") == "message":
                 data = message.get("data")
                 if isinstance(data, str):
@@ -145,13 +139,9 @@ async def user_updates(websocket: WebSocket) -> None:
     locale = _get_locale(websocket)
     trace_id = uuid4().hex
     async with async_session_factory() as session:
-        user, error_code = await _authenticate_header(
-            websocket, session, locale, trace_id
-        )
+        user, error_code = await _authenticate_header(websocket, session, locale, trace_id)
         if user is None:
-            user, error_code = await _authenticate_in_band(
-                websocket, session, locale, trace_id
-            )
+            user, error_code = await _authenticate_in_band(websocket, session, locale, trace_id)
             if user is None:
                 if error_code == ErrorCode.AUTH_TOKEN_NOT_PROVIDED:
                     await websocket.close(code=CLOSE_CODE_AUTH_TIMEOUT)
@@ -190,13 +180,9 @@ async def task_progress(websocket: WebSocket, task_id: str) -> None:
     locale = _get_locale(websocket)
     trace_id = uuid4().hex
     async with async_session_factory() as session:
-        user, error_code = await _authenticate_header(
-            websocket, session, locale, trace_id
-        )
+        user, error_code = await _authenticate_header(websocket, session, locale, trace_id)
         if user is None:
-            user, error_code = await _authenticate_in_band(
-                websocket, session, locale, trace_id
-            )
+            user, error_code = await _authenticate_in_band(websocket, session, locale, trace_id)
             if user is None:
                 if error_code == ErrorCode.AUTH_TOKEN_NOT_PROVIDED:
                     await websocket.close(code=CLOSE_CODE_AUTH_TIMEOUT)

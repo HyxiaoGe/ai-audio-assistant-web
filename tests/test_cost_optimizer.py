@@ -121,12 +121,12 @@ def test_budget_constrained(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cost_tracking() -> None:
-    tracker = CostTracker()
+    tracker = CostTracker(use_redis=False)
     tracker.record_usage("llm", "doubao", {"input_tokens": 100}, 0.01)
     tracker.record_usage("llm", "doubao", {"input_tokens": 200}, 0.02)
 
     today_cost = tracker.get_daily_cost(date.today())
-    assert today_cost == 0.03
+    assert today_cost == pytest.approx(0.03)
 
     breakdown = tracker.get_service_breakdown()
-    assert breakdown["llm"]["doubao"] == 0.03
+    assert breakdown["llm"]["doubao"] == pytest.approx(0.03)

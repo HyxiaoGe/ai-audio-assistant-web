@@ -1,4 +1,5 @@
 """通义千问 LLM 服务实现（DashScope API）"""
+
 from __future__ import annotations
 
 import json
@@ -116,9 +117,7 @@ class QwenLLMService(LLMService):
             ) from exc
 
     @monitor("llm", "qwen")
-    async def summarize(
-        self, text: str, summary_type: str, content_style: str = "meeting"
-    ) -> str:
+    async def summarize(self, text: str, summary_type: str, content_style: str = "meeting") -> str:
         if not text:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="text")
 
@@ -127,7 +126,7 @@ class QwenLLMService(LLMService):
             category="summary",
             prompt_type=summary_type,
             locale="zh-CN",
-            variables={"transcript": text, "content_style": content_style}
+            variables={"transcript": text, "content_style": content_style},
         )
 
         payload = {
@@ -156,7 +155,7 @@ class QwenLLMService(LLMService):
             category="summary",
             prompt_type=summary_type,
             locale="zh-CN",
-            variables={"transcript": text, "content_style": content_style}
+            variables={"transcript": text, "content_style": content_style},
         )
 
         payload = {
@@ -251,7 +250,9 @@ class QwenLLMService(LLMService):
         return await self._call_llm_api(payload, headers)
 
     @monitor("llm", "qwen")
-    async def chat_stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
+    async def chat_stream(
+        self, messages: list[dict[str, str]], **kwargs: Any
+    ) -> AsyncIterator[str]:
         """流式对话功能
 
         Args:

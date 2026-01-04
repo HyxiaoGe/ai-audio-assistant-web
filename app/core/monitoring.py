@@ -208,7 +208,9 @@ class AlertManager:
                 name="服务错误率过高",
                 condition=lambda m: m.error_rate > 0.05,
                 level=AlertLevel.WARNING,
-                message_template="服务 {service_type}:{service_name} 错误率过高: {error_rate:.2%}",
+                message_template=(
+                    "服务 {service_type}:{service_name} 错误率过高: " "{error_rate:.2%}"
+                ),
                 cooldown=self.config.alert_cooldown,
             )
         )
@@ -218,7 +220,9 @@ class AlertManager:
                 name="响应时间过长",
                 condition=lambda m: m.avg_response_time > 5.0,
                 level=AlertLevel.WARNING,
-                message_template="服务 {service_type}:{service_name} 响应时间过长: {avg_response_time:.2f}s",
+                message_template=(
+                    "服务 {service_type}:{service_name} 响应时间过长: " "{avg_response_time:.2f}s"
+                ),
                 cooldown=self.config.alert_cooldown,
             )
         )
@@ -228,7 +232,9 @@ class AlertManager:
                 name="P99延迟过高",
                 condition=lambda m: m.p99_response_time > 10.0,
                 level=AlertLevel.WARNING,
-                message_template="服务 {service_type}:{service_name} P99延迟过高: {p99_response_time:.2f}s",
+                message_template=(
+                    "服务 {service_type}:{service_name} P99延迟过高: " "{p99_response_time:.2f}s"
+                ),
                 cooldown=self.config.alert_cooldown,
             )
         )
@@ -360,6 +366,7 @@ def monitor(service_type: str, service_name: str):
 
     def decorator(func):
         if inspect.isasyncgenfunction(func):
+
             @wraps(func)
             async def asyncgen_wrapper(*args, **kwargs):
                 monitoring = MonitoringSystem.get_instance()
@@ -386,6 +393,7 @@ def monitor(service_type: str, service_name: str):
             return asyncgen_wrapper
 
         if inspect.iscoroutinefunction(func):
+
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
                 monitoring = MonitoringSystem.get_instance()

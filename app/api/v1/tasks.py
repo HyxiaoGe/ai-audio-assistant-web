@@ -69,9 +69,7 @@ async def list_tasks(
     if status not in allowed_status:
         status = "all"
     items, total = await TaskService.list_tasks(db, user, page, page_size, status)
-    response = PageResponse[TaskListItem](
-        items=items, total=total, page=page, page_size=page_size
-    )
+    response = PageResponse[TaskListItem](items=items, total=total, page=page, page_size=page_size)
     return success(data=jsonable_encoder(response))
 
 

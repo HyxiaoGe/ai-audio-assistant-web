@@ -10,24 +10,58 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from yt_dlp import YoutubeDL
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from yt_dlp import YoutubeDL
 
 from app.config import settings
+from app.core.config_manager import ConfigManager
 from app.core.exceptions import BusinessError
+from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
+from app.core.task_stages import StageType
 from app.i18n.codes import ErrorCode
+from app.models.summary import Summary
 from app.models.task import Task
 from app.models.transcript import Transcript
-from app.models.summary import Summary
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_task_update_sync
 from worker.stage_manager import StageManager
-from app.core.task_stages import StageType
 
 logger = logging.getLogger("worker.process_youtube")
+
+
+def _load_llm_model_id(provider: str) -> Optional[str]:
+    try:
+        config = ConfigManager.get_config("llm", provider)
+    except Exception:
+        return None
+    return getattr(config, "model", None)
+
+
+def _select_default_llm_provider() -> str:
+    providers = ServiceRegistry.list_services("llm")
+    if not providers:
+        raise ValueError("No available llm service found")
+    providers.sort(
+        key=lambda name: ServiceRegistry.get_metadata("llm", name).priority,
+    )
+    return providers[0]
+
+
+def _resolve_llm_selection(task: Task) -> tuple[str, str]:
+    options = task.options or {}
+    raw_provider = options.get("llm_provider") or options.get("provider")
+    raw_model_id = options.get("llm_model_id") or options.get("model_id")
+    provider = raw_provider if isinstance(raw_provider, str) else None
+    model_id = raw_model_id if isinstance(raw_model_id, str) else None
+    if provider:
+        model_id = model_id or _load_llm_model_id(provider) or provider
+        return provider, model_id
+    provider = _select_default_llm_provider()
+    model_id = _load_llm_model_id(provider) or provider
+    return provider, model_id
 
 
 def _get_download_dir() -> Path:
@@ -125,9 +159,12 @@ def _get_audio_duration(file_path: str) -> Optional[int]:
         result = subprocess.run(
             [
                 "ffprobe",
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
                 file_path,
             ],
             capture_output=True,
@@ -170,9 +207,7 @@ def _transcode_to_wav_16k(input_path: str) -> str:
 
 
 def _get_task(session: Session, task_id: str) -> Optional[Task]:
-    result = session.execute(
-        select(Task).where(Task.id == task_id, Task.deleted_at.is_(None))
-    )
+    result = session.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_(None)))
     return result.scalar_one_or_none()
 
 
@@ -236,7 +271,7 @@ def _update_task(
                 "task_title": task_title,
                 "duration_seconds": task.duration_seconds,
                 "source_type": task.source_type,
-            }
+            },
         )
         session.add(notification)
         session.commit()
@@ -298,7 +333,7 @@ def _mark_failed(
             "error_code": error.code.value,
             "error_message": error_message,
             "source_type": task.source_type,
-        }
+        },
     )
     session.add(notification)
     session.commit()
@@ -360,10 +395,17 @@ def _process_youtube(
     with get_sync_db_session() as session:
         task = _get_task(session, task_id)
         # 如果已有 source_key（上传成功），跳过下载/转码/上传
-        if task.source_key and retry_mode in ["auto", "from_transcribe", "transcribe_only", "summarize_only"]:
+        if task.source_key and retry_mode in [
+            "auto",
+            "from_transcribe",
+            "transcribe_only",
+            "summarize_only",
+        ]:
             skip_download = True
             logger.info(
-                f"[{request_id}] Skipping download/transcode/upload (source_key exists: {task.source_key})"
+                "[%s] Skipping download/transcode/upload (source_key exists: %s)",
+                request_id,
+                task.source_key,
             )
             stage_manager.skip_stage(session, StageType.RESOLVE_YOUTUBE, "Already resolved")
             stage_manager.skip_stage(session, StageType.DOWNLOAD, "Source already uploaded")
@@ -396,7 +438,7 @@ def _process_youtube(
                 task = _get_task(session, task_id)
                 if task is None:
                     return
-                stage_manager.fail_stage(session, StageType.RESOLVE_YOUTUBE, error.code, error.message)
+                stage_manager.fail_stage(session, StageType.RESOLVE_YOUTUBE, error.code, str(error))
                 _mark_failed(session, task, error, request_id)
             return
 
@@ -417,9 +459,7 @@ def _process_youtube(
                 task = _get_task(session, task_id)
                 if task is None:
                     return
-                _update_task(
-                    session, task, "downloading", progress, "downloading", request_id
-                )
+                _update_task(session, task, "downloading", progress, "downloading", request_id)
 
         def _progress_hook(payload: dict) -> None:
             nonlocal last_progress, last_emit
@@ -441,9 +481,7 @@ def _process_youtube(
             # Call progress update directly (sync version)
             _emit_progress(mapped)
 
-        original_filename = _download_youtube(
-            task.source_url, progress_callback=_progress_hook
-        )
+        original_filename = _download_youtube(task.source_url, progress_callback=_progress_hook)
         if not original_filename:
             raise BusinessError(
                 ErrorCode.FILE_PROCESSING_ERROR, reason="download produced empty file"
@@ -476,9 +514,7 @@ def _process_youtube(
                 task = _get_task(session, task_id)
                 if task is None:
                     return
-                _update_task(
-                    session, task, "transcoding", 27, "transcoding", request_id
-                )
+                _update_task(session, task, "transcoding", 27, "transcoding", request_id)
             filename = _transcode_to_wav_16k(original_filename)
         else:
             # 下载失败，但有 direct_url，跳过转码和上传
@@ -522,9 +558,7 @@ def _process_youtube(
                 task = _get_task(session, task_id)
                 if task is None:
                     return
-                _update_task(
-                    session, task, "uploading", 30, "uploading", request_id
-                )
+                _update_task(session, task, "uploading", 30, "uploading", request_id)
 
             # 双存储上传：同时上传到 COS 和 MinIO
             # 使用 SmartFactory 获取 storage 服务
@@ -590,22 +624,28 @@ def _process_youtube(
     with get_sync_db_session() as session:
         task = _get_task(session, task_id)
         # 检查是否已有转写结果
-        existing_transcripts = session.query(Transcript).filter(
-            Transcript.task_id == task_id
-        ).count()
+        existing_transcripts = (
+            session.query(Transcript).filter(Transcript.task_id == task_id).count()
+        )
 
         if existing_transcripts > 0 and retry_mode in ["auto", "summarize_only"]:
             skip_transcribe = True
             logger.info(
-                f"[{request_id}] Skipping transcription (found {existing_transcripts} existing transcripts)"
+                "[%s] Skipping transcription (found %s existing transcripts)",
+                request_id,
+                existing_transcripts,
             )
             stage_manager.skip_stage(session, StageType.TRANSCRIBE, "Transcripts already exist")
 
-            transcripts_list = session.query(Transcript).filter(
-                Transcript.task_id == task_id
-            ).order_by(Transcript.sequence).all()
+            transcripts_list = (
+                session.query(Transcript)
+                .filter(Transcript.task_id == task_id)
+                .order_by(Transcript.sequence)
+                .all()
+            )
 
             from app.schemas.asr import TranscriptSegment
+
             segments = [
                 TranscriptSegment(
                     speaker_id=t.speaker_id or "",
@@ -714,7 +754,9 @@ def _process_youtube(
                 )
                 session.add_all(transcripts)
                 session.commit()
-                stage_manager.complete_stage(session, StageType.TRANSCRIBE, {"segment_count": len(transcripts)})
+                stage_manager.complete_stage(
+                    session, StageType.TRANSCRIBE, {"segment_count": len(transcripts)}
+                )
                 logger.info(
                     "Task %s: Saved %d transcript segments",
                     task_id,
@@ -727,11 +769,13 @@ def _process_youtube(
                 task = _get_task(session, task_id)
                 if task is not None:
                     if isinstance(exc, BusinessError):
-                        stage_manager.fail_stage(session, StageType.TRANSCRIBE, exc.code, exc.message)
+                        stage_manager.fail_stage(session, StageType.TRANSCRIBE, exc.code, str(exc))
                         _mark_failed(session, task, exc, request_id)
                     else:
                         error = BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=str(exc))
-                        stage_manager.fail_stage(session, StageType.TRANSCRIBE, error.code, error.message)
+                        stage_manager.fail_stage(
+                            session, StageType.TRANSCRIBE, error.code, str(error)
+                        )
                         _mark_failed(session, task, error, request_id)
             return
 
@@ -740,15 +784,18 @@ def _process_youtube(
     with get_sync_db_session() as session:
         task = _get_task(session, task_id)
         # 检查是否已有摘要结果
-        existing_summaries = session.query(Summary).filter(
-            Summary.task_id == task_id,
-            Summary.is_active == True  # noqa: E712
-        ).count()
+        existing_summaries = (
+            session.query(Summary)
+            .filter(Summary.task_id == task_id, Summary.is_active == True)  # noqa: E712
+            .count()
+        )
 
         if existing_summaries > 0 and retry_mode == "auto":
             skip_summarize = True
             logger.info(
-                f"[{request_id}] Skipping summarization (found {existing_summaries} existing summaries)"
+                "[%s] Skipping summarization (found %s existing summaries)",
+                request_id,
+                existing_summaries,
             )
             stage_manager.skip_stage(session, StageType.SUMMARIZE, "Summaries already exist")
 
@@ -762,7 +809,10 @@ def _process_youtube(
                 _update_task(session, task, "summarizing", 75, "summarizing", request_id)
                 stage_manager.start_stage(session, StageType.SUMMARIZE)
                 # 使用 SmartFactory 获取 LLM 服务（自动选择最优服务）
-                llm_service = asyncio.run(SmartFactory.get_service("llm"))
+                provider, model_id = _resolve_llm_selection(task)
+                llm_service = asyncio.run(
+                    SmartFactory.get_service("llm", provider=provider, model_id=model_id)
+                )
                 full_text = "\n".join([seg.content for seg in segments])
                 logger.info(
                     "Task %s: Starting LLM summarization with %d characters of text",
@@ -805,7 +855,9 @@ def _process_youtube(
                     )
                 session.add_all(summaries)
                 session.commit()
-                stage_manager.complete_stage(session, StageType.SUMMARIZE, {"summary_count": len(summaries)})
+                stage_manager.complete_stage(
+                    session, StageType.SUMMARIZE, {"summary_count": len(summaries)}
+                )
                 logger.info(
                     "Task %s: All summaries saved to database",
                     task_id,
@@ -817,11 +869,13 @@ def _process_youtube(
                 task = _get_task(session, task_id)
                 if task is not None:
                     if isinstance(exc, BusinessError):
-                        stage_manager.fail_stage(session, StageType.SUMMARIZE, exc.code, exc.message)
+                        stage_manager.fail_stage(session, StageType.SUMMARIZE, exc.code, str(exc))
                         _mark_failed(session, task, exc, request_id)
                     else:
                         error = BusinessError(ErrorCode.LLM_SERVICE_FAILED, reason=str(exc))
-                        stage_manager.fail_stage(session, StageType.SUMMARIZE, error.code, error.message)
+                        stage_manager.fail_stage(
+                            session, StageType.SUMMARIZE, error.code, str(error)
+                        )
                         _mark_failed(session, task, error, request_id)
             return
 

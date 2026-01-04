@@ -10,8 +10,8 @@ from typing import Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User
 from app.core.smart_factory import SmartFactory
+from app.models.user import User
 
 logger = logging.getLogger("app.avatar")
 
@@ -39,9 +39,7 @@ def _build_avatar_key(user_id: str, content_type: Optional[str]) -> str:
 
 class AvatarService:
     @staticmethod
-    async def sync_avatar(
-        db: AsyncSession, user: User, avatar_url: Optional[str]
-    ) -> None:
+    async def sync_avatar(db: AsyncSession, user: User, avatar_url: Optional[str]) -> None:
         if not avatar_url:
             return
         try:

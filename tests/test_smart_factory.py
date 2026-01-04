@@ -1,7 +1,7 @@
 import pytest
 
-from app.core.smart_factory import SelectionStrategy, SmartFactory, SmartFactoryConfig
 from app.core.registry import ServiceMetadata
+from app.core.smart_factory import SelectionStrategy, SmartFactory, SmartFactoryConfig
 
 
 class _FakeService:
@@ -29,12 +29,12 @@ def _configure_factory() -> None:
 async def test_get_service_with_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_factory()
 
-    def fake_get(service_type: str, name: str) -> _FakeService:
+    def fake_get(service_type: str, name: str, **kwargs) -> _FakeService:
         return _FakeService(name)
 
     monkeypatch.setattr("app.core.smart_factory.ServiceRegistry.get", fake_get)
 
-    service = await SmartFactory.get_service("llm", provider="doubao")
+    service = await SmartFactory.get_service("llm", provider="doubao", model_id="doubao")
     assert service.name == "doubao"
 
 
@@ -52,7 +52,7 @@ async def test_health_first_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         "app.core.smart_factory.ServiceRegistry.get",
-        lambda service_type, name: _FakeService(name),
+        lambda service_type, name, **kwargs: _FakeService(name),
     )
     monkeypatch.setattr(
         "app.core.smart_factory.ServiceRegistry.get_metadata",
@@ -63,7 +63,7 @@ async def test_health_first_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     )
 
-    service = await SmartFactory.get_service("llm")
+    service = await SmartFactory.get_service("llm", model_id="test-model")
     assert service.name == "svc1"
 
 
@@ -80,7 +80,7 @@ async def test_cost_first_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda service_type: ["cheap", "expensive"],
     )
 
-    def fake_get(service_type: str, name: str) -> _FakeService:
+    def fake_get(service_type: str, name: str, **kwargs) -> _FakeService:
         return _FakeService(name, cost=0.1 if name == "cheap" else 0.5)
 
     def fake_metadata(service_type: str, name: str) -> ServiceMetadata:
@@ -96,6 +96,7 @@ async def test_cost_first_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
         "llm",
         strategy=SelectionStrategy.COST_FIRST,
         request_params={"input_tokens": 10, "output_tokens": 5},
+        model_id="test-model",
     )
     assert service.name == "cheap"
 
@@ -114,7 +115,7 @@ async def test_performance_first_strategy(monkeypatch: pytest.MonkeyPatch) -> No
     )
     monkeypatch.setattr(
         "app.core.smart_factory.ServiceRegistry.get",
-        lambda service_type, name: _FakeService(name),
+        lambda service_type, name, **kwargs: _FakeService(name),
     )
 
     def fake_metadata(service_type: str, name: str) -> ServiceMetadata:
@@ -129,6 +130,7 @@ async def test_performance_first_strategy(monkeypatch: pytest.MonkeyPatch) -> No
     service = await SmartFactory.get_service(
         "llm",
         strategy=SelectionStrategy.PERFORMANCE_FIRST,
+        model_id="test-model",
     )
     assert service.name == "fast"
 
@@ -159,7 +161,7 @@ async def test_balanced_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda service_type: ["low_cost", "high_perf"],
     )
 
-    def fake_get(service_type: str, name: str) -> _FakeService:
+    def fake_get(service_type: str, name: str, **kwargs) -> _FakeService:
         cost = 1.0 if name == "low_cost" else 3.0
         return _FakeService(name, cost=cost)
 
@@ -177,6 +179,7 @@ async def test_balanced_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
         "llm",
         strategy=SelectionStrategy.BALANCED,
         request_params={"input_tokens": 10, "output_tokens": 5},
+        model_id="test-model",
     )
     assert service.name == "high_perf"
 
@@ -195,7 +198,7 @@ async def test_custom_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         "app.core.smart_factory.ServiceRegistry.get",
-        lambda service_type, name: _FakeService(name),
+        lambda service_type, name, **kwargs: _FakeService(name),
     )
     monkeypatch.setattr(
         "app.core.smart_factory.ServiceRegistry.get_metadata",
@@ -221,6 +224,7 @@ async def test_custom_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
     service = await SmartFactory.get_service(
         "llm",
         strategy=SelectionStrategy.CUSTOM,
+        model_id="test-model",
         custom_scorer=custom_scorer,
     )
     assert service.name == "a"
@@ -231,14 +235,14 @@ async def test_service_caching(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_factory()
     calls = {"count": 0}
 
-    def fake_get(service_type: str, name: str) -> _FakeService:
+    def fake_get(service_type: str, name: str, **kwargs) -> _FakeService:
         calls["count"] += 1
         return _FakeService(name)
 
     monkeypatch.setattr("app.core.smart_factory.ServiceRegistry.get", fake_get)
 
-    service1 = await SmartFactory.get_service("llm", provider="doubao")
-    service2 = await SmartFactory.get_service("llm", provider="doubao")
+    service1 = await SmartFactory.get_service("llm", provider="doubao", model_id="doubao")
+    service2 = await SmartFactory.get_service("llm", provider="doubao", model_id="doubao")
     assert service1 is service2
     assert calls["count"] == 1
 
@@ -257,7 +261,7 @@ async def test_no_healthy_services_fallback(monkeypatch: pytest.MonkeyPatch) -> 
     )
     monkeypatch.setattr(
         "app.core.smart_factory.ServiceRegistry.get",
-        lambda service_type, name: _FakeService(name),
+        lambda service_type, name, **kwargs: _FakeService(name),
     )
     monkeypatch.setattr(
         "app.core.smart_factory.ServiceRegistry.get_metadata",
@@ -268,5 +272,5 @@ async def test_no_healthy_services_fallback(monkeypatch: pytest.MonkeyPatch) -> 
         ),
     )
 
-    service = await SmartFactory.get_service("llm")
+    service = await SmartFactory.get_service("llm", model_id="test-model")
     assert service.name == "fallback"

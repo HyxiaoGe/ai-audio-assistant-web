@@ -27,9 +27,7 @@ async def get_current_user(
     subject = payload.get("sub")
     if not isinstance(subject, str) or not subject:
         raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
-    result = await db.execute(
-        select(User).where(User.id == subject, User.deleted_at.is_(None))
-    )
+    result = await db.execute(select(User).where(User.id == subject, User.deleted_at.is_(None)))
     user = result.scalar_one_or_none()
     if user is None:
         raise BusinessError(ErrorCode.USER_NOT_FOUND)
@@ -64,9 +62,7 @@ async def get_current_user_from_query(
     if not isinstance(subject, str) or not subject:
         raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
 
-    result = await db.execute(
-        select(User).where(User.id == subject, User.deleted_at.is_(None))
-    )
+    result = await db.execute(select(User).where(User.id == subject, User.deleted_at.is_(None)))
     user = result.scalar_one_or_none()
     if user is None:
         raise BusinessError(ErrorCode.USER_NOT_FOUND)

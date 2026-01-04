@@ -1,9 +1,11 @@
 """LLM 模型管理 API"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from app.core.config_manager import ConfigManager
 from app.core.health_checker import HealthChecker, HealthStatus
 from app.core.registry import ServiceRegistry
 from app.core.response import success
@@ -29,7 +31,6 @@ MODEL_DISPLAY_NAMES_I18N = {
     "openai/o1": {"zh": "o1", "en": "o1"},
     "openai/o1-mini": {"zh": "o1 Mini", "en": "o1 Mini"},
     "openai/o1-preview": {"zh": "o1 Preview", "en": "o1 Preview"},
-
     # Anthropic 模型（通过 OpenRouter）
     "anthropic/claude-3.5-sonnet": {"zh": "Claude 3.5 Sonnet", "en": "Claude 3.5 Sonnet"},
     "anthropic/claude-3.5-sonnet:beta": {"zh": "Claude 3.5 Sonnet", "en": "Claude 3.5 Sonnet"},
@@ -38,7 +39,6 @@ MODEL_DISPLAY_NAMES_I18N = {
     "anthropic/claude-3-5-haiku-20241022": {"zh": "Claude 3.5 Haiku", "en": "Claude 3.5 Haiku"},
     "anthropic/claude-3-opus": {"zh": "Claude 3 Opus", "en": "Claude 3 Opus"},
     "anthropic/claude-3-opus-20240229": {"zh": "Claude 3 Opus", "en": "Claude 3 Opus"},
-
     # Google 模型（通过 OpenRouter）
     "google/gemini-2.0-flash-exp": {"zh": "Gemini 2.0 Flash", "en": "Gemini 2.0 Flash"},
     "google/gemini-exp-1206": {"zh": "Gemini Exp 1206", "en": "Gemini Exp 1206"},
@@ -46,7 +46,6 @@ MODEL_DISPLAY_NAMES_I18N = {
     "google/gemini-pro-1.5-exp": {"zh": "Gemini 1.5 Pro Exp", "en": "Gemini 1.5 Pro Exp"},
     "google/gemini-flash-1.5": {"zh": "Gemini 1.5 Flash", "en": "Gemini 1.5 Flash"},
     "google/gemini-flash-1.5-8b": {"zh": "Gemini 1.5 Flash 8B", "en": "Gemini 1.5 Flash 8B"},
-
     # xAI Grok 模型（通过 OpenRouter）
     "x-ai/grok-2": {"zh": "Grok 2", "en": "Grok 2"},
     "x-ai/grok-2-vision": {"zh": "Grok 2 Vision", "en": "Grok 2 Vision"},
@@ -93,7 +92,14 @@ async def get_available_models(request: Request) -> JSONResponse:
         # 获取模型 ID（需要实例化服务）
         model_id = None
         try:
-            service = await SmartFactory.get_service("llm", provider=provider)
+            config = ConfigManager.get_config("llm", provider)
+            model_id = getattr(config, "model", None)
+        except Exception:
+            model_id = None
+        if not model_id:
+            model_id = provider
+        try:
+            service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
             model_id = service.model_name
         except Exception:
             # 如果获取失败，使用 provider 作为 fallback
@@ -109,19 +115,23 @@ async def get_available_models(request: Request) -> JSONResponse:
         if not display_name:
             display_name = DISPLAY_NAMES_I18N.get(provider, {}).get(
                 lang,
-                DISPLAY_NAMES_I18N.get(provider, {}).get("zh", metadata.display_name or provider.capitalize())
+                DISPLAY_NAMES_I18N.get(provider, {}).get(
+                    "zh", metadata.display_name or provider.capitalize()
+                ),
             )
 
-        models.append({
-            "provider": provider,
-            "model_id": model_id,
-            "display_name": display_name,
-            "description": metadata.description,
-            "cost_per_million_tokens": metadata.cost_per_million_tokens,
-            "priority": metadata.priority,
-            "status": status,
-            "is_available": status == HealthStatus.HEALTHY.value,
-        })
+        models.append(
+            {
+                "provider": provider,
+                "model_id": model_id,
+                "display_name": display_name,
+                "description": metadata.description,
+                "cost_per_million_tokens": metadata.cost_per_million_tokens,
+                "priority": metadata.priority,
+                "status": status,
+                "is_available": status == HealthStatus.HEALTHY.value,
+            }
+        )
 
     # 找出优先级最高的（priority 数字最小的）
     healthy_models = [m for m in models if m["is_available"]]

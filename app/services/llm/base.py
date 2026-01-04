@@ -31,9 +31,7 @@ class LLMService(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def summarize(
-        self, text: str, summary_type: str, content_style: str = "meeting"
-    ) -> str:
+    async def summarize(self, text: str, summary_type: str, content_style: str = "meeting") -> str:
         """生成摘要（非流式）
 
         Args:
@@ -72,11 +70,7 @@ class LLMService(ABC):
         yield  # Make it a generator
 
     @abstractmethod
-    async def chat(
-        self,
-        messages: List[Dict[str, str]],
-        **kwargs: Any
-    ) -> str:
+    async def chat(self, messages: List[Dict[str, str]], **kwargs: Any) -> str:
         """通用对话接口（非流式）
 
         Args:
@@ -93,9 +87,7 @@ class LLMService(ABC):
 
     @abstractmethod
     async def chat_stream(
-        self,
-        messages: List[Dict[str, str]],
-        **kwargs: Any
+        self, messages: List[Dict[str, str]], **kwargs: Any
     ) -> AsyncIterator[str]:
         """通用对话接口（流式）
 

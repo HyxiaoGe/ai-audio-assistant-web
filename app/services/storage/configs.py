@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import Field, validator
 
 from app.core.config_manager import ServiceConfig, register_config_schema
@@ -24,6 +22,7 @@ class COSConfig(ServiceConfig):
         use_ssl: 是否使用 SSL（True/False）
         public_read: 是否公开读（True/False）
     """
+
     region: str = Field(..., description="地域", min_length=1)
     bucket: str = Field(..., description="存储桶名称", min_length=1)
     secret_id: str = Field(..., description="腾讯云 Secret ID", min_length=1)
@@ -33,6 +32,7 @@ class COSConfig(ServiceConfig):
 
     class Config:
         """Pydantic 配置"""
+
         schema_extra = {
             "example": {
                 "region": "ap-guangzhou",
@@ -59,6 +59,7 @@ class MinioConfig(ServiceConfig):
         bucket: 存储桶名称
         use_ssl: 是否使用 SSL（True/False）
     """
+
     endpoint: str = Field(..., description="MinIO 服务端点", min_length=1)
     access_key: str = Field(..., description="Access Key", min_length=1)
     secret_key: str = Field(..., description="Secret Key", min_length=1)
@@ -77,6 +78,7 @@ class MinioConfig(ServiceConfig):
 
     class Config:
         """Pydantic 配置"""
+
         schema_extra = {
             "example": {
                 "endpoint": "localhost:9000",

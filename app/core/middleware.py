@@ -13,9 +13,7 @@ logger = logging.getLogger("app.middleware")
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         header_request_id = request.headers.get("X-Request-Id")
         trace_id = header_request_id.strip() if header_request_id else uuid4().hex
         request.state.trace_id = trace_id
@@ -29,9 +27,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
 
 class LocaleMiddleware(BaseHTTPMiddleware):
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         accept_language = request.headers.get("Accept-Language", "zh")
         # 提取第一个语言标签（逗号前的部分）
         locale = accept_language.split(",")[0].strip().lower()
@@ -45,9 +41,7 @@ class LocaleMiddleware(BaseHTTPMiddleware):
 
 
 class LoggingMiddleware(BaseHTTPMiddleware):
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         start_time = time.perf_counter()
         response = await call_next(request)
         duration_ms = int((time.perf_counter() - start_time) * 1000)

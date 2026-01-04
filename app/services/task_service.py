@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from yt_dlp import YoutubeDL
 
@@ -31,7 +31,7 @@ class TaskService:
         - https://www.youtube.com/embed/VIDEO_ID
         """
         patterns = [
-            r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
+            r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})",
         ]
         for pattern in patterns:
             match = re.search(pattern, url)
@@ -42,7 +42,7 @@ class TaskService:
     @staticmethod
     def _generate_content_hash(content: str) -> str:
         """生成内容的 SHA256 哈希值."""
-        return hashlib.sha256(content.encode('utf-8')).hexdigest()
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _validate_youtube_video_sync(url: str) -> Optional[str]:
@@ -79,55 +79,63 @@ class TaskService:
             logger.warning(f"YouTube video validation failed: {exc}")
 
             # 判断是否为视频不可访问
-            if any(keyword in error_msg for keyword in [
-                "video unavailable",
-                "private video",
-                "video has been removed",
-                "this video isn't available",
-                "video is unavailable",
-                "has been removed",
-                "is not available",
-                "members-only",
-                "premiere",
-            ]):
+            if any(
+                keyword in error_msg
+                for keyword in [
+                    "video unavailable",
+                    "private video",
+                    "video has been removed",
+                    "this video isn't available",
+                    "video is unavailable",
+                    "has been removed",
+                    "is not available",
+                    "members-only",
+                    "premiere",
+                ]
+            ):
                 raise BusinessError(ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE)
 
             # 视频 ID 不完整或格式错误
-            if any(keyword in error_msg for keyword in [
-                "incomplete youtube id",
-                "truncated",
-                "invalid youtube id",
-                "malformed",
-            ]):
+            if any(
+                keyword in error_msg
+                for keyword in [
+                    "incomplete youtube id",
+                    "truncated",
+                    "invalid youtube id",
+                    "malformed",
+                ]
+            ):
                 raise BusinessError(ErrorCode.INVALID_URL_FORMAT)
 
             # 网络超时
             if "timeout" in error_msg or "timed out" in error_msg:
                 raise BusinessError(
-                    ErrorCode.YOUTUBE_DOWNLOAD_FAILED,
-                    reason="网络超时，请稍后重试"
+                    ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="网络超时，请稍后重试"
                 )
 
             # 地域限制
-            if any(keyword in error_msg for keyword in [
-                "not available in your country",
-                "geo-restricted",
-                "region",
-            ]):
+            if any(
+                keyword in error_msg
+                for keyword in [
+                    "not available in your country",
+                    "geo-restricted",
+                    "region",
+                ]
+            ):
                 raise BusinessError(
-                    ErrorCode.YOUTUBE_DOWNLOAD_FAILED,
-                    reason="该视频存在地域限制，当前地区无法访问"
+                    ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="该视频存在地域限制，当前地区无法访问"
                 )
 
             # 需要登录
-            if any(keyword in error_msg for keyword in [
-                "sign in",
-                "login",
-                "members only",
-            ]):
-                raise BusinessError(
-                    ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE
-                )
+            if any(
+                keyword in error_msg
+                for keyword in [
+                    "sign in",
+                    "login",
+                    "members only",
+                ]
+            ):
+                raise BusinessError(ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE)
 
             # 其他下载错误 - 只返回简洁的错误信息
             # 提取错误的关键部分，避免暴露技术细节
@@ -138,16 +146,15 @@ class TaskService:
                     # 取第一个 ERROR 后面的内容，限制长度
                     clean_msg = parts[1].strip().split("\n")[0][:100]
                     # 移除技术前缀如 [youtube:truncated_id]
-                    clean_msg = re.sub(r'\[[\w:]+\]\s+\w+:\s+', '', clean_msg)
+                    clean_msg = re.sub(r"\[[\w:]+\]\s+\w+:\s+", "", clean_msg)
                     raise BusinessError(
-                        ErrorCode.YOUTUBE_DOWNLOAD_FAILED,
-                        reason=f"视频解析失败：{clean_msg}"
+                        ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason=f"视频解析失败：{clean_msg}"
                     )
 
             # 完全未知的错误，返回通用提示
             raise BusinessError(
                 ErrorCode.YOUTUBE_DOWNLOAD_FAILED,
-                reason="视频链接无效或暂时无法访问，请检查链接是否正确"
+                reason="视频链接无效或暂时无法访问，请检查链接是否正确",
             )
 
     @staticmethod
@@ -166,15 +173,13 @@ class TaskService:
         try:
             # 在线程池中运行同步的 yt-dlp 调用，设置 20 秒总超时
             title = await asyncio.wait_for(
-                asyncio.to_thread(TaskService._validate_youtube_video_sync, url),
-                timeout=20.0
+                asyncio.to_thread(TaskService._validate_youtube_video_sync, url), timeout=20.0
             )
             return title
         except asyncio.TimeoutError:
             logger.warning(f"YouTube video validation timeout: {url}")
             raise BusinessError(
-                ErrorCode.YOUTUBE_DOWNLOAD_FAILED,
-                reason="视频验证超时，请检查网络连接或稍后重试"
+                ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="视频验证超时，请检查网络连接或稍后重试"
             )
 
     @staticmethod
@@ -219,11 +224,13 @@ class TaskService:
         # 检查是否有相同内容的任务
         if data.content_hash:
             existing_result = await db.execute(
-                select(Task).where(
+                select(Task)
+                .where(
                     Task.user_id == user.id,
                     Task.content_hash == data.content_hash,
                     Task.deleted_at.is_(None),
-                ).order_by(Task.created_at.desc())  # 获取最新的任务
+                )
+                .order_by(Task.created_at.desc())  # 获取最新的任务
             )
             existing_task = existing_result.scalar_one_or_none()
 
@@ -234,9 +241,21 @@ class TaskService:
 
                 # 正在处理中的任务，提示用户
                 processing_statuses = {
-                    "pending", "queued", "resolving", "downloading", "downloaded",
-                    "transcoding", "uploading", "uploaded", "resolved", "processing",
-                    "asr_submitting", "asr_polling", "extracting", "transcribing", "summarizing"
+                    "pending",
+                    "queued",
+                    "resolving",
+                    "downloading",
+                    "downloaded",
+                    "transcoding",
+                    "uploading",
+                    "uploaded",
+                    "resolved",
+                    "processing",
+                    "asr_submitting",
+                    "asr_polling",
+                    "extracting",
+                    "transcribing",
+                    "summarizing",
                 }
                 if existing_task.status in processing_statuses:
                     raise BusinessError(ErrorCode.TASK_PROCESSING)
@@ -346,9 +365,7 @@ class TaskService:
         return items, total
 
     @staticmethod
-    async def get_task_detail(
-        db: AsyncSession, user: User, task_id: str
-    ) -> TaskDetailResponse:
+    async def get_task_detail(db: AsyncSession, user: User, task_id: str) -> TaskDetailResponse:
         result = await db.execute(
             select(Task).where(
                 Task.id == task_id,
@@ -364,14 +381,16 @@ class TaskService:
         audio_url = None
         if task.source_key:
             from app.config import settings
+
             # 返回完整 URL，包含后端地址
             api_base = settings.API_BASE_URL or "http://localhost:8000"
             audio_url = f"{api_base}/api/v1/media/{task.source_key}"
 
         # 构建阶段信息
         from app.schemas.task import TaskStageResponse
+
         stages = []
-        if hasattr(task, 'stages') and task.stages:
+        if hasattr(task, "stages") and task.stages:
             stages = [
                 TaskStageResponse(
                     stage_type=stage.stage_type,

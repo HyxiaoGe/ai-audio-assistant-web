@@ -68,26 +68,18 @@ class TaskStage(BaseModel):
     """
 
     # 是否为当前活跃记录（支持重试历史）
-    is_active: Mapped[bool] = mapped_column(
-        server_default=text("true"), nullable=False
-    )
+    is_active: Mapped[bool] = mapped_column(server_default=text("true"), nullable=False)
 
     # 执行时间
-    started_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # 错误信息
     error_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # 重试次数（这个阶段重试了几次）
-    attempt: Mapped[int] = mapped_column(
-        Integer, server_default=text("1"), nullable=False
-    )
+    attempt: Mapped[int] = mapped_column(Integer, server_default=text("1"), nullable=False)
 
     # 阶段特定的元数据
     stage_metadata: Mapped[dict[str, object]] = mapped_column(

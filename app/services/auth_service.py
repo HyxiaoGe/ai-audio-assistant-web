@@ -25,19 +25,19 @@ class AuthService:
     ) -> str:
         try:
             logger.info(f"Syncing account: provider={provider}, email={email}")
-            result = await db.execute(
+            account_result = await db.execute(
                 select(Account).where(
                     Account.provider == provider,
                     Account.provider_account_id == provider_account_id,
                 )
             )
-            account = result.scalar_one_or_none()
+            account = account_result.scalar_one_or_none()
             if account is not None:
                 logger.info(f"Found existing account: user_id={account.user_id}")
-                result = await db.execute(
+                user_result = await db.execute(
                     select(User).where(User.id == account.user_id, User.deleted_at.is_(None))
                 )
-                user = result.scalar_one_or_none()
+                user = user_result.scalar_one_or_none()
                 if user is not None:
                     if name and user.name != name:
                         user.name = name
@@ -46,10 +46,10 @@ class AuthService:
                 return account.user_id
 
             logger.info("No existing account found, creating new user/account")
-            result = await db.execute(
+            user_result = await db.execute(
                 select(User).where(User.email == email, User.deleted_at.is_(None))
             )
-            user = result.scalar_one_or_none()
+            user = user_result.scalar_one_or_none()
             if user is None:
                 logger.info("Creating new user")
                 user = User(email=email, name=name, avatar_url=None)
@@ -73,13 +73,13 @@ class AuthService:
             except IntegrityError as e:
                 logger.warning(f"IntegrityError during commit: {e}")
                 await db.rollback()
-                result = await db.execute(
+                account_result = await db.execute(
                     select(Account).where(
                         Account.provider == provider,
                         Account.provider_account_id == provider_account_id,
                     )
                 )
-                account = result.scalar_one_or_none()
+                account = account_result.scalar_one_or_none()
                 if account is not None:
                     return account.user_id
                 raise

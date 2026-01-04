@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Index, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB

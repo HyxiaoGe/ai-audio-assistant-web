@@ -82,11 +82,15 @@ class SmartFactory:
         service_type: str,
         strategy: Optional[SelectionStrategy] = None,
         provider: Optional[str] = None,
+        *,
         model_id: Optional[str] = None,
         request_params: Optional[Dict[str, Any]] = None,
         custom_scorer: Optional[Callable[[Any, ServiceMetadata], float]] = None,
     ) -> Any:
         instance = cls.get_instance()
+
+        if service_type == "llm" and not model_id:
+            raise ValueError("model_id is required for llm services")
 
         if provider:
             return await instance._get_specific_service(service_type, provider, model_id)
@@ -125,8 +129,12 @@ class SmartFactory:
             # 再次获取健康服务列表
             healthy_services = HealthChecker.get_healthy_services(service_type)
             if not healthy_services:
-                logger.error("No healthy %s services available after health check", service_type)
-                return None
+                logger.warning(
+                    "No healthy %s services available after health check; "
+                    "falling back to all services",
+                    service_type,
+                )
+                healthy_services = all_services
 
         if strategy == SelectionStrategy.HEALTH_FIRST:
             return self._select_by_health(service_type, healthy_services)
@@ -266,13 +274,16 @@ class SmartFactory:
     async def _get_specific_service(
         self, service_type: str, provider: str, model_id: Optional[str] = None
     ) -> Any:
-        # 如果指定了 model_id，使用包含 model_id 的缓存键
+        # LLM/ASR 使用包含 model_id 的缓存键；其他类型使用 provider
         cache_key = f"{provider}:{model_id}" if model_id else provider
         cached = self._get_cached_service(service_type, cache_key)
         if cached is not None:
             return cached
 
-        service = ServiceRegistry.get(service_type, provider, model_id=model_id)
+        if model_id is None:
+            service = ServiceRegistry.get(service_type, provider)
+        else:
+            service = ServiceRegistry.get(service_type, provider, model_id=model_id)
         if not service:
             raise ValueError(f"Service {service_type}:{provider} not found in registry")
 

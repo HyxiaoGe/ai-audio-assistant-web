@@ -36,7 +36,5 @@ class Transcript(BaseRecord):
 
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    is_edited: Mapped[bool] = mapped_column(
-        Boolean, server_default=text("false"), nullable=False
-    )
+    is_edited: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
     original_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

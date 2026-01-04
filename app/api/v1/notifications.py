@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
@@ -56,9 +56,7 @@ async def list_notifications(
     notifications = result.scalars().all()
 
     # Convert to response
-    items = [
-        NotificationResponse.model_validate(notif) for notif in notifications
-    ]
+    items = [NotificationResponse.model_validate(notif) for notif in notifications]
 
     response = PageResponse(
         items=items,
@@ -159,6 +157,7 @@ async def mark_all_read(
     """Mark all notifications as read."""
 
     from datetime import datetime, timezone
+
     from sqlalchemy import update
 
     stmt = (
@@ -221,6 +220,7 @@ async def clear_all_notifications(
     """Dismiss all notifications for the current user (soft delete)."""
 
     from datetime import datetime, timezone
+
     from sqlalchemy import update
 
     stmt = (

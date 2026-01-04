@@ -35,7 +35,9 @@ def _build_client(response: _FakeResponse | None, error: Exception | None):
         ) -> bool:
             return False
 
-        async def post(self, url: str, json: dict[str, object], headers: dict[str, str]) -> _FakeResponse:
+        async def post(
+            self, url: str, json: dict[str, object], headers: dict[str, str]
+        ) -> _FakeResponse:
             if error is not None:
                 raise error
             if response is None:

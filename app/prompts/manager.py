@@ -1,4 +1,5 @@
 """提示词管理器"""
+
 from __future__ import annotations
 
 import json
@@ -48,8 +49,7 @@ class PromptManager:
 
         if prompt_type not in prompt_data["prompts"]:
             raise BusinessError(
-                ErrorCode.INVALID_PARAMETER,
-                detail=f"Unknown prompt type: {prompt_type}"
+                ErrorCode.INVALID_PARAMETER, detail=f"Unknown prompt type: {prompt_type}"
             )
 
         prompt_template = prompt_data["prompts"][prompt_type]["template"]
@@ -83,7 +83,7 @@ class PromptManager:
                 "type": prompt_type,
                 "locale": locale,
                 "version": config_data.get("version", "unknown"),
-            }
+            },
         }
 
     def _load_prompts(self, category: str, locale: str) -> Dict:
@@ -99,8 +99,7 @@ class PromptManager:
             prompt_file = self.prompts_dir / category / "zh-CN.json"
             if not prompt_file.exists():
                 raise BusinessError(
-                    ErrorCode.SYSTEM_ERROR,
-                    reason=f"Prompt file not found: {category}/{locale}"
+                    ErrorCode.SYSTEM_ERROR, reason=f"Prompt file not found: {category}/{locale}"
                 )
 
         with open(prompt_file, "r", encoding="utf-8") as f:
@@ -150,7 +149,7 @@ class PromptManager:
                     "description": data.get("description"),
                 }
                 for name, data in prompts_zh["prompts"].items()
-            }
+            },
         }
 
 

@@ -1,8 +1,9 @@
 """阿里云 OSS 对象存储服务实现"""
+
 from __future__ import annotations
 
 import mimetypes
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import oss2
 from oss2.exceptions import NoSuchKey, OssError
@@ -46,7 +47,10 @@ class OSSStorageService(StorageService):
         use_ssl = settings.OSS_USE_SSL
 
         if not endpoint or not access_key_id or not access_key_secret or not bucket_name:
-            raise RuntimeError("OSS settings are not set (需要配置 OSS_ENDPOINT, OSS_BUCKET 和 ALIYUN_ACCESS_KEY_ID/SECRET)")
+            raise RuntimeError(
+                "OSS settings are not set "
+                "(需要配置 OSS_ENDPOINT, OSS_BUCKET 和 ALIYUN_ACCESS_KEY_ID/SECRET)"
+            )
 
         # 创建认证对象
         auth = oss2.Auth(access_key_id, access_key_secret)
@@ -73,7 +77,7 @@ class OSSStorageService(StorageService):
             预签名上传 URL
         """
         # 生成 PUT 方法的签名 URL
-        url = self._bucket.sign_url('PUT', object_name, expires_in, slash_safe=True)
+        url = self._bucket.sign_url("PUT", object_name, expires_in, slash_safe=True)
         return url
 
     @monitor("storage", "oss")
@@ -92,7 +96,7 @@ class OSSStorageService(StorageService):
             预签名下载 URL
         """
         # 生成 GET 方法的签名 URL
-        url = self._bucket.sign_url('GET', object_name, expires_in, slash_safe=True)
+        url = self._bucket.sign_url("GET", object_name, expires_in, slash_safe=True)
         return url
 
     @monitor("storage", "oss")
@@ -115,10 +119,10 @@ class OSSStorageService(StorageService):
         # 设置文件元数据
         headers = {}
         if resolved_type:
-            headers['Content-Type'] = resolved_type
+            headers["Content-Type"] = resolved_type
 
         # 上传文件
-        with open(file_path, 'rb') as f:
+        with open(file_path, "rb") as f:
             self._bucket.put_object(object_name, f, headers=headers)
 
     @retry(
@@ -167,10 +171,10 @@ class OSSStorageService(StorageService):
 
         return {
             "object_name": object_name,
-            "size": int(result.headers.get('Content-Length', 0)),
-            "etag": result.headers.get('ETag', '').strip('"'),
-            "content_type": result.headers.get('Content-Type', ''),
-            "last_modified": result.headers.get('Last-Modified', ''),
+            "size": int(result.headers.get("Content-Length", 0)),
+            "etag": result.headers.get("ETag", "").strip('"'),
+            "content_type": result.headers.get("Content-Type", ""),
+            "last_modified": result.headers.get("Last-Modified", ""),
             "metadata": result.headers,
         }
 

@@ -26,6 +26,7 @@ class TencentASRConfig(ServiceConfig):
         poll_interval: 轮询间隔（秒）
         max_wait: 最大等待时间（秒）
     """
+
     secret_id: str = Field(..., description="腾讯云 Secret ID", min_length=1)
     secret_key: str = Field(..., description="腾讯云 Secret Key", min_length=1)
     region: str = Field(..., description="地域", min_length=1)
@@ -42,6 +43,7 @@ class TencentASRConfig(ServiceConfig):
 
     class Config:
         """Pydantic 配置"""
+
         schema_extra = {
             "example": {
                 "secret_id": "your-tencent-secret-id",
@@ -71,6 +73,7 @@ class AliyunASRConfig(ServiceConfig):
         region: 地域（如 "cn-shanghai"）
         app_key: 应用 Key（可选）
     """
+
     access_key_id: str = Field(..., description="阿里云 Access Key ID", min_length=1)
     access_key_secret: str = Field(..., description="阿里云 Access Key Secret", min_length=1)
     region: str = Field(default="cn-shanghai", description="地域")
@@ -78,6 +81,7 @@ class AliyunASRConfig(ServiceConfig):
 
     class Config:
         """Pydantic 配置"""
+
         schema_extra = {
             "example": {
                 "access_key_id": "your-aliyun-access-key-id",

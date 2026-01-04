@@ -24,6 +24,7 @@ class DoubaoConfig(ServiceConfig):
         temperature: 温度参数（0.0-2.0），控制随机性
         top_p: 核采样参数（0.0-1.0）
     """
+
     api_key: str = Field(..., description="Doubao API 密钥", min_length=1)
     base_url: str = Field(..., description="Doubao API 基础 URL")
     model: str = Field(..., description="模型名称", min_length=1)
@@ -40,6 +41,7 @@ class DoubaoConfig(ServiceConfig):
 
     class Config:
         """Pydantic 配置"""
+
         schema_extra = {
             "example": {
                 "api_key": "your-doubao-api-key",
@@ -66,6 +68,7 @@ class QwenConfig(ServiceConfig):
         temperature: 温度参数（0.0-2.0），控制随机性
         top_p: 核采样参数（0.0-1.0）
     """
+
     api_key: str = Field(..., description="Qwen API 密钥", min_length=1)
     model: str = Field(..., description="模型名称", min_length=1)
     max_tokens: Optional[int] = Field(default=1500, description="最大 token 数", ge=1)
@@ -74,6 +77,7 @@ class QwenConfig(ServiceConfig):
 
     class Config:
         """Pydantic 配置"""
+
         schema_extra = {
             "example": {
                 "api_key": "your-qwen-api-key",
@@ -84,8 +88,8 @@ class QwenConfig(ServiceConfig):
                 "enabled": True,
                 "timeout": 30,
                 "retry_count": 3,
+            }
         }
-    }
 
 
 @register_config_schema("llm", "moonshot")
@@ -101,6 +105,7 @@ class MoonshotConfig(ServiceConfig):
         top_p: 核采样参数（0.0-1.0）
         timeout: 请求超时时间（秒）
     """
+
     api_key: str = Field(..., description="Moonshot API 密钥", min_length=1)
     base_url: str = Field(
         default="https://api.moonshot.cn/v1",
@@ -114,7 +119,7 @@ class MoonshotConfig(ServiceConfig):
     max_tokens: int = Field(default=4096, description="最大 token 数", ge=1)
     temperature: float = Field(default=0.7, description="温度参数", ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, description="核采样参数", ge=0.0, le=1.0)
-    timeout: float = Field(default=60.0, description="请求超时时间", gt=0.0)
+    timeout: int = Field(default=60, description="请求超时时间", gt=0)
 
     @validator("base_url")
     def validate_base_url(cls, v: str) -> str:
@@ -125,6 +130,7 @@ class MoonshotConfig(ServiceConfig):
 
     class Config:
         """Pydantic 配置"""
+
         schema_extra = {
             "example": {
                 "api_key": "your-moonshot-api-key",

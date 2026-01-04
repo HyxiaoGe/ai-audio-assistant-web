@@ -32,11 +32,10 @@ class SummaryRegenerateRequest(BaseModel):
     )
     provider: Optional[str] = Field(
         default=None,
-        description="服务提供商（如 doubao, deepseek, openrouter），为 None 则自动选择"
+        description="服务提供商（如 doubao, deepseek, openrouter），为 None 则自动选择",
     )
     model_id: Optional[str] = Field(
-        default=None,
-        description="模型ID（如 deepseek-chat, openai/gpt-4o）"
+        default=None, description="模型ID（如 deepseek-chat, openai/gpt-4o）"
     )
 
 
@@ -58,7 +57,7 @@ class SummaryCompareRequest(BaseModel):
     models: list[ModelSelection] = Field(
         min_length=2,
         max_length=5,
-        description="要对比的模型列表（2-5个模型，每个包含 provider 和可选的 model_id）"
+        description="要对比的模型列表（2-5个模型，每个包含 provider 和可选的 model_id）",
     )
 
 

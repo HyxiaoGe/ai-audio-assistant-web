@@ -95,7 +95,7 @@ class COSStorageService(StorageService):
             Bucket=self._bucket,
             Key=object_name,
             Expired=3600,
-            Params={'domain': f'{self._bucket}.cos-internal.{self._region}.myqcloud.com'}
+            Params={"domain": f"{self._bucket}.cos-internal.{self._region}.myqcloud.com"},
         )
 
     @monitor("storage", "cos")
@@ -176,7 +176,7 @@ class COSStorageService(StorageService):
         Returns:
             文件名列表
         """
-        result = []
+        result: list[str] = []
         marker = ""
 
         while len(result) < limit:

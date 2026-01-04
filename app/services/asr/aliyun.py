@@ -1,4 +1,5 @@
 """阿里云语音识别服务实现（DashScope SDK）"""
+
 from __future__ import annotations
 
 import asyncio
@@ -49,15 +50,14 @@ class AliyunASRService(ASRService):
         access_key_secret = settings.ALIYUN_ACCESS_KEY_SECRET
 
         if not access_key_id or not access_key_secret:
-            raise RuntimeError(
-                "ALIYUN_ACCESS_KEY_ID or ALIYUN_ACCESS_KEY_SECRET is not set"
-            )
+            raise RuntimeError("ALIYUN_ACCESS_KEY_ID or ALIYUN_ACCESS_KEY_SECRET is not set")
 
         self._access_key_id = access_key_id
         self._access_key_secret = access_key_secret
 
         # 设置 DashScope API Key（使用 access_key_id）
         import dashscope
+
         dashscope.api_key = access_key_id
 
     @monitor("asr", "aliyun")
@@ -102,23 +102,20 @@ class AliyunASRService(ASRService):
 
         try:
             task_response = Transcription.async_call(
-                model='paraformer-v2',
+                model="paraformer-v2",
                 file_urls=[audio_url],
-                language_hints=['zh', 'en'],  # 支持中英文
+                language_hints=["zh", "en"],  # 支持中英文
             )
 
             if task_response.status_code != HTTPStatus.OK:
                 raise BusinessError(
                     ErrorCode.ASR_SERVICE_FAILED,
-                    reason=f"Failed to create task: {task_response.message}"
+                    reason=f"Failed to create task: {task_response.message}",
                 )
 
             task_id = task_response.output.task_id
             if not task_id:
-                raise BusinessError(
-                    ErrorCode.ASR_SERVICE_FAILED,
-                    reason="missing task id"
-                )
+                raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="missing task id")
 
             logger.info(f"Aliyun ASR task created successfully: TaskId={task_id}")
             return task_id
@@ -127,8 +124,7 @@ class AliyunASRService(ASRService):
             if isinstance(exc, BusinessError):
                 raise
             raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED,
-                reason=f"Create task failed: {exc}"
+                ErrorCode.ASR_SERVICE_FAILED, reason=f"Create task failed: {exc}"
             ) from exc
 
     async def _poll_task(self, task_id: str) -> dict:
@@ -143,7 +139,9 @@ class AliyunASRService(ASRService):
         poll_interval = 3  # 3秒轮询一次
         max_wait = 600  # 最长等待10分钟
 
-        logger.info(f"Aliyun ASR polling task {task_id}: interval={poll_interval}s, max_wait={max_wait}s")
+        logger.info(
+            f"Aliyun ASR polling task {task_id}: interval={poll_interval}s, max_wait={max_wait}s"
+        )
 
         deadline = time.time() + max_wait
         poll_count = 0
@@ -152,20 +150,19 @@ class AliyunASRService(ASRService):
             poll_count += 1
             result = await asyncio.to_thread(self._fetch_task, task_id)
 
-            task_status = result.get('task_status')
+            task_status = result.get("task_status")
             logger.info(f"Aliyun ASR poll #{poll_count} for task {task_id}: status={task_status}")
 
-            if task_status == 'SUCCEEDED':
-                logger.info(f"Aliyun ASR task {task_id} completed successfully after {poll_count} polls")
+            if task_status == "SUCCEEDED":
+                logger.info(
+                    f"Aliyun ASR task {task_id} completed successfully after {poll_count} polls"
+                )
                 return result
 
-            if task_status == 'FAILED':
-                error_msg = result.get('message', 'ASR task failed')
+            if task_status == "FAILED":
+                error_msg = result.get("message", "ASR task failed")
                 logger.warning(f"Aliyun ASR task {task_id} failed: {error_msg}")
-                raise BusinessError(
-                    ErrorCode.ASR_SERVICE_FAILED,
-                    reason=str(error_msg)
-                )
+                raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=str(error_msg))
 
             await asyncio.sleep(poll_interval)
 
@@ -186,25 +183,23 @@ class AliyunASRService(ASRService):
 
             if response.status_code != HTTPStatus.OK:
                 raise BusinessError(
-                    ErrorCode.ASR_SERVICE_FAILED,
-                    reason=f"Fetch task failed: {response.message}"
+                    ErrorCode.ASR_SERVICE_FAILED, reason=f"Fetch task failed: {response.message}"
                 )
 
             return {
-                'task_id': response.output.task_id,
-                'task_status': response.output.task_status,
-                'submit_time': response.output.submit_time,
-                'run_time': response.output.run_time,
-                'results': response.output.results if hasattr(response.output, 'results') else [],
-                'message': response.message,
+                "task_id": response.output.task_id,
+                "task_status": response.output.task_status,
+                "submit_time": response.output.submit_time,
+                "run_time": response.output.run_time,
+                "results": response.output.results if hasattr(response.output, "results") else [],
+                "message": response.message,
             }
 
         except Exception as exc:
             if isinstance(exc, BusinessError):
                 raise
             raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED,
-                reason=f"Fetch task failed: {exc}"
+                ErrorCode.ASR_SERVICE_FAILED, reason=f"Fetch task failed: {exc}"
             ) from exc
 
     async def _parse_result(self, result: dict) -> list[TranscriptSegment]:
@@ -216,21 +211,17 @@ class AliyunASRService(ASRService):
         Returns:
             转写片段列表
         """
-        results = result.get('results', [])
+        results = result.get("results", [])
         if not results:
-            raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED,
-                reason="No results in response"
-            )
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="No results in response")
 
         # 获取第一个文件的结果（因为我们只提交了一个文件）
         file_result = results[0]
-        transcription_url = file_result.get('transcription_url')
+        transcription_url = file_result.get("transcription_url")
 
         if not transcription_url:
             raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED,
-                reason="Missing transcription_url in result"
+                ErrorCode.ASR_SERVICE_FAILED, reason="Missing transcription_url in result"
             )
 
         # 下载转写结果 JSON
@@ -240,11 +231,11 @@ class AliyunASRService(ASRService):
         segments: list[TranscriptSegment] = []
 
         # Paraformer 结果格式：包含 transcription 和可选的 sentences
-        sentences = transcription_data.get('sentences', [])
+        sentences = transcription_data.get("sentences", [])
 
         if not sentences:
             # 如果没有句子级别的结果，尝试使用整体文本
-            full_text = transcription_data.get('transcription', '')
+            full_text = transcription_data.get("transcription", "")
             if full_text:
                 segments.append(
                     TranscriptSegment(
@@ -258,10 +249,10 @@ class AliyunASRService(ASRService):
         else:
             # 解析句子级别的结果
             for sentence in sentences:
-                speaker_id = sentence.get('speaker_id')
-                begin_time = sentence.get('begin_time', 0)  # 毫秒
-                end_time = sentence.get('end_time', 0)  # 毫秒
-                text = sentence.get('text', '')
+                speaker_id = sentence.get("speaker_id")
+                begin_time = sentence.get("begin_time", 0)  # 毫秒
+                end_time = sentence.get("end_time", 0)  # 毫秒
+                text = sentence.get("text", "")
 
                 segments.append(
                     TranscriptSegment(
@@ -291,13 +282,11 @@ class AliyunASRService(ASRService):
                 return response.json()
         except httpx.HTTPError as exc:
             raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED,
-                reason=f"Download transcription failed: {exc}"
+                ErrorCode.ASR_SERVICE_FAILED, reason=f"Download transcription failed: {exc}"
             ) from exc
         except json.JSONDecodeError as exc:
             raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED,
-                reason=f"Invalid transcription JSON: {exc}"
+                ErrorCode.ASR_SERVICE_FAILED, reason=f"Invalid transcription JSON: {exc}"
             ) from exc
 
     async def get_task_status(self, task_id: str) -> str:
@@ -313,17 +302,17 @@ class AliyunASRService(ASRService):
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="task_id")
 
         result = await asyncio.to_thread(self._fetch_task, task_id)
-        task_status = result.get('task_status')
+        task_status = result.get("task_status")
 
         # 阿里云 DashScope 状态映射
         status_map = {
-            'PENDING': 'pending',
-            'RUNNING': 'processing',
-            'SUCCEEDED': 'success',
-            'FAILED': 'failed',
+            "PENDING": "pending",
+            "RUNNING": "processing",
+            "SUCCEEDED": "success",
+            "FAILED": "failed",
         }
 
-        return status_map.get(task_status, 'unknown')
+        return status_map.get(task_status, "unknown")
 
     async def cancel_task(self, task_id: str) -> bool:
         """取消任务

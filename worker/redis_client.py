@@ -13,7 +13,6 @@ from redis import Redis
 
 from app.config import settings
 
-
 _sync_redis_client: Optional[Redis] = None
 
 

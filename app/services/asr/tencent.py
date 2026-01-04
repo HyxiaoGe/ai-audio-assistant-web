@@ -6,13 +6,13 @@ import logging
 import time
 from typing import Awaitable, Callable, Optional
 
+from tencentcloud.asr.v20190614 import asr_client, models
 from tencentcloud.common import credential
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import (
     TencentCloudSDKException,
 )
 from tencentcloud.common.profile.client_profile import ClientProfile
 from tencentcloud.common.profile.http_profile import HttpProfile
-from tencentcloud.asr.v20190614 import asr_client, models
 
 from app.config import settings
 from app.core.exceptions import BusinessError
@@ -47,9 +47,7 @@ class TencentASRService(ASRService):
         secret_key = settings.TENCENT_SECRET_KEY
         region = settings.TENCENT_REGION
         if not secret_id or not secret_key or not region:
-            raise RuntimeError(
-                "TENCENT_SECRET_ID/TENCENT_SECRET_KEY/TENCENT_REGION is not set"
-            )
+            raise RuntimeError("TENCENT_SECRET_ID/TENCENT_SECRET_KEY/TENCENT_REGION is not set")
         self._secret_id = secret_id
         self._secret_key = secret_key
         self._region = region
@@ -105,7 +103,15 @@ class TencentASRService(ASRService):
         request.SpeakerDiarization = speaker_dia
         request.SpeakerNumber = speaker_number
 
-        logger.info(f"ASR request parameters: EngineModelType={engine_model_type}, ChannelNum={channel_num}, ResTextFormat={res_text_format}, SourceType=0, SpeakerDiarization={speaker_dia}, SpeakerNumber={speaker_number}")
+        logger.info(
+            "ASR request parameters: EngineModelType=%s, ChannelNum=%s, "
+            "ResTextFormat=%s, SourceType=0, SpeakerDiarization=%s, SpeakerNumber=%s",
+            engine_model_type,
+            channel_num,
+            res_text_format,
+            speaker_dia,
+            speaker_number,
+        )
 
         try:
             client = self._create_client()
@@ -132,7 +138,9 @@ class TencentASRService(ASRService):
             result = await asyncio.to_thread(self._describe_task, task_id)
             status = result.get("Status")
             status_str = result.get("StatusStr", "unknown")
-            logger.info(f"ASR poll #{poll_count} for task {task_id}: status={status} ({status_str})")
+            logger.info(
+                f"ASR poll #{poll_count} for task {task_id}: status={status} ({status_str})"
+            )
             if status == 2:
                 logger.info(f"ASR task {task_id} completed successfully after {poll_count} polls")
                 return result
@@ -162,31 +170,46 @@ class TencentASRService(ASRService):
         return data
 
     def _parse_result(self, payload: dict[str, object]) -> list[TranscriptSegment]:
-        # 使用 ResultDetail 字段（JSON 列表），而不是 Result 字段（文本格式）
+        # 优先使用 ResultDetail（结构化字段），否则回退到 Result
         result_detail = payload.get("ResultDetail")
+        use_detail = result_detail is not None
         if result_detail is None:
-            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="missing ResultDetail")
+            result_detail = payload.get("Result")
+            if result_detail is None:
+                raise BusinessError(
+                    ErrorCode.ASR_SERVICE_FAILED, reason="missing ResultDetail/Result"
+                )
         if not isinstance(result_detail, list):
-            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="ResultDetail is not a list")
+            raise BusinessError(
+                ErrorCode.ASR_SERVICE_FAILED, reason="ResultDetail/Result is not a list"
+            )
 
         segments: list[TranscriptSegment] = []
         for item in result_detail:
             if not isinstance(item, dict):
                 continue
-            # ResultDetail 使用不同的字段名
-            speaker_id = item.get("SpeakerId")
-            start_ms = item.get("StartMs")  # 毫秒
-            end_ms = item.get("EndMs")      # 毫秒
-            text_value = item.get("FinalSentence")  # 最终句子
+            if use_detail:
+                speaker_id = item.get("SpeakerId")
+                start_ms = item.get("StartMs")
+                end_ms = item.get("EndMs")
+                text_value = item.get("FinalSentence")
+                confidence = None
+                start_time = float(start_ms) / 1000.0 if start_ms is not None else 0.0
+                end_time = float(end_ms) / 1000.0 if end_ms is not None else 0.0
+            else:
+                speaker_id = item.get("SpeakerId")
+                start_time = float(item.get("StartTime", 0.0))
+                end_time = float(item.get("EndTime", 0.0))
+                text_value = item.get("Text")
+                confidence = item.get("Confidence")
 
-            # 暂时没有 confidence 字段，可以从 Words 中计算或设为 None
             segments.append(
                 TranscriptSegment(
                     speaker_id=str(speaker_id) if speaker_id is not None else None,
-                    start_time=float(start_ms) / 1000.0 if start_ms is not None else 0.0,  # 转换为秒
-                    end_time=float(end_ms) / 1000.0 if end_ms is not None else 0.0,        # 转换为秒
+                    start_time=start_time,
+                    end_time=end_time,
                     content=str(text_value) if text_value is not None else "",
-                    confidence=None,  # ResultDetail 格式没有 confidence 字段
+                    confidence=float(confidence) if confidence is not None else None,
                 )
             )
         return segments
@@ -218,7 +241,8 @@ class TencentASRService(ASRService):
             3: "failed",
         }
 
-        return status_map.get(status, "unknown")
+        status_code = status if isinstance(status, int) else None
+        return status_map.get(status_code, "unknown")
 
     async def cancel_task(self, task_id: str) -> bool:
         """取消任务

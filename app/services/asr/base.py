@@ -16,6 +16,7 @@ class TranscriptSegment:
         content: 转写文本内容
         confidence: 置信度（0.0-1.0），None 表示未提供
     """
+
     speaker_id: Optional[str]
     start_time: float
     end_time: float

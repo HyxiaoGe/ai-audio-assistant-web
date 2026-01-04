@@ -8,16 +8,48 @@ from typing import Optional
 
 from sqlalchemy import select
 
+from app.core.config_manager import ConfigManager
 from app.core.exceptions import BusinessError
+from app.core.registry import ServiceRegistry
+from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.transcript import Transcript
-from app.core.smart_factory import SmartFactory
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import get_sync_redis_client
 
 logger = logging.getLogger("worker.regenerate_summary")
+
+
+def _load_llm_model_id(provider: str) -> Optional[str]:
+    try:
+        config = ConfigManager.get_config("llm", provider)
+    except Exception:
+        return None
+    return getattr(config, "model", None)
+
+
+def _select_default_llm_provider() -> str:
+    providers = ServiceRegistry.list_services("llm")
+    if not providers:
+        raise ValueError("No available llm service found")
+    providers.sort(
+        key=lambda name: ServiceRegistry.get_metadata("llm", name).priority,
+    )
+    return providers[0]
+
+
+def _resolve_llm_selection(
+    provider: Optional[str],
+    model_id: Optional[str],
+) -> tuple[str, str]:
+    if provider:
+        model_id = model_id or _load_llm_model_id(provider) or provider
+        return provider, model_id
+    provider = _select_default_llm_provider()
+    model_id = _load_llm_model_id(provider) or provider
+    return provider, model_id
 
 
 @celery_app.task(bind=True, name="worker.tasks.regenerate_summary")
@@ -41,22 +73,28 @@ def regenerate_summary(
         comparison_id: 对比 ID（用于多模型对比功能）
     """
     logger.info(
-        f"[{request_id}] Starting summary regeneration for task {task_id}, "
-        f"type: {summary_type}, provider: {model or 'auto'}, "
-        f"model_id: {model_id or 'default'}, comparison_id: {comparison_id}"
+        "[%s] Starting summary regeneration for task %s, type: %s, provider: %s, "
+        "model_id: %s, comparison_id: %s",
+        request_id,
+        task_id,
+        summary_type,
+        model or "auto",
+        model_id or "default",
+        comparison_id,
     )
 
     try:
         _regenerate_summary(task_id, summary_type, model, model_id, request_id, comparison_id)
         logger.info(
-            f"[{request_id}] Summary regeneration completed for task {task_id}, type: {summary_type}"
+            "[%s] Summary regeneration completed for task %s, type: %s",
+            request_id,
+            task_id,
+            summary_type,
         )
-    except BusinessError as e:
-        logger.error(
-            f"[{request_id}] Summary regeneration failed: {str(e)} (code: {e.code})"
-        )
+    except BusinessError as exc:
+        logger.error(f"[{request_id}] Summary regeneration failed: {str(exc)} (code: {exc.code})")
         raise
-    except Exception as e:
+    except Exception:
         logger.exception(f"[{request_id}] Unexpected error during summary regeneration")
         raise
 
@@ -74,27 +112,23 @@ def _regenerate_summary(
     stream_key = f"summary_stream:{task_id}:{summary_type}"
 
     with get_sync_db_session() as session:
-        stmt = (
-            select(Transcript)
-            .where(Transcript.task_id == task_id)
-            .order_by(Transcript.sequence)
+        transcript_stmt = (
+            select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
         )
-        result = session.execute(stmt)
-        transcripts = result.scalars().all()
+        transcript_result = session.execute(transcript_stmt)
+        transcripts = transcript_result.scalars().all()
 
         if not transcripts:
-            raise BusinessError(
-                ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要"
-            )
+            raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要")
 
         # 将旧摘要标记为非活跃
-        stmt = select(Summary).where(
+        summary_stmt = select(Summary).where(
             Summary.task_id == task_id,
             Summary.summary_type == summary_type,
-            Summary.is_active == True,
+            Summary.is_active.is_(True),
         )
-        result = session.execute(stmt)
-        old_summaries = result.scalars().all()
+        summary_result = session.execute(summary_stmt)
+        old_summaries = summary_result.scalars().all()
 
         for old_summary in old_summaries:
             old_summary.is_active = False
@@ -117,44 +151,50 @@ def _regenerate_summary(
         time.sleep(0.1)
         wait_count += 1
     # 使用 SmartFactory 获取 LLM 服务
+    provider, resolved_model_id = _resolve_llm_selection(model, model_id)
+    llm_service = asyncio.run(
+        SmartFactory.get_service("llm", provider=provider, model_id=resolved_model_id)
+    )
+    used_provider = provider
+    used_model_id = resolved_model_id or (
+        llm_service.model_name if hasattr(llm_service, "model_name") else provider
+    )
     if model:
-        # 用户指定 provider 和/或 model_id
-        llm_service = asyncio.run(SmartFactory.get_service("llm", provider=model, model_id=model_id))
-        used_provider = model
-        used_model_id = model_id or (llm_service.model_name if hasattr(llm_service, "model_name") else model)
-        logger.info(f"[{request_id}] Using user-specified LLM - provider: {model}, model_id: {model_id or 'default'}")
+        logger.info(
+            "[%s] Using user-specified LLM - provider: %s, model_id: %s",
+            request_id,
+            provider,
+            resolved_model_id,
+        )
     else:
-        # 自动选择最优服务
-        llm_service = asyncio.run(SmartFactory.get_service("llm"))
-        used_provider = llm_service.provider if hasattr(llm_service, "provider") else "unknown"
-        used_model_id = llm_service.model_name if hasattr(llm_service, "model_name") else "unknown"
-        logger.info(f"[{request_id}] Auto-selected LLM model: {used_model_id}")
+        logger.info("[%s] Auto-selected LLM model: %s", request_id, used_model_id)
 
     redis_client.publish(
         stream_key,
-        json.dumps({
-            "event": "summary.started",
-            "data": {
-                "type": "summary.started",
-                "task_id": task_id,
-                "summary_type": summary_type,
-                "version": new_version,
-                "provider": used_provider,
-                "model_id": used_model_id,
-            }
-        }, ensure_ascii=False),
+        json.dumps(
+            {
+                "event": "summary.started",
+                "data": {
+                    "type": "summary.started",
+                    "task_id": task_id,
+                    "summary_type": summary_type,
+                    "version": new_version,
+                    "provider": used_provider,
+                    "model_id": used_model_id,
+                },
+            },
+            ensure_ascii=False,
+        ),
     )
 
     transcript_text = "\n".join(
-        [
-            f"[{t.speaker_label or t.speaker_id or 'Unknown'}] {t.content}"
-            for t in transcripts
-        ]
+        [f"[{t.speaker_label or t.speaker_id or 'Unknown'}] {t.content}" for t in transcripts]
     )
 
     full_content = ""
 
     try:
+
         async def _generate():
             nonlocal full_content
             logger.info(f"[{request_id}] Starting stream generation for {stream_key}")
@@ -162,15 +202,18 @@ def _regenerate_summary(
                 full_content += chunk
                 redis_client.publish(
                     stream_key,
-                    json.dumps({
-                        "event": "summary.delta",
-                        "data": {
-                            "type": "summary.delta",
-                            "content": chunk,
-                            "provider": used_provider,
-                            "model_id": used_model_id,
-                        }
-                    }, ensure_ascii=False)
+                    json.dumps(
+                        {
+                            "event": "summary.delta",
+                            "data": {
+                                "type": "summary.delta",
+                                "content": chunk,
+                                "provider": used_provider,
+                                "model_id": used_model_id,
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
                 )
 
             logger.info(f"[{request_id}] Stream generation completed for {stream_key}")
@@ -204,36 +247,42 @@ def _regenerate_summary(
 
         redis_client.publish(
             stream_key,
-            json.dumps({
-                "event": "summary.completed",
-                "data": {
-                    "type": "summary.completed",
-                    "task_id": task_id,
-                    "summary_id": summary_id,
-                    "summary_type": summary_type,
-                    "version": new_version,
-                    "total_length": len(full_content),
-                    "provider": used_provider,
-                    "model_id": used_model_id,
-                }
-            }, ensure_ascii=False),
+            json.dumps(
+                {
+                    "event": "summary.completed",
+                    "data": {
+                        "type": "summary.completed",
+                        "task_id": task_id,
+                        "summary_id": summary_id,
+                        "summary_type": summary_type,
+                        "version": new_version,
+                        "total_length": len(full_content),
+                        "provider": used_provider,
+                        "model_id": used_model_id,
+                    },
+                },
+                ensure_ascii=False,
+            ),
         )
         logger.info(f"[{request_id}] Published summary.completed event for summary {summary_id}")
 
     except Exception as e:
-        error_code = getattr(e, 'code', 'UNKNOWN_ERROR')
+        error_code = getattr(e, "code", "UNKNOWN_ERROR")
         redis_client.publish(
             stream_key,
-            json.dumps({
-                "event": "error",
-                "data": {
-                    "type": "error",
-                    "code": str(error_code),
-                    "message": str(e),
-                    "provider": used_provider,
-                    "model_id": used_model_id,
-                }
-            }, ensure_ascii=False)
+            json.dumps(
+                {
+                    "event": "error",
+                    "data": {
+                        "type": "error",
+                        "code": str(error_code),
+                        "message": str(e),
+                        "provider": used_provider,
+                        "model_id": used_model_id,
+                    },
+                },
+                ensure_ascii=False,
+            ),
         )
         raise
     finally:

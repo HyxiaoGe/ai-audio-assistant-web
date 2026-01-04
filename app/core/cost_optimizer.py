@@ -74,7 +74,9 @@ class CostOptimizer:
     ) -> Optional[str]:
         """选择成本最优的服务"""
         available_services = (
-            candidate_services if candidate_services is not None else self._get_available_services(service_type)
+            candidate_services
+            if candidate_services is not None
+            else self._get_available_services(service_type)
         )
         if not available_services:
             return None
@@ -170,7 +172,9 @@ class CostOptimizer:
 
         if self.config.strategy == CostStrategy.COST_PERFORMANCE_BALANCE:
             performance_term = 1 / max(performance, 0.1)
-            return cost * self.config.cost_weight + performance_term * self.config.performance_weight
+            return (
+                cost * self.config.cost_weight + performance_term * self.config.performance_weight
+            )
 
         return cost
 
@@ -185,9 +189,7 @@ class CostOptimizer:
             return min(cost_infos, key=lambda info: info.combined_score)
 
         if self.config.strategy == CostStrategy.BUDGET_CONSTRAINED:
-            within_budget = [
-                info for info in cost_infos if self._check_budget(info.estimated_cost)
-            ]
+            within_budget = [info for info in cost_infos if self._check_budget(info.estimated_cost)]
             if not within_budget:
                 return None
             return max(within_budget, key=lambda info: info.performance_score)
@@ -216,7 +218,9 @@ class CostOptimizer:
         candidate_services: Optional[List[str]] = None,
     ) -> List[ServiceCostInfo]:
         available_services = (
-            candidate_services if candidate_services is not None else self._get_available_services(service_type)
+            candidate_services
+            if candidate_services is not None
+            else self._get_available_services(service_type)
         )
         cost_infos = [
             self._calculate_cost_info(service_type, name, request_params)
@@ -251,11 +255,11 @@ class CostTracker:
     def __init__(self, use_redis: bool = True) -> None:
         self._use_redis = use_redis
         self._lock = threading.Lock()
+        self._records: List[UsageRecord] = []
+        self._daily_cache: Dict[date, float] = {}
 
         # 内存模式（回退方案）
         if not use_redis:
-            self._records: List[UsageRecord] = []
-            self._daily_cache: Dict[date, float] = {}
             self._redis_client = None
             logger.info("CostTracker initialized in memory mode")
             return
@@ -329,6 +333,16 @@ class CostTracker:
 
         except Exception as exc:
             logger.error(f"Failed to record usage to Redis: {exc}", exc_info=True)
+            self._fallback_to_memory(record)
+
+    def _fallback_to_memory(self, record: UsageRecord) -> None:
+        if self._use_redis:
+            logger.warning("Falling back to in-memory cost tracking")
+        self._use_redis = False
+        self._redis_client = None
+        self._records.append(record)
+        today = record.timestamp.date()
+        self._daily_cache[today] = self._daily_cache.get(today, 0.0) + record.estimated_cost
 
     def get_daily_cost(self, target_date: date) -> float:
         """获取指定日期的总成本
@@ -360,6 +374,7 @@ class CostTracker:
             return sum(float(v) for v in values) if values else 0.0
         except Exception as exc:
             logger.error(f"Failed to get daily cost from Redis: {exc}", exc_info=True)
+            self._use_redis = False
             return 0.0
 
     def get_monthly_cost(self, year: int, month: int) -> float:

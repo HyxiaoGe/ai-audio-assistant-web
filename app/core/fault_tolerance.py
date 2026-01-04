@@ -18,10 +18,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
-import time
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from functools import wraps
 from threading import Lock, RLock
@@ -29,10 +29,11 @@ from typing import Any, Callable, Dict, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 # ==================== 重试机制 ====================
+
 
 @dataclass
 class RetryConfig:
@@ -45,6 +46,7 @@ class RetryConfig:
         exponential_base: 指数退避基数
         jitter: 是否添加随机抖动（防止重试风暴）
     """
+
     max_attempts: int = 3
     initial_delay: float = 1.0
     max_delay: float = 60.0
@@ -81,9 +83,10 @@ def retry(
 
     def decorator(func: Callable) -> Callable:
         # 检测函数是否为异步函数
-        is_async = asyncio.iscoroutinefunction(func)
+        is_async = inspect.iscoroutinefunction(func)
 
         if is_async:
+
             @wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 last_exception = None
@@ -97,7 +100,10 @@ def retry(
 
                         if attempt >= config.max_attempts:
                             logger.error(
-                                f"Retry exhausted for {func.__name__} after {attempt} attempts: {exc}"
+                                "Retry exhausted for %s after %s attempts: %s",
+                                func.__name__,
+                                attempt,
+                                exc,
                             )
                             raise
 
@@ -110,6 +116,7 @@ def retry(
                         # 添加随机抖动（0-50% 的延迟）
                         if config.jitter:
                             import random
+
                             delay = delay * (0.5 + random.random() * 0.5)
 
                         logger.warning(
@@ -124,6 +131,7 @@ def retry(
 
             return async_wrapper
         else:
+
             @wraps(func)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
                 last_exception = None
@@ -137,7 +145,10 @@ def retry(
 
                         if attempt >= config.max_attempts:
                             logger.error(
-                                f"Retry exhausted for {func.__name__} after {attempt} attempts: {exc}"
+                                "Retry exhausted for %s after %s attempts: %s",
+                                func.__name__,
+                                attempt,
+                                exc,
                             )
                             raise
 
@@ -150,6 +161,7 @@ def retry(
                         # 添加随机抖动（0-50% 的延迟）
                         if config.jitter:
                             import random
+
                             delay = delay * (0.5 + random.random() * 0.5)
 
                         logger.warning(
@@ -158,6 +170,7 @@ def retry(
                         )
 
                         import time
+
                         time.sleep(delay)
 
                 # 理论上不会到达这里，但为了类型检查
@@ -170,11 +183,13 @@ def retry(
 
 # ==================== 熔断器 ====================
 
+
 class CircuitState(str, Enum):
     """熔断器状态"""
-    CLOSED = "closed"          # 关闭（正常）
-    OPEN = "open"              # 打开（熔断）
-    HALF_OPEN = "half_open"    # 半开（探测）
+
+    CLOSED = "closed"  # 关闭（正常）
+    OPEN = "open"  # 打开（熔断）
+    HALF_OPEN = "half_open"  # 半开（探测）
 
 
 @dataclass
@@ -187,6 +202,7 @@ class CircuitBreakerConfig:
         timeout: 熔断超时时间（秒），超时后进入半开状态
         expected_exception: 预期的异常类型（只有这些异常才会计入失败）
     """
+
     failure_threshold: int = 5
     success_threshold: int = 2
     timeout: float = 60.0
@@ -230,7 +246,9 @@ class CircuitBreaker:
             CircuitBreaker._breakers[name] = self
 
     @classmethod
-    def get_or_create(cls, name: str, config: Optional[CircuitBreakerConfig] = None) -> CircuitBreaker:
+    def get_or_create(
+        cls, name: str, config: Optional[CircuitBreakerConfig] = None
+    ) -> CircuitBreaker:
         """获取或创建熔断器"""
         with cls._lock:
             if name not in cls._breakers:
@@ -292,6 +310,7 @@ class CircuitBreaker:
             async def my_function():
                 ...
         """
+
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             # 检查是否应该尝试重置
@@ -313,7 +332,7 @@ class CircuitBreaker:
                 self._record_success()
                 return result
 
-            except self.config.expected_exception as exc:
+            except self.config.expected_exception:
                 self._record_failure()
                 raise
 
@@ -335,10 +354,12 @@ class CircuitBreaker:
 
 class CircuitBreakerOpenError(Exception):
     """熔断器打开异常"""
+
     pass
 
 
 # ==================== 降级机制 ====================
+
 
 def fallback(fallback_func: Optional[Callable] = None, default_value: Any = None) -> Callable:
     """降级装饰器
@@ -367,6 +388,7 @@ def fallback(fallback_func: Optional[Callable] = None, default_value: Any = None
         async def get_data():
             ...
     """
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -374,13 +396,11 @@ def fallback(fallback_func: Optional[Callable] = None, default_value: Any = None
                 return await func(*args, **kwargs)
 
             except Exception as exc:
-                logger.warning(
-                    f"Function {func.__name__} failed, using fallback: {exc}"
-                )
+                logger.warning(f"Function {func.__name__} failed, using fallback: {exc}")
 
                 if fallback_func is not None:
                     # 调用降级函数
-                    if asyncio.iscoroutinefunction(fallback_func):
+                    if inspect.iscoroutinefunction(fallback_func):
                         return await fallback_func(*args, **kwargs)
                     else:
                         return fallback_func(*args, **kwargs)
@@ -399,6 +419,7 @@ def fallback(fallback_func: Optional[Callable] = None, default_value: Any = None
 
 
 # ==================== 组合使用示例 ====================
+
 
 def resilient(
     retry_config: Optional[RetryConfig] = None,
@@ -427,6 +448,7 @@ def resilient(
         async def call_external_service():
             ...
     """
+
     def decorator(func: Callable) -> Callable:
         # 应用装饰器链：fallback -> circuit_breaker -> retry -> func
         result_func = func

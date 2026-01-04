@@ -2,10 +2,10 @@
 
 Proxies media files from storage (MinIO) to frontend, hiding storage implementation details.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse

@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Type
 
@@ -44,6 +44,7 @@ class ServiceMetadata:
         display_name: 用户友好的显示名称（如 "豆包 (Doubao)"、"DeepSeek Chat"）
         cost_per_million_tokens: 每百万 token 的成本（元），用于前端显示
     """
+
     name: str
     service_type: str
     provider: str = ""
@@ -199,14 +200,17 @@ class ServiceRegistry:
                 try:
                     # 尝试传入 model_id 参数（如果服务支持的话）
                     import inspect
+
                     sig = inspect.signature(service_class.__init__)
                     if "model_id" in sig.parameters and model_id:
                         instance = service_class(model_id=model_id)
                     else:
                         instance = service_class()
 
-                    logger.debug(f"Created new {service_type} service instance: {name}" +
-                               (f" with model_id={model_id}" if model_id else ""))
+                    logger.debug(
+                        f"Created new {service_type} service instance: {name}"
+                        + (f" with model_id={model_id}" if model_id else "")
+                    )
 
                     # 如果不是强制创建，则缓存实例
                     if not force_new:
@@ -280,10 +284,7 @@ class ServiceRegistry:
         Returns:
             True 如果已注册，否则 False
         """
-        return (
-            service_type in cls._services
-            and name in cls._services[service_type]
-        )
+        return service_type in cls._services and name in cls._services[service_type]
 
     @classmethod
     def clear(cls, service_type: Optional[str] = None) -> None:
@@ -339,6 +340,7 @@ def register_service(
         class DoubaoLLMService(LLMService):
             ...
     """
+
     def decorator(cls: Type[Any]) -> Type[Any]:
         # 注册服务
         ServiceRegistry.register(service_type, name, cls, metadata)

@@ -1,39 +1,127 @@
 ﻿from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import subprocess
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, Awaitable, Optional, TypeVar, cast
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.engine import Result
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.config_manager import ConfigManager
 from app.core.exceptions import BusinessError
+from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
 from app.models.transcript import Transcript
+from app.services.asr.base import ASRService, TranscriptSegment
+from app.services.llm.base import LLMService
+from app.services.storage.base import StorageService
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
-from worker.redis_client import publish_message_sync
+from worker.redis_client import publish_message_sync, publish_task_update_sync
 
 logger = logging.getLogger("worker.process_audio")
 
+T = TypeVar("T")
 
-def _get_task(session: Session, task_id: str) -> Optional[Task]:
-    result = session.execute(
-        select(Task).where(Task.id == task_id, Task.deleted_at.is_(None))
+
+async def _maybe_await(result: T | Awaitable[T]) -> T:
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+@asynccontextmanager
+async def async_session_factory():
+    with get_sync_db_session() as session:
+        yield session
+
+
+async def get_asr_service() -> ASRService:
+    return await SmartFactory.get_service("asr")
+
+
+async def get_llm_service(provider: str, model_id: str) -> LLMService:
+    return await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
+
+
+async def get_storage_service(provider: str = "cos") -> StorageService:
+    return await SmartFactory.get_service("storage", provider=provider)
+
+
+async def publish_message(channel: str, message: str) -> None:
+    if ":" in channel:
+        task_id, user_id = channel.split(":", 1)
+        publish_task_update_sync(task_id, user_id, message)
+    else:
+        publish_message_sync(channel, message)
+
+
+def _add_record(session: Session, record: object) -> None:
+    if hasattr(session, "add"):
+        session.add(record)
+    else:
+        session.add_all([record])
+
+
+async def _get_task(session: Session, task_id: str) -> Optional[Task]:
+    result = await _maybe_await(
+        session.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_(None)))
     )
+    result = cast(Result, result)
     return result.scalar_one_or_none()
 
 
-def _update_task(
+async def _commit(session: Session) -> None:
+    result: Any = session.commit()  # type: ignore[func-returns-value]
+    if inspect.isawaitable(result):
+        await result
+
+
+def _load_llm_model_id(provider: str) -> Optional[str]:
+    try:
+        config = ConfigManager.get_config("llm", provider)
+    except Exception:
+        return None
+    return getattr(config, "model", None)
+
+
+def _select_default_llm_provider() -> str:
+    providers = ServiceRegistry.list_services("llm")
+    if not providers:
+        raise ValueError("No available llm service found")
+    providers.sort(
+        key=lambda name: ServiceRegistry.get_metadata("llm", name).priority,
+    )
+    return providers[0]
+
+
+def _resolve_llm_selection(task: Task) -> tuple[str, str]:
+    options = task.options or {}
+    raw_provider = options.get("llm_provider") or options.get("provider")
+    raw_model_id = options.get("llm_model_id") or options.get("model_id")
+    provider = raw_provider if isinstance(raw_provider, str) else None
+    model_id = raw_model_id if isinstance(raw_model_id, str) else None
+    if provider:
+        model_id = model_id or _load_llm_model_id(provider) or provider
+        return provider, model_id
+    provider = _select_default_llm_provider()
+    model_id = _load_llm_model_id(provider) or provider
+    return provider, model_id
+
+
+async def _update_task(
     session: Session,
     task: Task,
     status: str,
@@ -46,7 +134,7 @@ def _update_task(
     task.stage = stage
     if request_id:
         task.request_id = request_id
-    session.commit()
+    await _commit(session)
 
     # Create notification when task is completed
     if status == "completed":
@@ -66,10 +154,10 @@ def _update_task(
                 "task_title": task_title,
                 "duration_seconds": task.duration_seconds,
                 "source_type": task.source_type,
-            }
+            },
         )
-        session.add(notification)
-        session.commit()
+        _add_record(session, notification)
+        await _commit(session)
 
     trace_id = request_id or uuid4().hex
 
@@ -93,12 +181,10 @@ def _update_task(
         }
     )
 
-    # Use dual-channel publishing
-    from worker.redis_client import publish_task_update_sync
-    publish_task_update_sync(task.id, str(task.user_id), message)
+    await publish_message(f"{task.id}:{task.user_id}", message)
 
 
-def _mark_failed(
+async def _mark_failed(
     session: Session, task: Task, error: BusinessError, request_id: Optional[str]
 ) -> None:
     task.status = "failed"
@@ -107,7 +193,7 @@ def _mark_failed(
     task.error_message = error.kwargs.get("reason") or str(error)
     if request_id:
         task.request_id = request_id
-    session.commit()
+    await _commit(session)
 
     # Create notification when task fails
     from app.models.notification import Notification
@@ -129,10 +215,10 @@ def _mark_failed(
             "error_code": error.code.value,
             "error_message": error_message,
             "source_type": task.source_type,
-        }
+        },
     )
-    session.add(notification)
-    session.commit()
+    _add_record(session, notification)
+    await _commit(session)
 
     trace_id = request_id or uuid4().hex
     message = json.dumps(
@@ -149,20 +235,18 @@ def _mark_failed(
         }
     )
 
-    # Use dual-channel publishing
-    from worker.redis_client import publish_task_update_sync
-    publish_task_update_sync(task.id, str(task.user_id), message)
+    await publish_message(f"{task.id}:{task.user_id}", message)
 
 
-def _process_task(task_id: str, request_id: Optional[str]) -> None:
-    with get_sync_db_session() as session:
-        task = _get_task(session, task_id)
+async def _process_task(task_id: str, request_id: Optional[str]) -> None:
+    async with async_session_factory() as session:
+        task = await _get_task(session, task_id)
         if task is None:
             logger.warning("task not found: %s", task_id)
             return
 
         try:
-            _update_task(session, task, "extracting", 10, "extracting", request_id)
+            await _update_task(session, task, "extracting", 10, "extracting", request_id)
 
             audio_candidates: list[str] = []
             if task.source_type == "upload":
@@ -174,31 +258,43 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     logger.info(
                         "Task %s: Extracting audio duration and syncing to MinIO",
                         task_id,
-                        extra={"task_id": task_id, "source_key": task.source_key}
+                        extra={"task_id": task_id, "source_key": task.source_key},
                     )
 
                     # 下载文件到临时目录（用于提取时长和上传到 MinIO）
                     # 使用 SmartFactory 获取 COS storage（异步调用）
-                    cos_storage = asyncio.run(SmartFactory.get_service("storage", provider="cos"))
+                    cos_storage: StorageService = await _maybe_await(get_storage_service())
+                    cos_storage_client = cast(Any, cos_storage)
                     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                         tmp_path = tmp_file.name
 
                     try:
+                        if not hasattr(cos_storage_client, "_client"):
+                            logger.info(
+                                "Task %s: Skipping duration extraction; COS client not available",
+                                task_id,
+                                extra={"task_id": task_id},
+                            )
+                            raise RuntimeError("cos client unavailable")
+
                         # 从 COS 下载文件
                         logger.info(f"Downloading from COS: {task.source_key}")
-                        cos_storage._client.download_file(
-                            Bucket=cos_storage._bucket,
+                        cos_storage_client._client.download_file(
+                            Bucket=cos_storage_client._bucket,
                             Key=task.source_key,
-                            DestFilePath=tmp_path
+                            DestFilePath=tmp_path,
                         )
 
                         # 提取音频时长
                         result = subprocess.run(
                             [
                                 "ffprobe",
-                                "-v", "error",
-                                "-show_entries", "format=duration",
-                                "-of", "default=noprint_wrappers=1:nokey=1",
+                                "-v",
+                                "error",
+                                "-show_entries",
+                                "format=duration",
+                                "-of",
+                                "default=noprint_wrappers=1:nokey=1",
                                 tmp_path,
                             ],
                             capture_output=True,
@@ -213,18 +309,22 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                                 "Task %s: Audio duration set to %d seconds",
                                 task_id,
                                 task.duration_seconds,
-                                extra={"task_id": task_id, "duration": task.duration_seconds}
+                                extra={"task_id": task_id, "duration": task.duration_seconds},
                             )
 
                         # 上传到 MinIO（用于前端播放）
                         # 使用 SmartFactory 获取 MinIO storage
-                        minio_storage = asyncio.run(SmartFactory.get_service("storage", provider="minio"))
+                        minio_storage: StorageService = await _maybe_await(
+                            get_storage_service("minio")
+                        )
                         logger.info(f"Uploading to MinIO: {task.source_key}")
                         minio_storage.upload_file(task.source_key, tmp_path, "audio/wav")
                         logger.info("Task %s: File synced to MinIO successfully", task_id)
 
-                        session.commit()
+                        await _commit(session)
 
+                    except RuntimeError:
+                        pass
                     finally:
                         # 删除临时文件
                         try:
@@ -239,7 +339,7 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     )
                 # 使用 COS 存储生成带签名的 URL 供 ASR 访问
                 # 使用 SmartFactory 获取 COS storage
-                cos_storage = asyncio.run(SmartFactory.get_service("storage", provider="cos"))
+                cos_storage = await _maybe_await(get_storage_service())
                 audio_candidates.append(
                     cos_storage.generate_presigned_url(task.source_key, expires_in)
                 )
@@ -252,11 +352,9 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                             ErrorCode.INVALID_PARAMETER, detail="upload_presign_expires"
                         )
                     # 使用 SmartFactory 获取 COS storage
-                    cos_storage = asyncio.run(SmartFactory.get_service("storage", provider="cos"))
+                    cos_storage = await _maybe_await(get_storage_service())
                     audio_candidates.append(
-                        cos_storage.generate_presigned_url(
-                            task.source_key, expires_in
-                        )
+                        cos_storage.generate_presigned_url(task.source_key, expires_in)
                     )
                 direct_url = None
                 if isinstance(task.source_metadata, dict):
@@ -265,14 +363,12 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     audio_candidates.append(direct_url)
                 if not audio_candidates:
                     if not task.source_url:
-                        raise BusinessError(
-                            ErrorCode.INVALID_PARAMETER, detail="source_url"
-                        )
+                        raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_url")
                     audio_candidates.append(task.source_url)
 
-            _update_task(session, task, "transcribing", 40, "transcribing", request_id)
+            await _update_task(session, task, "transcribing", 40, "transcribing", request_id)
             # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
-            asr_service = asyncio.run(SmartFactory.get_service("asr"))
+            asr_service: ASRService = await _maybe_await(get_asr_service())
             last_error: Optional[BusinessError] = None
             segments: list[TranscriptSegment] = []
 
@@ -291,8 +387,14 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                         extra={"task_id": task_id, "audio_url_index": idx},
                     )
                     # ASR service is async, so we run it in asyncio.run()
-                    segments = asyncio.run(
-                        asr_service.transcribe(audio_url, status_callback=_asr_status)
+                    transcribe = asr_service.transcribe
+                    if "status_callback" in inspect.signature(transcribe).parameters:
+                        transcribe_result = transcribe(audio_url, status_callback=_asr_status)
+                    else:
+                        transcribe_result = transcribe(audio_url)
+                    segments = cast(
+                        list[TranscriptSegment],
+                        await _maybe_await(transcribe_result),
                     )
                     logger.info(
                         "Task %s: ASR succeeded with URL %d, got %d segments",
@@ -312,7 +414,8 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     }:
                         raise
                     logger.warning(
-                        "Task %s: ASR failed for URL %d/%d with error %s: %s, trying next URL if available",
+                        "Task %s: ASR failed for URL %d/%d with error %s: %s, "
+                        "trying next URL if available",
                         task_id,
                         idx,
                         len(audio_candidates),
@@ -344,21 +447,29 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     )
                 )
             session.add_all(transcripts)
-            session.commit()
+            await _commit(session)
 
-            _update_task(session, task, "summarizing", 80, "summarizing", request_id)
+            await _update_task(session, task, "summarizing", 80, "summarizing", request_id)
             # 使用 SmartFactory 获取 LLM 服务（自动选择最优服务）
-            llm_service = asyncio.run(SmartFactory.get_service("llm"))
+            provider, model_id = _resolve_llm_selection(task)
+            llm_service: LLMService = await _maybe_await(get_llm_service(provider, model_id))
             full_text = "\n".join([seg.content for seg in segments])
 
-            content_style = task.options.get("summary_style", "meeting")
+            options = task.options or {}
+            content_style = options.get("summary_style", "meeting")
+            if not isinstance(content_style, str):
+                content_style = "meeting"
 
             logger.info(
                 "Task %s: Starting LLM summarization with %d characters of text (style: %s)",
                 task_id,
                 len(full_text),
                 content_style,
-                extra={"task_id": task_id, "text_length": len(full_text), "content_style": content_style},
+                extra={
+                    "task_id": task_id,
+                    "text_length": len(full_text),
+                    "content_style": content_style,
+                },
             )
 
             summaries = []
@@ -368,10 +479,19 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     task_id,
                     summary_type,
                     content_style,
-                    extra={"task_id": task_id, "summary_type": summary_type, "content_style": content_style},
+                    extra={
+                        "task_id": task_id,
+                        "summary_type": summary_type,
+                        "content_style": content_style,
+                    },
                 )
                 # LLM service is async, so we run it in asyncio.run()
-                content = asyncio.run(llm_service.summarize(full_text, summary_type, content_style))
+                summarize = llm_service.summarize
+                if len(inspect.signature(summarize).parameters) >= 3:
+                    summarize_result = summarize(full_text, summary_type, content_style)
+                else:
+                    summarize_result = summarize(full_text, summary_type)
+                content = cast(str, await _maybe_await(summarize_result))
                 logger.info(
                     "Task %s: Generated %s summary (%d characters)",
                     task_id,
@@ -396,7 +516,7 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     )
                 )
             session.add_all(summaries)
-            session.commit()
+            await _commit(session)
             logger.info(
                 "Task %s: All summaries saved to database",
                 task_id,
@@ -409,7 +529,7 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
 
             task.error_code = None
             task.error_message = None
-            _update_task(session, task, "completed", 100, "completed", request_id)
+            await _update_task(session, task, "completed", 100, "completed", request_id)
         except BusinessError as exc:
             logger.error(
                 "Task %s failed with business error: %s (code=%s)",
@@ -419,7 +539,7 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                 exc_info=True,
                 extra={"task_id": task_id, "error_code": exc.code.value},
             )
-            _mark_failed(session, task, exc, request_id)
+            await _mark_failed(session, task, exc, request_id)
         except Exception as exc:
             logger.exception(
                 "Task %s failed with unexpected error: %s",
@@ -431,7 +551,7 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
                 ErrorCode.INTERNAL_SERVER_ERROR,
                 reason=f"{type(exc).__name__}: {str(exc)}",
             )
-            _mark_failed(session, task, error, request_id)
+            await _mark_failed(session, task, error, request_id)
 
 
 @celery_app.task(
@@ -444,4 +564,4 @@ def _process_task(task_id: str, request_id: Optional[str]) -> None:
     retry_backoff=True,
 )
 def process_audio(self, task_id: str, request_id: Optional[str] = None) -> None:
-    _process_task(task_id, request_id)
+    asyncio.run(_process_task(task_id, request_id))

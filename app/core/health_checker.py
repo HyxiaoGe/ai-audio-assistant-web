@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from threading import Lock
@@ -33,10 +33,11 @@ logger = logging.getLogger(__name__)
 
 class HealthStatus(str, Enum):
     """健康状态枚举"""
-    HEALTHY = "healthy"          # 健康
-    UNHEALTHY = "unhealthy"      # 不健康
-    UNKNOWN = "unknown"          # 未知（未检查过）
-    CHECKING = "checking"        # 检查中
+
+    HEALTHY = "healthy"  # 健康
+    UNHEALTHY = "unhealthy"  # 不健康
+    UNKNOWN = "unknown"  # 未知（未检查过）
+    CHECKING = "checking"  # 检查中
 
 
 @dataclass
@@ -53,6 +54,7 @@ class HealthCheckResult:
         total_failures: 总失败次数
         error_message: 错误信息（如果失败）
     """
+
     service_type: str
     service_name: str
     status: HealthStatus = HealthStatus.UNKNOWN
@@ -120,9 +122,9 @@ class HealthChecker:
     _lock = Lock()
 
     # 配置参数
-    failure_threshold: int = 3          # 连续失败阈值
-    check_timeout: int = 5              # 检查超时时间（秒）
-    cache_duration: int = 30            # 缓存时长（秒），ADR-003 要求
+    failure_threshold: int = 3  # 连续失败阈值
+    check_timeout: int = 5  # 检查超时时间（秒）
+    cache_duration: int = 30  # 缓存时长（秒），ADR-003 要求
 
     @classmethod
     async def check_service(
@@ -231,7 +233,10 @@ class HealthChecker:
                 if is_fatal_error:
                     result.status = HealthStatus.UNHEALTHY
                     logger.warning(
-                        f"Service {service_type}/{name} marked as UNHEALTHY due to fatal error: {error_msg}"
+                        "Service %s/%s marked as UNHEALTHY due to fatal error: %s",
+                        service_type,
+                        name,
+                        error_msg,
                     )
                 # 临时故障：判断是否超过失败阈值
                 elif result.consecutive_failures >= cls.failure_threshold:
@@ -272,10 +277,7 @@ class HealthChecker:
 
         # 返回所有结果
         with cls._lock:
-            return {
-                service_type: dict(services)
-                for service_type, services in cls._results.items()
-            }
+            return {service_type: dict(services) for service_type, services in cls._results.items()}
 
     @classmethod
     def is_healthy(cls, service_type: str, name: str) -> bool:
@@ -317,10 +319,7 @@ class HealthChecker:
             所有服务的健康检查结果
         """
         with cls._lock:
-            return {
-                service_type: dict(services)
-                for service_type, services in cls._results.items()
-            }
+            return {service_type: dict(services) for service_type, services in cls._results.items()}
 
     @classmethod
     def get_healthy_services(cls, service_type: str) -> List[str]:

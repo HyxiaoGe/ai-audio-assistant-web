@@ -13,9 +13,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    APP_ENV: Literal["development", "staging", "production"] = Field(
-        default="development"
-    )
+    APP_ENV: Literal["development", "staging", "production"] = Field(default="development")
     DEBUG: bool = Field(default=True)
 
     # API 外部访问地址（用于生成媒体文件 URL）

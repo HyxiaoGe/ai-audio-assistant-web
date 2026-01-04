@@ -26,12 +26,8 @@ class Summary(BaseRecord):
     )
 
     summary_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    version: Mapped[int] = mapped_column(
-        Integer, server_default=text("1"), nullable=False
-    )
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, server_default=text("true"), nullable=False
-    )
+    version: Mapped[int] = mapped_column(Integer, server_default=text("1"), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"), nullable=False)
 
     content: Mapped[str] = mapped_column(Text, nullable=False)
     model_used: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)

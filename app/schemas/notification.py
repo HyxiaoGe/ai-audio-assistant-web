@@ -7,7 +7,6 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-
 # ============================================================================
 # Request Schemas
 # ============================================================================
@@ -36,7 +35,7 @@ class NotificationResponse(BaseModel):
 
     # Core fields
     category: str  # task, system
-    action: str    # completed, failed, progress
+    action: str  # completed, failed, progress
     title: str
     message: str
     action_url: Optional[str] = None

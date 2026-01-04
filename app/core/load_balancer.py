@@ -12,16 +12,20 @@ from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from app.core.health_checker import HealthChecker
 from app.core.registry import ServiceMetadata, ServiceRegistry
+
+if TYPE_CHECKING:
+    from app.core.cost_optimizer import CostOptimizer
 
 logger = logging.getLogger(__name__)
 
 
 class BalancingStrategy(str, Enum):
     """负载均衡策略枚举"""
+
     ROUND_ROBIN = "round_robin"
     WEIGHTED_ROUND_ROBIN = "weighted_round_robin"
     RANDOM = "random"
@@ -31,6 +35,7 @@ class BalancingStrategy(str, Enum):
 @dataclass
 class LoadBalancerConfig:
     """负载均衡器配置"""
+
     strategy: BalancingStrategy = BalancingStrategy.ROUND_ROBIN
     enable_health_check: bool = True
     fallback_to_any: bool = False
@@ -210,10 +215,7 @@ class LeastConnectionsBalancer(LoadBalancer):
         if not available_services:
             return None
 
-        counts = {
-            name: self.tracker.get_count(service_type, name)
-            for name in available_services
-        }
+        counts = {name: self.tracker.get_count(service_type, name) for name in available_services}
         min_count = min(counts.values())
         candidates = [name for name, count in counts.items() if count == min_count]
         return random.choice(candidates)
@@ -246,13 +248,14 @@ class LoadBalancerFactory:
                     if config is None:
                         config = LoadBalancerConfig(strategy=strategy)
 
-                    balancer_map = {
+                    balancer_map: dict[BalancingStrategy, type[LoadBalancer]] = {
                         BalancingStrategy.ROUND_ROBIN: RoundRobinBalancer,
                         BalancingStrategy.WEIGHTED_ROUND_ROBIN: WeightedRoundRobinBalancer,
                         BalancingStrategy.RANDOM: RandomBalancer,
                         BalancingStrategy.LEAST_CONNECTIONS: LeastConnectionsBalancer,
                     }
-                    cls._instances[strategy] = balancer_map[strategy](config)
+                    balancer_cls = balancer_map[strategy]
+                    cls._instances[strategy] = balancer_cls(config)  # type: ignore[abstract]
 
         return cls._instances[strategy]
 

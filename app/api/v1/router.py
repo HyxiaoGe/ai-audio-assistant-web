@@ -1,6 +1,18 @@
 ﻿from fastapi import APIRouter
 
-from app.api.v1 import auth, health, llm, media, notifications, summaries, tasks, transcripts, upload, users, ws
+from app.api.v1 import (
+    auth,
+    health,
+    llm,
+    media,
+    notifications,
+    summaries,
+    tasks,
+    transcripts,
+    upload,
+    users,
+    ws,
+)
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)

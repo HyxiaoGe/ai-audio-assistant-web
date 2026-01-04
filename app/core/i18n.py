@@ -6,7 +6,6 @@ from typing import Dict
 
 from app.i18n.codes import ErrorCode
 
-
 _LOCALE_FILES: Dict[str, Path] = {
     "zh": Path(__file__).resolve().parents[1] / "i18n" / "zh.json",
     "en": Path(__file__).resolve().parents[1] / "i18n" / "en.json",

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import uuid4
 from typing import Optional
+from uuid import uuid4
 
-from sqlalchemy import DateTime, String, text
+from sqlalchemy import DateTime, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -24,9 +24,7 @@ class TimestampMixin:
         onupdate=func.now(),
         nullable=False,
     )
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CreatedUpdatedMixin:

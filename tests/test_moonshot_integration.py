@@ -2,9 +2,9 @@
 
 import pytest
 
+import app.services.llm  # noqa: F401
 from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SelectionStrategy, SmartFactory
-import app.services.llm  # noqa: F401
 
 
 def test_moonshot_service_registered() -> None:
@@ -59,7 +59,11 @@ def test_moonshot_cost_estimation() -> None:
 @pytest.mark.asyncio
 async def test_smart_factory_can_select_moonshot() -> None:
     try:
-        service = await SmartFactory.get_service("llm", provider="moonshot")
+        service = await SmartFactory.get_service(
+            "llm",
+            provider="moonshot",
+            model_id="moonshot-v1-8k",
+        )
         assert service.provider == "moonshot"
     except (RuntimeError, ValueError):
         pytest.skip("Moonshot not available")
@@ -71,8 +75,9 @@ async def test_moonshot_in_balanced_selection() -> None:
         service = await SmartFactory.get_service(
             "llm",
             strategy=SelectionStrategy.BALANCED,
+            model_id="moonshot-v1-8k",
             request_params={"input_tokens": 1000, "output_tokens": 500},
         )
-        assert service.provider in ["moonshot", "doubao", "qwen"]
+        assert service.provider in ["moonshot", "doubao", "qwen", "deepseek"]
     except (RuntimeError, ValueError):
         pytest.skip("No LLM services available")

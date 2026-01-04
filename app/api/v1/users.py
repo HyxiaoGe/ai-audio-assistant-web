@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app.api.deps import get_current_user
-from app.core.response import success
 from app.config import settings
+from app.core.response import success
 from app.core.smart_factory import SmartFactory
 from app.schemas.user import UserProfileResponse
 

@@ -34,23 +34,23 @@ async def get_summaries(
     user: User = Depends(get_current_user),
 ) -> JSONResponse:
     # Verify task exists and belongs to user
-    stmt = select(Task).where(
+    task_stmt = select(Task).where(
         Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
     )
-    result = await db.execute(stmt)
-    task = result.scalar_one_or_none()
+    task_result = await db.execute(task_stmt)
+    task = task_result.scalar_one_or_none()
 
     if not task:
         raise BusinessError(ErrorCode.TASK_NOT_FOUND)
 
     # Get all active summaries for this task
-    stmt = (
+    summary_stmt = (
         select(Summary)
-        .where(Summary.task_id == task_id, Summary.is_active == True)
+        .where(Summary.task_id == task_id, Summary.is_active.is_(True))
         .order_by(Summary.summary_type, Summary.version.desc())
     )
-    result = await db.execute(stmt)
-    summaries = result.scalars().all()
+    summary_result = await db.execute(summary_stmt)
+    summaries = summary_result.scalars().all()
 
     items = [
         SummaryItem(
@@ -83,11 +83,11 @@ async def regenerate_summary(
     from worker.celery_app import celery_app
 
     # Verify task exists and belongs to user
-    stmt = select(Task).where(
+    task_stmt = select(Task).where(
         Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
     )
-    result = await db.execute(stmt)
-    task = result.scalar_one_or_none()
+    task_result = await db.execute(task_stmt)
+    task = task_result.scalar_one_or_none()
 
     if not task:
         raise BusinessError(ErrorCode.TASK_NOT_FOUND)
@@ -95,14 +95,12 @@ async def regenerate_summary(
     # Check if task has transcripts
     from app.models.transcript import Transcript
 
-    stmt = select(Transcript).where(Transcript.task_id == task_id).limit(1)
-    result = await db.execute(stmt)
-    has_transcripts = result.scalar_one_or_none() is not None
+    transcript_stmt = select(Transcript).where(Transcript.task_id == task_id).limit(1)
+    transcript_result = await db.execute(transcript_stmt)
+    has_transcripts = transcript_result.scalar_one_or_none() is not None
 
     if not has_transcripts:
-        raise BusinessError(
-            ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要"
-        )
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要")
 
     # Submit regeneration task
     trace_id = getattr(request.state, "trace_id", None)
@@ -136,11 +134,11 @@ async def stream_summary_regeneration(
 ) -> StreamingResponse:
 
     # Verify task belongs to user
-    stmt = select(Task).where(
+    task_stmt = select(Task).where(
         Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
     )
-    result = await db.execute(stmt)
-    task = result.scalar_one_or_none()
+    task_result = await db.execute(task_stmt)
+    task = task_result.scalar_one_or_none()
 
     if not task:
         raise BusinessError(ErrorCode.TASK_NOT_FOUND)
@@ -149,11 +147,13 @@ async def stream_summary_regeneration(
         import logging
         import queue
         import threading
+
         from redis import Redis
 
         logger = logging.getLogger("api.summaries")
 
         from app.config import settings
+
         redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
         stream_key = f"summary_stream:{task_id}:{summary_type}"
 
@@ -177,7 +177,7 @@ async def stream_summary_regeneration(
                 try:
                     pubsub.unsubscribe(stream_key)
                     pubsub.close()
-                except:
+                except Exception:
                     pass
 
         subscriber_thread = threading.Thread(target=redis_subscriber, daemon=True)
@@ -185,10 +185,11 @@ async def stream_summary_regeneration(
         await asyncio.sleep(0.2)
 
         try:
-            yield f"event: connected\n"
+            yield "event: connected\n"
             yield f"data: {json.dumps({'type': 'connected'})}\n\n"
 
             import time
+
             start_time = time.time()
             timeout_seconds = 120
 
@@ -215,7 +216,8 @@ async def stream_summary_regeneration(
                             if msg_type == "ping":
                                 continue
 
-                            yield f"event: {event_type}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                            payload = json.dumps(event_data, ensure_ascii=False)
+                            yield f"event: {event_type}\ndata: {payload}\n\n"
 
                             if msg_type in ("summary.completed", "error"):
                                 return
@@ -245,7 +247,8 @@ async def stream_summary_regeneration(
                             if msg_type == "ping":
                                 continue
 
-                            yield f"event: {event_type}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                            payload = json.dumps(event_data, ensure_ascii=False)
+                            yield f"event: {event_type}\ndata: {payload}\n\n"
 
                             if msg_type in ("summary.completed", "error"):
                                 return
@@ -253,7 +256,7 @@ async def stream_summary_regeneration(
                             yield f"data: {data}\n\n"
 
                     except queue.Empty:
-                        yield f": heartbeat\n\n"
+                        yield ": heartbeat\n\n"
 
         finally:
             stop_event.set()
@@ -287,37 +290,34 @@ async def activate_summary(
         更新后的摘要信息
     """
     # Verify task belongs to user
-    stmt = select(Task).where(
+    task_stmt = select(Task).where(
         Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
     )
-    result = await db.execute(stmt)
-    task = result.scalar_one_or_none()
+    task_result = await db.execute(task_stmt)
+    task = task_result.scalar_one_or_none()
 
     if not task:
         raise BusinessError(ErrorCode.TASK_NOT_FOUND)
 
     # Get the summary to activate
-    stmt = select(Summary).where(
+    summary_stmt = select(Summary).where(
         Summary.id == summary_id,
         Summary.task_id == task_id,
     )
-    result = await db.execute(stmt)
-    target_summary = result.scalar_one_or_none()
+    summary_result = await db.execute(summary_stmt)
+    target_summary = summary_result.scalar_one_or_none()
 
     if not target_summary:
         raise BusinessError(ErrorCode.SUMMARY_NOT_FOUND)
 
     # Deactivate all summaries of the same type
-    stmt = (
-        select(Summary)
-        .where(
-            Summary.task_id == task_id,
-            Summary.summary_type == target_summary.summary_type,
-            Summary.is_active == True,
-        )
+    active_stmt = select(Summary).where(
+        Summary.task_id == task_id,
+        Summary.summary_type == target_summary.summary_type,
+        Summary.is_active.is_(True),
     )
-    result = await db.execute(stmt)
-    active_summaries = result.scalars().all()
+    active_result = await db.execute(active_stmt)
+    active_summaries = active_result.scalars().all()
 
     for summary in active_summaries:
         summary.is_active = False
@@ -360,14 +360,15 @@ async def compare_models(
         对比 ID 和任务 ID 列表
     """
     from uuid import uuid4
+
     from worker.celery_app import celery_app
 
     # Verify task exists and belongs to user
-    stmt = select(Task).where(
+    task_stmt = select(Task).where(
         Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
     )
-    result = await db.execute(stmt)
-    task = result.scalar_one_or_none()
+    task_result = await db.execute(task_stmt)
+    task = task_result.scalar_one_or_none()
 
     if not task:
         raise BusinessError(ErrorCode.TASK_NOT_FOUND)
@@ -375,14 +376,12 @@ async def compare_models(
     # Check if task has transcripts
     from app.models.transcript import Transcript
 
-    stmt = select(Transcript).where(Transcript.task_id == task_id).limit(1)
-    result = await db.execute(stmt)
-    has_transcripts = result.scalar_one_or_none() is not None
+    transcript_stmt = select(Transcript).where(Transcript.task_id == task_id).limit(1)
+    transcript_result = await db.execute(transcript_stmt)
+    has_transcripts = transcript_result.scalar_one_or_none() is not None
 
     if not has_transcripts:
-        raise BusinessError(
-            ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要"
-        )
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要")
 
     # Generate comparison ID
     comparison_id = uuid4().hex
@@ -408,9 +407,7 @@ async def compare_models(
             "comparison_id": comparison_id,
             "task_id": task_id,
             "summary_type": data.summary_type,
-            "models": [
-                {"provider": m.provider, "model_id": m.model_id} for m in data.models
-            ],
+            "models": [{"provider": m.provider, "model_id": m.model_id} for m in data.models],
             "celery_task_ids": celery_task_ids,
             "status": "queued",
         }
@@ -434,11 +431,11 @@ async def get_comparison_results(
         对比结果列表
     """
     # Verify task belongs to user
-    stmt = select(Task).where(
+    task_stmt = select(Task).where(
         Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
     )
-    result = await db.execute(stmt)
-    task = result.scalar_one_or_none()
+    task_result = await db.execute(task_stmt)
+    task = task_result.scalar_one_or_none()
 
     if not task:
         raise BusinessError(ErrorCode.TASK_NOT_FOUND)
@@ -446,7 +443,7 @@ async def get_comparison_results(
     # Query all summaries with this comparison_id
     from app.models.summary import Summary
 
-    stmt = (
+    summary_stmt = (
         select(Summary)
         .where(
             Summary.task_id == task_id,
@@ -454,8 +451,8 @@ async def get_comparison_results(
         )
         .order_by(Summary.created_at.desc())
     )
-    result = await db.execute(stmt)
-    summaries = result.scalars().all()
+    summary_result = await db.execute(summary_stmt)
+    summaries = summary_result.scalars().all()
 
     from app.schemas.summary import SummaryComparisonItem, SummaryComparisonResponse
 
@@ -497,11 +494,11 @@ async def stream_comparison(
     同时监听多个模型的生成流，实时返回每个模型的进度
     """
     # Verify task belongs to user
-    stmt = select(Task).where(
+    task_stmt = select(Task).where(
         Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
     )
-    result = await db.execute(stmt)
-    task = result.scalar_one_or_none()
+    task_result = await db.execute(task_stmt)
+    task = task_result.scalar_one_or_none()
 
     if not task:
         raise BusinessError(ErrorCode.TASK_NOT_FOUND)
@@ -510,11 +507,13 @@ async def stream_comparison(
         import logging
         import queue
         import threading
+
         from redis import Redis
 
         logger = logging.getLogger("api.summaries")
 
         from app.config import settings
+
         redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
 
         # 使用通配符订阅该任务和类型的所有流
@@ -540,7 +539,7 @@ async def stream_comparison(
                 try:
                     pubsub.unsubscribe(stream_key)
                     pubsub.close()
-                except:
+                except Exception:
                     pass
 
         subscriber_thread = threading.Thread(target=redis_subscriber, daemon=True)
@@ -548,10 +547,11 @@ async def stream_comparison(
         await asyncio.sleep(0.2)
 
         try:
-            yield f"event: connected\n"
+            yield "event: connected\n"
             yield f"data: {json.dumps({'type': 'connected', 'comparison_id': comparison_id})}\n\n"
 
             import time
+
             start_time = time.time()
             timeout_seconds = 300  # 5分钟超时（多个模型需要更长时间）
             completed_summaries = set()  # 跟踪已完成的摘要ID
@@ -582,7 +582,8 @@ async def stream_comparison(
                             # 添加 comparison_id 到所有事件
                             event_data["comparison_id"] = comparison_id
 
-                            yield f"event: {event_type}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                            payload = json.dumps(event_data, ensure_ascii=False)
+                            yield f"event: {event_type}\ndata: {payload}\n\n"
 
                             # 跟踪完成的摘要
                             if msg_type == "summary.completed":
@@ -617,7 +618,8 @@ async def stream_comparison(
                                 continue
 
                             event_data["comparison_id"] = comparison_id
-                            yield f"event: {event_type}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                            payload = json.dumps(event_data, ensure_ascii=False)
+                            yield f"event: {event_type}\ndata: {payload}\n\n"
 
                             if msg_type == "summary.completed":
                                 summary_id = event_data.get("summary_id")
@@ -628,7 +630,7 @@ async def stream_comparison(
                             yield f"data: {data}\n\n"
 
                     except queue.Empty:
-                        yield f": heartbeat\n\n"
+                        yield ": heartbeat\n\n"
 
         finally:
             stop_event.set()
@@ -642,76 +644,4 @@ async def stream_comparison(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
-    )
-
-
-@router.post("/{task_id}/{summary_id}/activate")
-async def activate_summary(
-    task_id: str,
-    summary_id: str,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-) -> JSONResponse:
-    """将对比结果设置为当前活跃版本
-
-    Args:
-        task_id: 任务 ID
-        summary_id: 要激活的摘要 ID
-
-    Returns:
-        更新后的摘要信息
-    """
-    # Verify task belongs to user
-    stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
-    result = await db.execute(stmt)
-    task = result.scalar_one_or_none()
-
-    if not task:
-        raise BusinessError(ErrorCode.TASK_NOT_FOUND)
-
-    # Get the summary to activate
-    stmt = select(Summary).where(
-        Summary.id == summary_id,
-        Summary.task_id == task_id,
-    )
-    result = await db.execute(stmt)
-    target_summary = result.scalar_one_or_none()
-
-    if not target_summary:
-        raise BusinessError(ErrorCode.SUMMARY_NOT_FOUND)
-
-    # Deactivate all summaries of the same type
-    stmt = (
-        select(Summary)
-        .where(
-            Summary.task_id == task_id,
-            Summary.summary_type == target_summary.summary_type,
-            Summary.is_active == True,
-        )
-    )
-    result = await db.execute(stmt)
-    active_summaries = result.scalars().all()
-
-    for summary in active_summaries:
-        summary.is_active = False
-
-    # Activate the target summary
-    target_summary.is_active = True
-
-    await db.commit()
-    await db.refresh(target_summary)
-
-    return success(
-        data={
-            "summary_id": str(target_summary.id),
-            "task_id": task_id,
-            "summary_type": target_summary.summary_type,
-            "version": target_summary.version,
-            "model_used": target_summary.model_used,
-            "is_active": target_summary.is_active,
-            "comparison_id": target_summary.comparison_id,
-        },
-        message="摘要已设置为当前版本",
     )
