@@ -21,7 +21,7 @@ repos:
 
   # Python import 排序
   - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
+    rev: 7.0.0
     hooks:
       - id: isort
         name: isort (import sorting)
@@ -29,7 +29,7 @@ repos:
 
   # Python 代码格式化
   - repo: https://github.com/psf/black
-    rev: 24.1.1
+    rev: 25.12.0
     hooks:
       - id: black
         name: black (code formatter)
@@ -38,7 +38,7 @@ repos:
 
   # Python 代码质量检查
   - repo: https://github.com/pycqa/flake8
-    rev: 7.0.0
+    rev: 7.3.0
     hooks:
       - id: flake8
         name: flake8 (linting)
@@ -49,7 +49,7 @@ repos:
 
   # Python 类型检查（可选，因为可能比较严格）
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.8.0
+    rev: v1.19.1
     hooks:
       - id: mypy
         name: mypy (type checking)
@@ -66,7 +66,7 @@ repos:
 
   # 安全检查（可选）
   - repo: https://github.com/pycqa/bandit
-    rev: 1.7.6
+    rev: 1.9.2
     hooks:
       - id: bandit
         name: bandit (security)
