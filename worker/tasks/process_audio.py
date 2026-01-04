@@ -39,7 +39,7 @@ T = TypeVar("T")
 async def _maybe_await(result: T | Awaitable[T]) -> T:
     if inspect.isawaitable(result):
         return cast(T, await result)
-    return cast(T, result)
+    return cast(T, result)  # type: ignore[redundant-cast]
 
 
 @asynccontextmanager
