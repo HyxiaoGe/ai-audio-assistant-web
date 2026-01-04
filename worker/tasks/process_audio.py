@@ -286,7 +286,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                         )
 
                         # 提取音频时长
-                        result = subprocess.run(
+                        result = subprocess.run(  # nosec B603,B607 - fixed binary/args
                             [
                                 "ffprobe",
                                 "-v",
