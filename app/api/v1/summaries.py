@@ -178,7 +178,7 @@ async def stream_summary_regeneration(
                     pubsub.unsubscribe(stream_key)
                     pubsub.close()
                 except Exception:
-                    pass
+                    logger.debug("pubsub close failed", exc_info=True)
 
         subscriber_thread = threading.Thread(target=redis_subscriber, daemon=True)
         subscriber_thread.start()
@@ -540,7 +540,7 @@ async def stream_comparison(
                     pubsub.unsubscribe(stream_key)
                     pubsub.close()
                 except Exception:
-                    pass
+                    logger.debug("pubsub close failed", exc_info=True)
 
         subscriber_thread = threading.Thread(target=redis_subscriber, daemon=True)
         subscriber_thread.start()

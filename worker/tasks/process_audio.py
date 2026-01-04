@@ -38,8 +38,8 @@ T = TypeVar("T")
 
 async def _maybe_await(result: T | Awaitable[T]) -> T:
     if inspect.isawaitable(result):
-        return await result
-    return result
+        return cast(T, await result)
+    return cast(T, result)
 
 
 @asynccontextmanager

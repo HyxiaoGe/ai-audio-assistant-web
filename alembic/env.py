@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from logging.config import fileConfig
-from pathlib import Path
-from typing import Optional
+from typing import Any
 
 from sqlalchemy import engine_from_config, pool
 
-from alembic import context
+from alembic import context  # type: ignore[attr-defined]
 from app.config import settings
 from app.models import summary as _summary  # noqa: F401
 from app.models import task as _task  # noqa: F401
@@ -14,7 +13,7 @@ from app.models import transcript as _transcript  # noqa: F401
 from app.models import user as _user  # noqa: F401
 from app.models.base import Base
 
-config = context.config
+config: Any = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
