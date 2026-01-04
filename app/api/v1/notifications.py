@@ -13,10 +13,7 @@ from app.core.response import success
 from app.models.notification import Notification
 from app.models.user import User
 from app.schemas.common import PageResponse
-from app.schemas.notification import (
-    NotificationResponse,
-    NotificationStatsResponse,
-)
+from app.schemas.notification import NotificationResponse, NotificationStatsResponse
 
 router = APIRouter(prefix="/notifications")
 
