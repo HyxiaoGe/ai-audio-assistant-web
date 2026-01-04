@@ -5,9 +5,9 @@ import logging
 import mimetypes
 import tempfile
 import urllib.request
-from urllib.parse import urlparse
 from pathlib import Path
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
