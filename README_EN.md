@@ -18,7 +18,7 @@ Backend for audio/video understanding with multi-vendor LLM/ASR/storage integrat
 - Database: PostgreSQL
 - Storage: MinIO (dev) / COS or OSS (prod)
 - ASR: Tencent / Aliyun
-- LLM: Doubao / Qwen / Moonshot / DeepSeek
+- LLM: Doubao / Qwen / Moonshot / DeepSeek / OpenRouter
 
 ## Quickstart (local)
 

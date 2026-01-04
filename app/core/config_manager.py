@@ -129,6 +129,14 @@ class ConfigManager:
                 "model": "MOONSHOT_MODEL",
                 "max_tokens": "MOONSHOT_MAX_TOKENS",
             },
+            "openrouter": {
+                "api_key": "OPENROUTER_API_KEY",
+                "base_url": "OPENROUTER_BASE_URL",
+                "model": "OPENROUTER_MODEL",
+                "max_tokens": "OPENROUTER_MAX_TOKENS",
+                "http_referer": "OPENROUTER_HTTP_REFERER",
+                "app_title": "OPENROUTER_APP_TITLE",
+            },
         },
         "asr": {
             "tencent": {

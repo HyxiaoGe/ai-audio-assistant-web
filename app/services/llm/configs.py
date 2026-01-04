@@ -144,3 +144,51 @@ class MoonshotConfig(ServiceConfig):
                 "retry_count": 3,
             }
         }
+
+
+@register_config_schema("llm", "openrouter")
+class OpenRouterConfig(ServiceConfig):
+    """OpenRouter LLM 服务配置
+
+    Attributes:
+        api_key: API 密钥
+        base_url: API 基础 URL
+        model: 模型名称（如 "openai/gpt-4o"）
+        max_tokens: 最大 token 数量
+        http_referer: 可选，用于 OpenRouter 归因的站点 URL
+        app_title: 可选，用于 OpenRouter 归因的应用名称
+    """
+
+    api_key: str = Field(..., description="OpenRouter API 密钥", min_length=1)
+    base_url: str = Field(
+        default="https://openrouter.ai/api/v1",
+        description="OpenRouter API 基础 URL",
+    )
+    model: Optional[str] = Field(default=None, description="默认模型名称")
+    max_tokens: int = Field(default=4096, description="最大 token 数", ge=1)
+    http_referer: Optional[str] = Field(default=None, description="HTTP-Referer 头")
+    app_title: Optional[str] = Field(default=None, description="X-Title 头")
+
+    @validator("base_url")
+    def validate_base_url(cls, v: str) -> str:
+        """验证 base_url 格式"""
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("base_url must start with http:// or https://")
+        return v.rstrip("/")
+
+    class Config:
+        """Pydantic 配置"""
+
+        schema_extra = {
+            "example": {
+                "api_key": "your-openrouter-api-key",
+                "base_url": "https://openrouter.ai/api/v1",
+                "model": "openai/gpt-4o",
+                "max_tokens": 4096,
+                "http_referer": "https://your-site.example",
+                "app_title": "AI Audio Assistant",
+                "enabled": True,
+                "timeout": 60,
+                "retry_count": 3,
+            }
+        }

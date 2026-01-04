@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: Optional[str] = Field(default="https://api.deepseek.com")
     DEEPSEEK_MODEL: Optional[str] = Field(default="deepseek-chat")
     DEEPSEEK_MAX_TOKENS: Optional[int] = Field(default=4096)
+    OPENROUTER_API_KEY: Optional[str] = Field(default=None)
+    OPENROUTER_BASE_URL: Optional[str] = Field(default="https://openrouter.ai/api/v1")
+    OPENROUTER_MODEL: Optional[str] = Field(default=None)
+    OPENROUTER_MAX_TOKENS: Optional[int] = Field(default=4096)
+    OPENROUTER_HTTP_REFERER: Optional[str] = Field(default=None)
+    OPENROUTER_APP_TITLE: Optional[str] = Field(default=None)
+    OPENROUTER_DYNAMIC_MODELS: bool = Field(default=False)
 
     UPLOAD_ALLOWED_EXTENSIONS: Optional[str] = Field(default=None)
     UPLOAD_MAX_SIZE_BYTES: Optional[int] = Field(default=None)

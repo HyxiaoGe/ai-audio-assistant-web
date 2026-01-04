@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from app.config import settings
 from app.core.config_manager import ConfigManager
 from app.core.health_checker import HealthChecker, HealthStatus
 from app.core.registry import ServiceRegistry
@@ -25,6 +29,9 @@ DISPLAY_NAMES_I18N = {
 # 按 model_id 的显示名称映射（用于 OpenRouter 等支持多模型的服务）
 MODEL_DISPLAY_NAMES_I18N = {
     # OpenAI 模型（通过 OpenRouter）
+    "openai/gpt-5.2-chat": {"zh": "GPT-5.2 Chat", "en": "GPT-5.2 Chat"},
+    "openai/gpt-5.2-pro": {"zh": "GPT-5.2 Pro", "en": "GPT-5.2 Pro"},
+    "openai/gpt-5.2": {"zh": "GPT-5.2", "en": "GPT-5.2"},
     "openai/gpt-4o": {"zh": "GPT-4o", "en": "GPT-4o"},
     "openai/gpt-4o-mini": {"zh": "GPT-4o Mini", "en": "GPT-4o Mini"},
     "openai/gpt-4-turbo": {"zh": "GPT-4 Turbo", "en": "GPT-4 Turbo"},
@@ -32,6 +39,9 @@ MODEL_DISPLAY_NAMES_I18N = {
     "openai/o1-mini": {"zh": "o1 Mini", "en": "o1 Mini"},
     "openai/o1-preview": {"zh": "o1 Preview", "en": "o1 Preview"},
     # Anthropic 模型（通过 OpenRouter）
+    "anthropic/claude-opus-4.5": {"zh": "Claude Opus 4.5", "en": "Claude Opus 4.5"},
+    "anthropic/claude-haiku-4.5": {"zh": "Claude Haiku 4.5", "en": "Claude Haiku 4.5"},
+    "anthropic/claude-sonnet-4.5": {"zh": "Claude Sonnet 4.5", "en": "Claude Sonnet 4.5"},
     "anthropic/claude-3.5-sonnet": {"zh": "Claude 3.5 Sonnet", "en": "Claude 3.5 Sonnet"},
     "anthropic/claude-3.5-sonnet:beta": {"zh": "Claude 3.5 Sonnet", "en": "Claude 3.5 Sonnet"},
     "anthropic/claude-3-5-sonnet-20241022": {"zh": "Claude 3.5 Sonnet", "en": "Claude 3.5 Sonnet"},
@@ -40,6 +50,15 @@ MODEL_DISPLAY_NAMES_I18N = {
     "anthropic/claude-3-opus": {"zh": "Claude 3 Opus", "en": "Claude 3 Opus"},
     "anthropic/claude-3-opus-20240229": {"zh": "Claude 3 Opus", "en": "Claude 3 Opus"},
     # Google 模型（通过 OpenRouter）
+    "google/gemini-3-flash-preview": {
+        "zh": "Gemini 3 Flash Preview",
+        "en": "Gemini 3 Flash Preview",
+    },
+    "google/gemini-3-pro-preview": {"zh": "Gemini 3 Pro Preview", "en": "Gemini 3 Pro Preview"},
+    "google/gemini-3-pro-image-preview": {
+        "zh": "Gemini 3 Pro Image Preview",
+        "en": "Gemini 3 Pro Image Preview",
+    },
     "google/gemini-2.0-flash-exp": {"zh": "Gemini 2.0 Flash", "en": "Gemini 2.0 Flash"},
     "google/gemini-exp-1206": {"zh": "Gemini Exp 1206", "en": "Gemini Exp 1206"},
     "google/gemini-pro-1.5": {"zh": "Gemini 1.5 Pro", "en": "Gemini 1.5 Pro"},
@@ -47,10 +66,62 @@ MODEL_DISPLAY_NAMES_I18N = {
     "google/gemini-flash-1.5": {"zh": "Gemini 1.5 Flash", "en": "Gemini 1.5 Flash"},
     "google/gemini-flash-1.5-8b": {"zh": "Gemini 1.5 Flash 8B", "en": "Gemini 1.5 Flash 8B"},
     # xAI Grok 模型（通过 OpenRouter）
+    "x-ai/grok-4.1-fast": {"zh": "Grok 4.1 Fast", "en": "Grok 4.1 Fast"},
+    "x-ai/grok-4-fast": {"zh": "Grok 4 Fast", "en": "Grok 4 Fast"},
+    "x-ai/grok-4": {"zh": "Grok 4", "en": "Grok 4"},
     "x-ai/grok-2": {"zh": "Grok 2", "en": "Grok 2"},
     "x-ai/grok-2-vision": {"zh": "Grok 2 Vision", "en": "Grok 2 Vision"},
     "x-ai/grok-beta": {"zh": "Grok Beta", "en": "Grok Beta"},
 }
+
+OPENROUTER_RECOMMENDED_MODELS = [
+    "openai/gpt-5.2-chat",
+    "anthropic/claude-opus-4.5",
+    "google/gemini-3-flash-preview",
+    "x-ai/grok-4.1-fast",
+]
+
+OPENROUTER_PROVIDER_PREFIXES = [
+    "openai/",
+    "anthropic/",
+    "google/",
+    "x-ai/",
+]
+
+
+async def _fetch_openrouter_latest_models() -> list[str]:
+    headers: dict[str, str] = {}
+    if settings.OPENROUTER_API_KEY:
+        headers["Authorization"] = f"Bearer {settings.OPENROUTER_API_KEY}"
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                "https://openrouter.ai/api/v1/models",
+                headers=headers,
+            )
+            response.raise_for_status()
+            payload: dict[str, Any] = response.json()
+    except Exception:
+        return []
+
+    models = payload.get("data", [])
+    latest_by_prefix: dict[str, tuple[int, str]] = {}
+    for item in models:
+        model_id = item.get("id", "")
+        created = item.get("created", 0)
+        for prefix in OPENROUTER_PROVIDER_PREFIXES:
+            if model_id.startswith(prefix):
+                current = latest_by_prefix.get(prefix)
+                if current is None or created > current[0]:
+                    latest_by_prefix[prefix] = (created, model_id)
+                break
+
+    return [
+        latest_by_prefix[prefix][1]
+        for prefix in OPENROUTER_PROVIDER_PREFIXES
+        if prefix in latest_by_prefix
+    ]
 
 
 @router.get("/models")
@@ -88,6 +159,31 @@ async def get_available_models(request: Request) -> JSONResponse:
             health_result = HealthChecker.get_status("llm", provider)
 
         status = health_result.status.value if health_result else HealthStatus.UNKNOWN.value
+
+        # OpenRouter 支持多模型：返回推荐模型列表，避免固定 env
+        if provider == "openrouter":
+            model_candidates = OPENROUTER_RECOMMENDED_MODELS
+            if settings.OPENROUTER_DYNAMIC_MODELS:
+                fetched = await _fetch_openrouter_latest_models()
+                if fetched:
+                    model_candidates = fetched
+            for model_id in model_candidates:
+                display_name = MODEL_DISPLAY_NAMES_I18N.get(model_id, {}).get(
+                    lang, MODEL_DISPLAY_NAMES_I18N.get(model_id, {}).get("zh", model_id)
+                )
+                models.append(
+                    {
+                        "provider": provider,
+                        "model_id": model_id,
+                        "display_name": display_name,
+                        "description": metadata.description,
+                        "cost_per_million_tokens": metadata.cost_per_million_tokens,
+                        "priority": metadata.priority,
+                        "status": status,
+                        "is_available": status == HealthStatus.HEALTHY.value,
+                    }
+                )
+            continue
 
         # 获取模型 ID（需要实例化服务）
         model_id = None
@@ -136,10 +232,12 @@ async def get_available_models(request: Request) -> JSONResponse:
     # 找出优先级最高的（priority 数字最小的）
     healthy_models = [m for m in models if m["is_available"]]
     if healthy_models:
-        min_priority = min(m["priority"] for m in healthy_models)
+        min_priority = min(cast(int, m["priority"]) for m in healthy_models)
         for model in models:
             # 只有优先级最高且可用的模型才推荐
-            model["is_recommended"] = model["is_available"] and model["priority"] == min_priority
+            model["is_recommended"] = (
+                model["is_available"] and cast(int, model["priority"]) == min_priority
+            )
     else:
         # 如果没有健康的模型，都不推荐
         for model in models:

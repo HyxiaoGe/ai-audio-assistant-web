@@ -26,6 +26,7 @@ from enum import Enum
 from threading import Lock
 from typing import Dict, List, Optional
 
+from app.core.config_manager import ConfigManager
 from app.core.registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
@@ -177,6 +178,21 @@ class HealthChecker:
         is_fatal_error = False  # 标记是否为致命错误（配置问题等）
 
         try:
+            if service_type == "llm" and name == "openrouter":
+                config = ConfigManager.get_config("llm", "openrouter")
+                if not getattr(config, "api_key", None):
+                    raise RuntimeError("OpenRouter API key is not set")
+                if not getattr(config, "model", None):
+                    # OpenRouter 支持按请求指定 model_id，因此仅校验 API key
+                    is_healthy = True
+                    with cls._lock:
+                        result.last_check_time = datetime.now()
+                        result.total_checks += 1
+                        result.status = HealthStatus.HEALTHY
+                        result.consecutive_failures = 0
+                        result.error_message = ""
+                    return result
+
             # 获取服务实例
             service = ServiceRegistry.get(service_type, name)
 
