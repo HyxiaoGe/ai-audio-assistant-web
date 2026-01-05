@@ -155,6 +155,18 @@ class ConfigManager:
                 "access_key_id": "ALIYUN_ACCESS_KEY_ID",
                 "access_key_secret": "ALIYUN_ACCESS_KEY_SECRET",
             },
+            "volcengine": {
+                "app_id": "VOLC_ASR_APP_ID",
+                "access_token": "VOLC_ASR_ACCESS_TOKEN",
+                "resource_id": "VOLC_ASR_RESOURCE_ID",
+                "model_name": "VOLC_ASR_MODEL_NAME",
+                "model_version": "VOLC_ASR_MODEL_VERSION",
+                "language": "VOLC_ASR_LANGUAGE",
+                "enable_itn": "VOLC_ASR_ENABLE_ITN",
+                "show_utterances": "VOLC_ASR_SHOW_UTTERANCES",
+                "poll_interval": "VOLC_ASR_POLL_INTERVAL",
+                "max_wait": "VOLC_ASR_MAX_WAIT_SECONDS",
+            },
         },
         "storage": {
             "cos": {
@@ -179,6 +191,13 @@ class ConfigManager:
                 "secret_key": "MINIO_SECRET_KEY",
                 "bucket": "MINIO_BUCKET",
                 "use_ssl": "MINIO_USE_SSL",
+            },
+            "tos": {
+                "endpoint": "TOS_ENDPOINT",
+                "region": "TOS_REGION",
+                "bucket": "TOS_BUCKET",
+                "access_key": "TOS_ACCESS_KEY",
+                "secret_key": "TOS_SECRET_KEY",
             },
         },
     }

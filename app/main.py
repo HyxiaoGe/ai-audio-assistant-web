@@ -13,6 +13,7 @@ from app.core.smart_factory import SelectionStrategy, SmartFactory, SmartFactory
 from app.i18n.codes import ErrorCode
 from app.services.asr import aliyun  # noqa: F401
 from app.services.asr import tencent  # noqa: F401
+from app.services.asr import volcengine  # noqa: F401
 from app.services.asr import configs as asr_configs  # noqa: F401
 
 # 导入所有服务模块以触发 @register_service 装饰器
@@ -20,7 +21,7 @@ from app.services.asr import configs as asr_configs  # noqa: F401
 from app.services.llm import configs as llm_configs  # noqa: F401
 from app.services.llm import deepseek, doubao, moonshot, openrouter, qwen  # noqa: F401
 from app.services.storage import configs as storage_configs  # noqa: F401
-from app.services.storage import cos, minio, oss  # noqa: F401
+from app.services.storage import cos, minio, oss, tos  # noqa: F401
 
 
 def create_app() -> FastAPI:

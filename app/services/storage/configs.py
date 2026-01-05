@@ -91,3 +91,45 @@ class MinioConfig(ServiceConfig):
                 "retry_count": 3,
             }
         }
+
+
+@register_config_schema("storage", "tos")
+class TOSConfig(ServiceConfig):
+    """火山引擎 TOS 存储服务配置
+
+    Attributes:
+        endpoint: TOS 服务端点（如 "tos-cn-beijing.volces.com"）
+        region: 地域（如 "cn-beijing"）
+        bucket: 存储桶名称
+        access_key: Access Key
+        secret_key: Secret Key
+    """
+
+    endpoint: str = Field(..., description="TOS 服务端点", min_length=1)
+    region: str = Field(..., description="地域", min_length=1)
+    bucket: str = Field(..., description="存储桶名称", min_length=1)
+    access_key: str = Field(..., description="Access Key", min_length=1)
+    secret_key: str = Field(..., description="Secret Key", min_length=1)
+
+    @validator("endpoint")
+    def validate_endpoint(cls, v: str) -> str:
+        """验证 endpoint 格式（不应包含协议前缀）"""
+        if v.startswith(("http://", "https://")):
+            raise ValueError("endpoint should not include http:// or https:// prefix.")
+        return v
+
+    class Config:
+        """Pydantic 配置"""
+
+        schema_extra = {
+            "example": {
+                "endpoint": "tos-cn-beijing.volces.com",
+                "region": "cn-beijing",
+                "bucket": "my-audio-bucket",
+                "access_key": "your-tos-access-key",
+                "secret_key": "your-tos-secret-key",
+                "enabled": True,
+                "timeout": 30,
+                "retry_count": 3,
+            }
+        }

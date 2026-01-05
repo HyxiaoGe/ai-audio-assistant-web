@@ -16,8 +16,8 @@
 - API：FastAPI
 - Worker：Celery + Redis
 - 数据库：PostgreSQL
-- 存储：MinIO (开发) / COS 或 OSS (生产)
-- ASR：腾讯云 / 阿里云
+- 存储：MinIO (开发) / COS 或 OSS 或 TOS (生产)
+- ASR：腾讯云 / 阿里云 / 火山引擎
 - LLM：豆包 / 通义千问 / Moonshot / DeepSeek / OpenRouter
 
 ## 快速开始（本地）

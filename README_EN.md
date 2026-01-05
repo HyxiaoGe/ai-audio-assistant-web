@@ -16,8 +16,8 @@ Backend for audio/video understanding with multi-vendor LLM/ASR/storage integrat
 - API: FastAPI
 - Worker: Celery + Redis
 - Database: PostgreSQL
-- Storage: MinIO (dev) / COS or OSS (prod)
-- ASR: Tencent / Aliyun
+- Storage: MinIO (dev) / COS or OSS or TOS (prod)
+- ASR: Tencent / Aliyun / Volcengine
 - LLM: Doubao / Qwen / Moonshot / DeepSeek / OpenRouter
 
 ## Quickstart (local)

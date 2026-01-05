@@ -93,3 +93,53 @@ class AliyunASRConfig(ServiceConfig):
                 "retry_count": 3,
             }
         }
+
+
+@register_config_schema("asr", "volcengine")
+class VolcengineASRConfig(ServiceConfig):
+    """火山引擎 ASR 服务配置
+
+    Attributes:
+        app_id: APP ID（控制台 AppKey）
+        access_token: Access Token
+        resource_id: 资源 ID（如 "volc.seedasr.auc"）
+        model_name: 模型名称（固定 "bigmodel"）
+        model_version: 模型版本（如 "400"，可选）
+        language: 指定识别语言（如 "zh-CN" 或 "en-US"）
+        enable_itn: 是否启用 ITN
+        show_utterances: 是否返回分句信息
+        poll_interval: 轮询间隔（秒）
+        max_wait: 最大等待时间（秒）
+    """
+
+    app_id: str = Field(..., description="APP ID", min_length=1)
+    access_token: str = Field(..., description="Access Token", min_length=1)
+    resource_id: str = Field(..., description="资源 ID", min_length=1)
+    model_name: str = Field(default="bigmodel", description="模型名称")
+    model_version: str | None = Field(default=None, description="模型版本")
+    language: str | None = Field(default=None, description="识别语言")
+    enable_itn: bool = Field(default=True, description="是否启用 ITN")
+    show_utterances: bool = Field(default=True, description="是否返回分句信息")
+    poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1, le=60)
+    max_wait: int = Field(default=600, description="最大等待时间（秒）", ge=60)
+
+    class Config:
+        """Pydantic 配置"""
+
+        schema_extra = {
+            "example": {
+                "app_id": "your-volc-app-id",
+                "access_token": "your-access-token",
+                "resource_id": "volc.seedasr.auc",
+                "model_name": "bigmodel",
+                "model_version": "400",
+                "language": "zh-CN",
+                "enable_itn": True,
+                "show_utterances": True,
+                "poll_interval": 3,
+                "max_wait": 600,
+                "enabled": True,
+                "timeout": 30,
+                "retry_count": 3,
+            }
+        }
