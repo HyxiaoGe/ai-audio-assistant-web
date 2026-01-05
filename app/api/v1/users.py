@@ -29,7 +29,7 @@ async def get_my_avatar(
 ) -> Response:
     if user.avatar_url and not user.avatar_url.startswith("http"):
         # 使用 SmartFactory 获取 storage 服务（默认使用 COS）
-        storage = await SmartFactory.get_service("storage", provider="cos")
+        storage = await SmartFactory.get_service("storage", provider="cos", user_id=user.id)
         expires_in = settings.UPLOAD_PRESIGN_EXPIRES or 300
         url = storage.generate_presigned_url(user.avatar_url, expires_in)
         return RedirectResponse(url, status_code=307)

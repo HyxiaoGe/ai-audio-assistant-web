@@ -55,7 +55,7 @@ class AvatarService:
             return
         try:
             # 使用 SmartFactory 获取 storage 服务（默认使用 COS）
-            storage = await SmartFactory.get_service("storage", provider="cos")
+            storage = await SmartFactory.get_service("storage", provider="cos", user_id=user.id)
             object_key = _build_avatar_key(user.id, content_type)
             storage.upload_file(object_key, file_path, content_type)
             if user.avatar_url != object_key:

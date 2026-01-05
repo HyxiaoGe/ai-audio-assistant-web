@@ -14,6 +14,7 @@ from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
+from app.models.task import Task
 from app.models.transcript import Transcript
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
@@ -22,9 +23,9 @@ from worker.redis_client import get_sync_redis_client
 logger = logging.getLogger("worker.regenerate_summary")
 
 
-def _load_llm_model_id(provider: str) -> Optional[str]:
+def _load_llm_model_id(provider: str, user_id: Optional[str]) -> Optional[str]:
     try:
-        config = ConfigManager.get_config("llm", provider)
+        config = ConfigManager.get_config("llm", provider, user_id=user_id)
     except Exception:
         return None
     return getattr(config, "model", None)
@@ -43,12 +44,13 @@ def _select_default_llm_provider() -> str:
 def _resolve_llm_selection(
     provider: Optional[str],
     model_id: Optional[str],
+    user_id: Optional[str],
 ) -> tuple[str, str]:
     if provider:
-        model_id = model_id or _load_llm_model_id(provider) or provider
+        model_id = model_id or _load_llm_model_id(provider, user_id) or provider
         return provider, model_id
     provider = _select_default_llm_provider()
-    model_id = _load_llm_model_id(provider) or provider
+    model_id = _load_llm_model_id(provider, user_id) or provider
     return provider, model_id
 
 
@@ -111,6 +113,7 @@ def _regenerate_summary(
     redis_client = get_sync_redis_client()
     stream_key = f"summary_stream:{task_id}:{summary_type}"
 
+    user_id: Optional[str] = None
     with get_sync_db_session() as session:
         transcript_stmt = (
             select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
@@ -120,6 +123,10 @@ def _regenerate_summary(
 
         if not transcripts:
             raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要")
+
+        user_id = session.execute(
+            select(Task.user_id).where(Task.id == task_id)
+        ).scalar_one_or_none()
 
         # 将旧摘要标记为非活跃
         summary_stmt = select(Summary).where(
@@ -151,9 +158,11 @@ def _regenerate_summary(
         time.sleep(0.1)
         wait_count += 1
     # 使用 SmartFactory 获取 LLM 服务
-    provider, resolved_model_id = _resolve_llm_selection(model, model_id)
+    provider, resolved_model_id = _resolve_llm_selection(model, model_id, user_id)
     llm_service = asyncio.run(
-        SmartFactory.get_service("llm", provider=provider, model_id=resolved_model_id)
+        SmartFactory.get_service(
+            "llm", provider=provider, model_id=resolved_model_id, user_id=user_id
+        )
     )
     used_provider = provider
     used_model_id = resolved_model_id or (

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from qcloud_cos import CosConfig, CosS3Client
 from qcloud_cos.cos_exception import CosServiceError
@@ -11,6 +11,7 @@ from app.config import settings
 from app.core.fault_tolerance import RetryConfig, retry
 from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
+from app.services.config_utils import get_config_value
 from app.services.storage.base import StorageService
 
 
@@ -29,12 +30,17 @@ class COSStorageService(StorageService):
     def provider(self) -> str:
         return "cos"
 
-    def __init__(self) -> None:
-        region = settings.COS_REGION
-        bucket = settings.COS_BUCKET
-        secret_id = settings.COS_SECRET_ID or settings.TENCENT_SECRET_ID
-        secret_key = settings.COS_SECRET_KEY or settings.TENCENT_SECRET_KEY
-        use_ssl = settings.COS_USE_SSL
+    def __init__(self, config: Optional[object] = None) -> None:
+        region = get_config_value(config, "region", settings.COS_REGION)
+        bucket = get_config_value(config, "bucket", settings.COS_BUCKET)
+        secret_id = get_config_value(
+            config, "secret_id", settings.COS_SECRET_ID or settings.TENCENT_SECRET_ID
+        )
+        secret_key = get_config_value(
+            config, "secret_key", settings.COS_SECRET_KEY or settings.TENCENT_SECRET_KEY
+        )
+        use_ssl = get_config_value(config, "use_ssl", settings.COS_USE_SSL)
+        public_read = get_config_value(config, "public_read", settings.COS_PUBLIC_READ)
 
         if not region or not bucket or not secret_id or not secret_key:
             raise RuntimeError("COS settings are not set")
@@ -42,6 +48,7 @@ class COSStorageService(StorageService):
         self._bucket = bucket
         self._region = region
         self._scheme = "https" if use_ssl is not False else "http"
+        self._public_read = bool(public_read)
         config = CosConfig(
             Region=region,
             SecretId=secret_id,
@@ -69,7 +76,7 @@ class COSStorageService(StorageService):
     )
     def generate_presigned_url(self, object_name: str, expires_in: int) -> str:
         # 使用公开 URL（bucket 是 public-read，不需要签名）
-        if settings.COS_PUBLIC_READ:
+        if self._public_read:
             return f"{self._scheme}://{self._bucket}.cos.{self._region}.myqcloud.com/{object_name}"
         return self._client.get_presigned_url(
             Method="GET",
@@ -115,7 +122,7 @@ class COSStorageService(StorageService):
                 Body=handle,
                 ContentLength=content_length,
                 ContentType=resolved_type or "application/octet-stream",
-                ACL="public-read" if settings.COS_PUBLIC_READ else "private",
+                ACL="public-read" if self._public_read else "private",
             )
 
     @retry(

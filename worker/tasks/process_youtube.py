@@ -32,9 +32,9 @@ from worker.stage_manager import StageManager
 logger = logging.getLogger("worker.process_youtube")
 
 
-def _load_llm_model_id(provider: str) -> Optional[str]:
+def _load_llm_model_id(provider: str, user_id: Optional[str]) -> Optional[str]:
     try:
-        config = ConfigManager.get_config("llm", provider)
+        config = ConfigManager.get_config("llm", provider, user_id=user_id)
     except Exception:
         return None
     return getattr(config, "model", None)
@@ -50,17 +50,17 @@ def _select_default_llm_provider() -> str:
     return providers[0]
 
 
-def _resolve_llm_selection(task: Task) -> tuple[str, str]:
+def _resolve_llm_selection(task: Task, user_id: Optional[str]) -> tuple[str, str]:
     options = task.options or {}
     raw_provider = options.get("llm_provider") or options.get("provider")
     raw_model_id = options.get("llm_model_id") or options.get("model_id")
     provider = raw_provider if isinstance(raw_provider, str) else None
     model_id = raw_model_id if isinstance(raw_model_id, str) else None
     if provider:
-        model_id = model_id or _load_llm_model_id(provider) or provider
+        model_id = model_id or _load_llm_model_id(provider, user_id) or provider
         return provider, model_id
     provider = _select_default_llm_provider()
-    model_id = _load_llm_model_id(provider) or provider
+    model_id = _load_llm_model_id(provider, user_id) or provider
     return provider, model_id
 
 
@@ -562,8 +562,12 @@ def _process_youtube(
 
             # 双存储上传：同时上传到 COS 和 MinIO
             # 使用 SmartFactory 获取 storage 服务
-            cos_storage = asyncio.run(SmartFactory.get_service("storage", provider="cos"))
-            minio_storage = asyncio.run(SmartFactory.get_service("storage", provider="minio"))
+            cos_storage = asyncio.run(
+                SmartFactory.get_service("storage", provider="cos", user_id=str(task.user_id))
+            )
+            minio_storage = asyncio.run(
+                SmartFactory.get_service("storage", provider="minio", user_id=str(task.user_id))
+            )
 
             logger.info(
                 "Task %s: Uploading to COS (for ASR access)",
@@ -668,7 +672,11 @@ def _process_youtube(
                 audio_candidates = []
                 if task.source_key:
                     # 使用 SmartFactory 获取 COS storage
-                    cos_storage = asyncio.run(SmartFactory.get_service("storage", provider="cos"))
+                    cos_storage = asyncio.run(
+                        SmartFactory.get_service(
+                            "storage", provider="cos", user_id=str(task.user_id)
+                        )
+                    )
                     audio_url = cos_storage.generate_presigned_url(task.source_key, expires_in=7200)
                     audio_candidates.append(audio_url)
                 if direct_url:
@@ -681,7 +689,9 @@ def _process_youtube(
                 _update_task(session, task, "transcribing", 40, "transcribing", request_id)
                 stage_manager.start_stage(session, StageType.TRANSCRIBE)
                 # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
-                asr_service = asyncio.run(SmartFactory.get_service("asr"))
+                asr_service = asyncio.run(
+                    SmartFactory.get_service("asr", user_id=str(task.user_id))
+                )
                 last_error: Optional[BusinessError] = None
                 segments = []
 
@@ -809,9 +819,14 @@ def _process_youtube(
                 _update_task(session, task, "summarizing", 75, "summarizing", request_id)
                 stage_manager.start_stage(session, StageType.SUMMARIZE)
                 # 使用 SmartFactory 获取 LLM 服务（自动选择最优服务）
-                provider, model_id = _resolve_llm_selection(task)
+                provider, model_id = _resolve_llm_selection(task, str(task.user_id))
                 llm_service = asyncio.run(
-                    SmartFactory.get_service("llm", provider=provider, model_id=model_id)
+                    SmartFactory.get_service(
+                        "llm",
+                        provider=provider,
+                        model_id=model_id,
+                        user_id=str(task.user_id),
+                    )
                 )
                 full_text = "\n".join([seg.content for seg in segments])
                 logger.info(

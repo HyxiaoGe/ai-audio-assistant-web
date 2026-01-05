@@ -18,6 +18,7 @@ from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
 from app.services.asr.base import ASRService, TranscriptSegment
+from app.services.config_utils import get_config_value
 
 logger = logging.getLogger("app.services.asr.tencent")
 
@@ -40,15 +41,50 @@ class TencentASRService(ASRService):
     def provider(self) -> str:
         return "tencent"
 
-    def __init__(self) -> None:
-        secret_id = settings.TENCENT_SECRET_ID
-        secret_key = settings.TENCENT_SECRET_KEY
-        region = settings.TENCENT_REGION
+    def __init__(self, config: Optional[object] = None) -> None:
+        secret_id = get_config_value(config, "secret_id", settings.TENCENT_SECRET_ID)
+        secret_key = get_config_value(config, "secret_key", settings.TENCENT_SECRET_KEY)
+        region = get_config_value(config, "region", settings.TENCENT_REGION)
+        engine_model_type = get_config_value(
+            config, "engine_model_type", settings.TENCENT_ASR_ENGINE_MODEL_TYPE
+        )
+        channel_num = get_config_value(config, "channel_num", settings.TENCENT_ASR_CHANNEL_NUM)
+        res_text_format = get_config_value(
+            config, "res_text_format", settings.TENCENT_ASR_RES_TEXT_FORMAT
+        )
+        speaker_dia = get_config_value(config, "speaker_dia", settings.TENCENT_ASR_SPEAKER_DIA)
+        speaker_number = get_config_value(
+            config, "speaker_number", settings.TENCENT_ASR_SPEAKER_NUMBER
+        )
+        poll_interval = get_config_value(
+            config, "poll_interval", settings.TENCENT_ASR_POLL_INTERVAL
+        )
+        max_wait = get_config_value(config, "max_wait", settings.TENCENT_ASR_MAX_WAIT_SECONDS)
+        source_type = get_config_value(config, "source_type", settings.TENCENT_ASR_SOURCE_TYPE)
         if not secret_id or not secret_key or not region:
             raise RuntimeError("TENCENT_SECRET_ID/TENCENT_SECRET_KEY/TENCENT_REGION is not set")
+        if (
+            not engine_model_type
+            or channel_num is None
+            or res_text_format is None
+            or speaker_dia is None
+            or speaker_number is None
+            or poll_interval is None
+            or max_wait is None
+            or source_type is None
+        ):
+            raise RuntimeError("Tencent ASR settings are not set")
         self._secret_id = secret_id
         self._secret_key = secret_key
         self._region = region
+        self._engine_model_type = engine_model_type
+        self._channel_num = channel_num
+        self._res_text_format = res_text_format
+        self._speaker_dia = speaker_dia
+        self._speaker_number = speaker_number
+        self._poll_interval = poll_interval
+        self._max_wait = max_wait
+        self._source_type = source_type
 
     @monitor("asr", "tencent")
     async def transcribe(
@@ -73,21 +109,12 @@ class TencentASRService(ASRService):
         return asr_client.AsrClient(cred, self._region, client_profile)
 
     def _create_task(self, audio_url: str) -> str:
-        engine_model_type = settings.TENCENT_ASR_ENGINE_MODEL_TYPE
-        channel_num = settings.TENCENT_ASR_CHANNEL_NUM
-        source_type = settings.TENCENT_ASR_SOURCE_TYPE
-        res_text_format = settings.TENCENT_ASR_RES_TEXT_FORMAT
-        speaker_dia = settings.TENCENT_ASR_SPEAKER_DIA
-        speaker_number = settings.TENCENT_ASR_SPEAKER_NUMBER
-        if (
-            not engine_model_type
-            or channel_num is None
-            or source_type is None
-            or res_text_format is None
-            or speaker_dia is None
-            or speaker_number is None
-        ):
-            raise RuntimeError("Tencent ASR settings are not set")
+        engine_model_type = self._engine_model_type
+        channel_num = self._channel_num
+        source_type = self._source_type
+        res_text_format = self._res_text_format
+        speaker_dia = self._speaker_dia
+        speaker_number = self._speaker_number
 
         logger.info(f"ASR submitting with audio_url: {audio_url}")
 
@@ -96,17 +123,18 @@ class TencentASRService(ASRService):
         request.EngineModelType = engine_model_type
         request.ChannelNum = channel_num
         request.ResTextFormat = res_text_format
-        request.SourceType = 0  # 强制使用 URL 模式
+        request.SourceType = source_type
         request.Url = audio_url
         request.SpeakerDiarization = speaker_dia
         request.SpeakerNumber = speaker_number
 
         logger.info(
             "ASR request parameters: EngineModelType=%s, ChannelNum=%s, "
-            "ResTextFormat=%s, SourceType=0, SpeakerDiarization=%s, SpeakerNumber=%s",
+            "ResTextFormat=%s, SourceType=%s, SpeakerDiarization=%s, SpeakerNumber=%s",
             engine_model_type,
             channel_num,
             res_text_format,
+            source_type,
             speaker_dia,
             speaker_number,
         )
@@ -123,10 +151,8 @@ class TencentASRService(ASRService):
         return str(task_id)
 
     async def _poll_task(self, task_id: str) -> dict[str, object]:
-        poll_interval = settings.TENCENT_ASR_POLL_INTERVAL
-        max_wait = settings.TENCENT_ASR_MAX_WAIT_SECONDS
-        if not poll_interval or not max_wait:
-            raise RuntimeError("Tencent ASR polling settings are not set")
+        poll_interval = self._poll_interval
+        max_wait = self._max_wait
 
         logger.info(f"ASR polling task {task_id}: interval={poll_interval}s, max_wait={max_wait}s")
         deadline = time.time() + max_wait

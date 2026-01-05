@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Optional
 
 from pydantic import BaseModel, Field
 
+from app.core.config_manager import ConfigManager
 from app.core.cost_optimizer import CostOptimizer, CostOptimizerConfig, CostStrategy
 from app.core.health_checker import HealthChecker
 from app.core.load_balancer import (
@@ -23,6 +24,7 @@ from app.core.load_balancer import (
 )
 from app.core.monitoring import MonitoringSystem
 from app.core.registry import ServiceMetadata, ServiceRegistry
+from app.core.user_context import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -84,16 +86,20 @@ class SmartFactory:
         provider: Optional[str] = None,
         *,
         model_id: Optional[str] = None,
+        user_id: Optional[str] = None,
         request_params: Optional[Dict[str, Any]] = None,
         custom_scorer: Optional[Callable[[Any, ServiceMetadata], float]] = None,
     ) -> Any:
         instance = cls.get_instance()
 
+        if user_id is None:
+            user_id = get_current_user_id()
+
         if service_type == "llm" and not model_id:
             raise ValueError("model_id is required for llm services")
 
         if provider:
-            return await instance._get_specific_service(service_type, provider, model_id)
+            return await instance._get_specific_service(service_type, provider, model_id, user_id)
 
         strategy = strategy or instance._config.default_strategy
         selected_provider = await instance._select_service(
@@ -105,7 +111,9 @@ class SmartFactory:
         if not selected_provider:
             raise ValueError(f"No available {service_type} service found")
 
-        return await instance._get_specific_service(service_type, selected_provider, model_id)
+        return await instance._get_specific_service(
+            service_type, selected_provider, model_id, user_id
+        )
 
     async def _select_service(
         self,
@@ -272,18 +280,42 @@ class SmartFactory:
         return max(scores, key=scores.get) if scores else None
 
     async def _get_specific_service(
-        self, service_type: str, provider: str, model_id: Optional[str] = None
+        self,
+        service_type: str,
+        provider: str,
+        model_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Any:
-        # LLM/ASR 使用包含 model_id 的缓存键；其他类型使用 provider
-        cache_key = f"{provider}:{model_id}" if model_id else provider
+        # LLM/ASR 使用包含 model_id 的缓存键；用户配置需要区分 user_id
+        cache_parts = [provider]
+        if model_id:
+            cache_parts.append(model_id)
+        if user_id:
+            cache_parts.append(user_id)
+        cache_key = ":".join(cache_parts)
         cached = self._get_cached_service(service_type, cache_key)
         if cached is not None:
             return cached
 
-        if model_id is None:
-            service = ServiceRegistry.get(service_type, provider)
-        else:
-            service = ServiceRegistry.get(service_type, provider, model_id=model_id)
+        config = None
+        try:
+            config = ConfigManager.get_config(service_type, provider, user_id=user_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load config for %s/%s (user_id=%s): %s",
+                service_type,
+                provider,
+                user_id,
+                exc,
+            )
+
+        service = ServiceRegistry.get(
+            service_type,
+            provider,
+            force_new=config is not None or user_id is not None or model_id is not None,
+            model_id=model_id,
+            config=config,
+        )
         if not service:
             raise ValueError(f"Service {service_type}:{provider} not found in registry")
 

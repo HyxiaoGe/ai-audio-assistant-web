@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import tos
 from tos.exceptions import TosClientError, TosServerError
@@ -11,6 +11,7 @@ from app.config import settings
 from app.core.fault_tolerance import RetryConfig, retry
 from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
+from app.services.config_utils import get_config_value
 from app.services.storage.base import StorageService
 
 
@@ -32,12 +33,12 @@ class TOSStorageService(StorageService):
     def provider(self) -> str:
         return "tos"
 
-    def __init__(self) -> None:
-        access_key = settings.TOS_ACCESS_KEY
-        secret_key = settings.TOS_SECRET_KEY
-        endpoint = settings.TOS_ENDPOINT
-        region = settings.TOS_REGION
-        bucket = settings.TOS_BUCKET
+    def __init__(self, config: Optional[object] = None) -> None:
+        access_key = get_config_value(config, "access_key", settings.TOS_ACCESS_KEY)
+        secret_key = get_config_value(config, "secret_key", settings.TOS_SECRET_KEY)
+        endpoint = get_config_value(config, "endpoint", settings.TOS_ENDPOINT)
+        region = get_config_value(config, "region", settings.TOS_REGION)
+        bucket = get_config_value(config, "bucket", settings.TOS_BUCKET)
 
         if not access_key or not secret_key or not endpoint or not region or not bucket:
             raise RuntimeError(

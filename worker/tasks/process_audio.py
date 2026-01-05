@@ -48,16 +48,22 @@ async def async_session_factory():
         yield session
 
 
-async def get_asr_service() -> ASRService:
-    return await SmartFactory.get_service("asr")
+async def get_asr_service(user_id: Optional[str] = None) -> ASRService:
+    return await SmartFactory.get_service("asr", user_id=user_id)
 
 
-async def get_llm_service(provider: str, model_id: str) -> LLMService:
-    return await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
+async def get_llm_service(
+    provider: str, model_id: str, user_id: Optional[str] = None
+) -> LLMService:
+    return await SmartFactory.get_service(
+        "llm", provider=provider, model_id=model_id, user_id=user_id
+    )
 
 
-async def get_storage_service(provider: str = "cos") -> StorageService:
-    return await SmartFactory.get_service("storage", provider=provider)
+async def get_storage_service(
+    provider: str = "cos", user_id: Optional[str] = None
+) -> StorageService:
+    return await SmartFactory.get_service("storage", provider=provider, user_id=user_id)
 
 
 async def publish_message(channel: str, message: str) -> None:
@@ -89,9 +95,9 @@ async def _commit(session: Session) -> None:
         await result
 
 
-def _load_llm_model_id(provider: str) -> Optional[str]:
+def _load_llm_model_id(provider: str, user_id: Optional[str]) -> Optional[str]:
     try:
-        config = ConfigManager.get_config("llm", provider)
+        config = ConfigManager.get_config("llm", provider, user_id=user_id)
     except Exception:
         return None
     return getattr(config, "model", None)
@@ -107,17 +113,17 @@ def _select_default_llm_provider() -> str:
     return providers[0]
 
 
-def _resolve_llm_selection(task: Task) -> tuple[str, str]:
+def _resolve_llm_selection(task: Task, user_id: Optional[str]) -> tuple[str, str]:
     options = task.options or {}
     raw_provider = options.get("llm_provider") or options.get("provider")
     raw_model_id = options.get("llm_model_id") or options.get("model_id")
     provider = raw_provider if isinstance(raw_provider, str) else None
     model_id = raw_model_id if isinstance(raw_model_id, str) else None
     if provider:
-        model_id = model_id or _load_llm_model_id(provider) or provider
+        model_id = model_id or _load_llm_model_id(provider, user_id) or provider
         return provider, model_id
     provider = _select_default_llm_provider()
-    model_id = _load_llm_model_id(provider) or provider
+    model_id = _load_llm_model_id(provider, user_id) or provider
     return provider, model_id
 
 
@@ -263,7 +269,9 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
 
                     # 下载文件到临时目录（用于提取时长和上传到 MinIO）
                     # 使用 SmartFactory 获取 COS storage（异步调用）
-                    cos_storage: StorageService = await _maybe_await(get_storage_service())
+                    cos_storage: StorageService = await _maybe_await(
+                        get_storage_service(user_id=str(task.user_id))
+                    )
                     cos_storage_client = cast(Any, cos_storage)
                     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                         tmp_path = tmp_file.name
@@ -315,7 +323,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                         # 上传到 MinIO（用于前端播放）
                         # 使用 SmartFactory 获取 MinIO storage
                         minio_storage: StorageService = await _maybe_await(
-                            get_storage_service("minio")
+                            get_storage_service("minio", user_id=str(task.user_id))
                         )
                         logger.info(f"Uploading to MinIO: {task.source_key}")
                         minio_storage.upload_file(task.source_key, tmp_path, "audio/wav")
@@ -339,7 +347,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     )
                 # 使用 COS 存储生成带签名的 URL 供 ASR 访问
                 # 使用 SmartFactory 获取 COS storage
-                cos_storage = await _maybe_await(get_storage_service())
+                cos_storage = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
                 audio_candidates.append(
                     cos_storage.generate_presigned_url(task.source_key, expires_in)
                 )
@@ -352,7 +360,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                             ErrorCode.INVALID_PARAMETER, detail="upload_presign_expires"
                         )
                     # 使用 SmartFactory 获取 COS storage
-                    cos_storage = await _maybe_await(get_storage_service())
+                    cos_storage = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
                     audio_candidates.append(
                         cos_storage.generate_presigned_url(task.source_key, expires_in)
                     )
@@ -368,7 +376,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
 
             await _update_task(session, task, "transcribing", 40, "transcribing", request_id)
             # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
-            asr_service: ASRService = await _maybe_await(get_asr_service())
+            asr_service: ASRService = await _maybe_await(get_asr_service(str(task.user_id)))
             last_error: Optional[BusinessError] = None
             segments: list[TranscriptSegment] = []
 
@@ -451,8 +459,10 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
 
             await _update_task(session, task, "summarizing", 80, "summarizing", request_id)
             # 使用 SmartFactory 获取 LLM 服务（自动选择最优服务）
-            provider, model_id = _resolve_llm_selection(task)
-            llm_service: LLMService = await _maybe_await(get_llm_service(provider, model_id))
+            provider, model_id = _resolve_llm_selection(task, str(task.user_id))
+            llm_service: LLMService = await _maybe_await(
+                get_llm_service(provider, model_id, str(task.user_id))
+            )
             full_text = "\n".join([seg.content for seg in segments])
 
             options = task.options or {}

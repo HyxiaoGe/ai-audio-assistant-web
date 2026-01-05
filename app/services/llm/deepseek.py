@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 
@@ -14,6 +14,7 @@ from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
 from app.prompts import get_prompt_manager
+from app.services.config_utils import get_config_value
 from app.services.llm.base import LLMService
 
 
@@ -46,11 +47,13 @@ class DeepSeekLLMService(LLMService):
         ),
     )
 
-    def __init__(self) -> None:
-        api_key = settings.DEEPSEEK_API_KEY
-        base_url = settings.DEEPSEEK_BASE_URL or "https://api.deepseek.com"
-        model = settings.DEEPSEEK_MODEL or "deepseek-chat"
-        max_tokens = settings.DEEPSEEK_MAX_TOKENS or 4096
+    def __init__(self, config: Optional[object] = None) -> None:
+        api_key = get_config_value(config, "api_key", settings.DEEPSEEK_API_KEY)
+        base_url = get_config_value(
+            config, "base_url", settings.DEEPSEEK_BASE_URL or "https://api.deepseek.com"
+        )
+        model = get_config_value(config, "model", settings.DEEPSEEK_MODEL or "deepseek-chat")
+        max_tokens = get_config_value(config, "max_tokens", settings.DEEPSEEK_MAX_TOKENS or 4096)
 
         if not api_key:
             raise RuntimeError("DeepSeek settings are not set")

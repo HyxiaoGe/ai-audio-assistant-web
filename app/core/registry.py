@@ -155,6 +155,7 @@ class ServiceRegistry:
         name: str,
         force_new: bool = False,
         model_id: Optional[str] = None,
+        config: Optional[Any] = None,
     ) -> Any:
         """获取服务实例（单例模式）
 
@@ -165,6 +166,7 @@ class ServiceRegistry:
             name: 服务名称（如 "doubao", "tencent"）
             force_new: 是否强制创建新实例（默认 False，使用单例）
             model_id: 模型ID（用于支持同一 provider 下多个模型的场景）
+            config: 可选配置（用于用户级别配置覆盖）
 
         Returns:
             服务实例
@@ -190,9 +192,9 @@ class ServiceRegistry:
         with cls._lock:
             service_class, metadata, cached_instance = cls._services[service_type][name]
 
-            # 如果提供了 model_id，总是创建新实例（不使用缓存）
-            # 因为不同的 model_id 需要不同的实例
-            if model_id:
+            # 如果提供了 model_id 或 config，总是创建新实例（不使用缓存）
+            # 因为不同的 model_id 或配置需要不同实例
+            if model_id or config is not None:
                 force_new = True
 
             # 如果强制创建新实例或没有缓存实例，则创建
@@ -202,10 +204,12 @@ class ServiceRegistry:
                     import inspect
 
                     sig = inspect.signature(service_class.__init__)
+                    kwargs: dict[str, Any] = {}
                     if "model_id" in sig.parameters and model_id:
-                        instance = service_class(model_id=model_id)
-                    else:
-                        instance = service_class()
+                        kwargs["model_id"] = model_id
+                    if "config" in sig.parameters and config is not None:
+                        kwargs["config"] = config
+                    instance = service_class(**kwargs)
 
                     logger.debug(
                         f"Created new {service_type} service instance: {name}"

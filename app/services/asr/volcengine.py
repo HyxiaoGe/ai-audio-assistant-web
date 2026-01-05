@@ -15,6 +15,7 @@ from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
 from app.services.asr.base import ASRService, TranscriptSegment
+from app.services.config_utils import get_config_value
 
 logger = logging.getLogger("app.services.asr.volcengine")
 
@@ -41,10 +42,10 @@ class VolcengineASRService(ASRService):
     def provider(self) -> str:
         return "volcengine"
 
-    def __init__(self) -> None:
-        app_id = settings.VOLC_ASR_APP_ID
-        access_token = settings.VOLC_ASR_ACCESS_TOKEN
-        resource_id = settings.VOLC_ASR_RESOURCE_ID
+    def __init__(self, config: Optional[object] = None) -> None:
+        app_id = get_config_value(config, "app_id", settings.VOLC_ASR_APP_ID)
+        access_token = get_config_value(config, "access_token", settings.VOLC_ASR_ACCESS_TOKEN)
+        resource_id = get_config_value(config, "resource_id", settings.VOLC_ASR_RESOURCE_ID)
         if not app_id or not access_token or not resource_id:
             raise RuntimeError(
                 "VOLC_ASR_APP_ID/VOLC_ASR_ACCESS_TOKEN/VOLC_ASR_RESOURCE_ID is not set"
@@ -53,19 +54,25 @@ class VolcengineASRService(ASRService):
         self._app_id = app_id
         self._access_token = access_token
         self._resource_id = resource_id
-        self._model_name = settings.VOLC_ASR_MODEL_NAME or "bigmodel"
-        self._model_version = settings.VOLC_ASR_MODEL_VERSION
-        self._language = settings.VOLC_ASR_LANGUAGE
-        self._enable_itn = (
-            settings.VOLC_ASR_ENABLE_ITN if settings.VOLC_ASR_ENABLE_ITN is not None else True
+        self._model_name = get_config_value(
+            config, "model_name", settings.VOLC_ASR_MODEL_NAME or "bigmodel"
         )
-        self._show_utterances = (
-            settings.VOLC_ASR_SHOW_UTTERANCES
-            if settings.VOLC_ASR_SHOW_UTTERANCES is not None
-            else True
+        self._model_version = get_config_value(
+            config, "model_version", settings.VOLC_ASR_MODEL_VERSION
         )
-        self._poll_interval = settings.VOLC_ASR_POLL_INTERVAL or 3
-        self._max_wait = settings.VOLC_ASR_MAX_WAIT_SECONDS or 600
+        self._language = get_config_value(config, "language", settings.VOLC_ASR_LANGUAGE)
+        enable_itn_value = get_config_value(config, "enable_itn", settings.VOLC_ASR_ENABLE_ITN)
+        self._enable_itn = enable_itn_value if enable_itn_value is not None else True
+        show_utterances_value = get_config_value(
+            config, "show_utterances", settings.VOLC_ASR_SHOW_UTTERANCES
+        )
+        self._show_utterances = show_utterances_value if show_utterances_value is not None else True
+        self._poll_interval = get_config_value(
+            config, "poll_interval", settings.VOLC_ASR_POLL_INTERVAL or 3
+        )
+        self._max_wait = get_config_value(
+            config, "max_wait", settings.VOLC_ASR_MAX_WAIT_SECONDS or 600
+        )
 
     @monitor("asr", "volcengine")
     async def transcribe(

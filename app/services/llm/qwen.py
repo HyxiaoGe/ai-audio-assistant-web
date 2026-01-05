@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 
@@ -14,6 +14,7 @@ from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
 from app.prompts import get_prompt_manager
+from app.services.config_utils import get_config_value
 from app.services.llm.base import LLMService
 
 
@@ -46,9 +47,9 @@ class QwenLLMService(LLMService):
         ),
     )
 
-    def __init__(self) -> None:
-        api_key = settings.QWEN_API_KEY
-        model = settings.QWEN_MODEL or "qwen2.5-72b-instruct"
+    def __init__(self, config: Optional[object] = None) -> None:
+        api_key = get_config_value(config, "api_key", settings.QWEN_API_KEY)
+        model = get_config_value(config, "model", settings.QWEN_MODEL or "qwen2.5-72b-instruct")
 
         if not api_key:
             raise RuntimeError("Qwen settings are not set")

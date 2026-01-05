@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 
@@ -12,6 +12,7 @@ from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
 from app.prompts import get_prompt_manager
+from app.services.config_utils import get_config_value
 from app.services.llm.base import LLMService
 
 
@@ -40,11 +41,11 @@ class DoubaoLLMService(LLMService):
         ),
     )
 
-    def __init__(self) -> None:
-        api_key = settings.DOUBAO_API_KEY
-        base_url = settings.DOUBAO_BASE_URL
-        model = settings.DOUBAO_MODEL
-        max_tokens = settings.DOUBAO_MAX_TOKENS
+    def __init__(self, config: Optional[object] = None) -> None:
+        api_key = get_config_value(config, "api_key", settings.DOUBAO_API_KEY)
+        base_url = get_config_value(config, "base_url", settings.DOUBAO_BASE_URL)
+        model = get_config_value(config, "model", settings.DOUBAO_MODEL)
+        max_tokens = get_config_value(config, "max_tokens", settings.DOUBAO_MAX_TOKENS)
         if not api_key or not base_url or not model or not max_tokens:
             raise RuntimeError("Doubao settings are not set")
         self._api_key = api_key

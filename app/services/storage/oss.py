@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import oss2
 from oss2.exceptions import NoSuchKey, OssError
@@ -12,6 +12,7 @@ from app.config import settings
 from app.core.fault_tolerance import RetryConfig, retry
 from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
+from app.services.config_utils import get_config_value
 from app.services.storage.base import StorageService
 
 
@@ -38,13 +39,15 @@ class OSSStorageService(StorageService):
     def provider(self) -> str:
         return "oss"
 
-    def __init__(self) -> None:
-        endpoint = settings.OSS_ENDPOINT
-        region = settings.OSS_REGION
-        access_key_id = settings.ALIYUN_ACCESS_KEY_ID
-        access_key_secret = settings.ALIYUN_ACCESS_KEY_SECRET
-        bucket_name = settings.OSS_BUCKET
-        use_ssl = settings.OSS_USE_SSL
+    def __init__(self, config: Optional[object] = None) -> None:
+        endpoint = get_config_value(config, "endpoint", settings.OSS_ENDPOINT)
+        region = get_config_value(config, "region", settings.OSS_REGION)
+        access_key_id = get_config_value(config, "access_key_id", settings.ALIYUN_ACCESS_KEY_ID)
+        access_key_secret = get_config_value(
+            config, "access_key_secret", settings.ALIYUN_ACCESS_KEY_SECRET
+        )
+        bucket_name = get_config_value(config, "bucket", settings.OSS_BUCKET)
+        use_ssl = get_config_value(config, "use_ssl", settings.OSS_USE_SSL)
 
         if not endpoint or not access_key_id or not access_key_secret or not bucket_name:
             raise RuntimeError(

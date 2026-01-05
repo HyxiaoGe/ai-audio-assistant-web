@@ -8,6 +8,8 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.core.response import reset_request_id, set_request_id
+from app.core.security import decode_access_token, extract_bearer_token
+from app.core.user_context import reset_current_user_id, set_current_user_id
 
 logger = logging.getLogger("app.middleware")
 
@@ -55,3 +57,23 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             trace_id,
         )
         return response
+
+
+class UserContextMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        authorization = request.headers.get("Authorization")
+        token_handle = None
+        if authorization:
+            try:
+                token = extract_bearer_token(authorization)
+                payload = decode_access_token(token)
+                subject = payload.get("sub")
+                if isinstance(subject, str) and subject:
+                    token_handle = set_current_user_id(subject)
+            except Exception:
+                token_handle = None
+        try:
+            return await call_next(request)
+        finally:
+            if token_handle is not None:
+                reset_current_user_id(token_handle)

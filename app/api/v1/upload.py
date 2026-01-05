@@ -63,9 +63,9 @@ def _build_file_key(filename: str, user_id: str) -> str:
     return f"upload/{user_id}/{now:%Y/%m/%d}/{file_id}{ext}"
 
 
-async def _build_upload_url(file_key: str, expires_in: int) -> str:
+async def _build_upload_url(file_key: str, expires_in: int, user_id: str) -> str:
     # 使用 SmartFactory 获取 storage 服务（默认使用 COS）
-    storage = await SmartFactory.get_service("storage", provider="cos")
+    storage = await SmartFactory.get_service("storage", provider="cos", user_id=user_id)
     return storage.presign_put_object(file_key, expires_in)
 
 
@@ -103,7 +103,7 @@ async def presign_upload(
 
     expires_in = _get_presign_expires()
     file_key = _build_file_key(data.filename, user.id)
-    upload_url = await _build_upload_url(file_key, expires_in)
+    upload_url = await _build_upload_url(file_key, expires_in, user.id)
 
     return success(
         data={

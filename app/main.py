@@ -8,7 +8,12 @@ from app.config import settings
 from app.core.config_manager import ConfigManager
 from app.core.exceptions import BusinessError
 from app.core.i18n import get_message
-from app.core.middleware import LocaleMiddleware, LoggingMiddleware, RequestIDMiddleware
+from app.core.middleware import (
+    LocaleMiddleware,
+    LoggingMiddleware,
+    RequestIDMiddleware,
+    UserContextMiddleware,
+)
 from app.core.monitoring import MonitoringSystem
 from app.core.response import error
 from app.core.smart_factory import SelectionStrategy, SmartFactory, SmartFactoryConfig
@@ -46,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(LocaleMiddleware)
+    app.add_middleware(UserContextMiddleware)
     app.add_middleware(LoggingMiddleware)
 
     @app.on_event("startup")

@@ -18,6 +18,7 @@ from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
 from app.services.asr.base import ASRService, TranscriptSegment
+from app.services.config_utils import get_config_value
 
 logger = logging.getLogger("app.services.asr.aliyun")
 
@@ -45,9 +46,11 @@ class AliyunASRService(ASRService):
     def provider(self) -> str:
         return "aliyun"
 
-    def __init__(self) -> None:
-        access_key_id = settings.ALIYUN_ACCESS_KEY_ID
-        access_key_secret = settings.ALIYUN_ACCESS_KEY_SECRET
+    def __init__(self, config: Optional[object] = None) -> None:
+        access_key_id = get_config_value(config, "access_key_id", settings.ALIYUN_ACCESS_KEY_ID)
+        access_key_secret = get_config_value(
+            config, "access_key_secret", settings.ALIYUN_ACCESS_KEY_SECRET
+        )
 
         if not access_key_id or not access_key_secret:
             raise RuntimeError("ALIYUN_ACCESS_KEY_ID or ALIYUN_ACCESS_KEY_SECRET is not set")

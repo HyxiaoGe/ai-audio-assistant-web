@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 from datetime import timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from minio import Minio
 from minio.error import S3Error
@@ -11,6 +11,7 @@ from app.config import settings
 from app.core.fault_tolerance import RetryConfig, retry
 from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
+from app.services.config_utils import get_config_value
 from app.services.storage.base import StorageService
 
 
@@ -29,30 +30,31 @@ class MinioStorageService(StorageService):
     def provider(self) -> str:
         return "minio"
 
-    def __init__(self) -> None:
-        endpoint = settings.MINIO_ENDPOINT
-        access_key = settings.MINIO_ACCESS_KEY
-        secret_key = settings.MINIO_SECRET_KEY
-        use_ssl = settings.MINIO_USE_SSL
+    def __init__(self, config: Optional[object] = None) -> None:
+        endpoint = get_config_value(config, "endpoint", settings.MINIO_ENDPOINT)
+        access_key = get_config_value(config, "access_key", settings.MINIO_ACCESS_KEY)
+        secret_key = get_config_value(config, "secret_key", settings.MINIO_SECRET_KEY)
+        use_ssl = get_config_value(config, "use_ssl", settings.MINIO_USE_SSL)
+        bucket = get_config_value(config, "bucket", settings.MINIO_BUCKET)
         if not endpoint or not access_key or not secret_key or use_ssl is None:
             raise RuntimeError("MinIO settings are not set")
+        if not bucket:
+            raise RuntimeError("MINIO_BUCKET is not set")
         self._client = Minio(
             endpoint=endpoint,
             access_key=access_key,
             secret_key=secret_key,
             secure=bool(use_ssl),
         )
+        self._bucket = bucket
 
     @retry(
         RetryConfig(max_attempts=3, initial_delay=0.5, max_delay=5.0),
         exceptions=(S3Error, ConnectionError, TimeoutError),
     )
     def presign_put_object(self, object_name: str, expires_in: int) -> str:
-        bucket = settings.MINIO_BUCKET
-        if not bucket:
-            raise RuntimeError("MINIO_BUCKET is not set")
         return self._client.presigned_put_object(
-            bucket_name=bucket,
+            bucket_name=self._bucket,
             object_name=object_name,
             expires=timedelta(seconds=expires_in),
         )
@@ -63,11 +65,8 @@ class MinioStorageService(StorageService):
         exceptions=(S3Error, ConnectionError, TimeoutError),
     )
     def generate_presigned_url(self, object_name: str, expires_in: int) -> str:
-        bucket = settings.MINIO_BUCKET
-        if not bucket:
-            raise RuntimeError("MINIO_BUCKET is not set")
         return self._client.presigned_get_object(
-            bucket_name=bucket,
+            bucket_name=self._bucket,
             object_name=object_name,
             expires=timedelta(seconds=expires_in),
         )
@@ -80,12 +79,9 @@ class MinioStorageService(StorageService):
     def upload_file(
         self, object_name: str, file_path: str, content_type: str | None = None
     ) -> None:
-        bucket = settings.MINIO_BUCKET
-        if not bucket:
-            raise RuntimeError("MINIO_BUCKET is not set")
         resolved_type = content_type or mimetypes.guess_type(file_path)[0]
         self._client.fput_object(
-            bucket_name=bucket,
+            bucket_name=self._bucket,
             object_name=object_name,
             file_path=file_path,
             content_type=resolved_type or "application/octet-stream",
@@ -101,10 +97,7 @@ class MinioStorageService(StorageService):
         Args:
             object_name: 对象名称（文件路径）
         """
-        bucket = settings.MINIO_BUCKET
-        if not bucket:
-            raise RuntimeError("MINIO_BUCKET is not set")
-        self._client.remove_object(bucket_name=bucket, object_name=object_name)
+        self._client.remove_object(bucket_name=self._bucket, object_name=object_name)
 
     def file_exists(self, object_name: str) -> bool:
         """检查文件是否存在
@@ -115,11 +108,8 @@ class MinioStorageService(StorageService):
         Returns:
             True 如果文件存在，否则 False
         """
-        bucket = settings.MINIO_BUCKET
-        if not bucket:
-            raise RuntimeError("MINIO_BUCKET is not set")
         try:
-            self._client.stat_object(bucket_name=bucket, object_name=object_name)
+            self._client.stat_object(bucket_name=self._bucket, object_name=object_name)
             return True
         except S3Error as e:
             if e.code == "NoSuchKey":
@@ -135,10 +125,7 @@ class MinioStorageService(StorageService):
         Returns:
             文件元数据字典
         """
-        bucket = settings.MINIO_BUCKET
-        if not bucket:
-            raise RuntimeError("MINIO_BUCKET is not set")
-        stat = self._client.stat_object(bucket_name=bucket, object_name=object_name)
+        stat = self._client.stat_object(bucket_name=self._bucket, object_name=object_name)
         return {
             "object_name": stat.object_name,
             "size": stat.size,
@@ -184,15 +171,12 @@ class MinioStorageService(StorageService):
             src: 源文件路径
             dst: 目标文件路径
         """
-        bucket = settings.MINIO_BUCKET
-        if not bucket:
-            raise RuntimeError("MINIO_BUCKET is not set")
         from minio.commonconfig import CopySource
 
         self._client.copy_object(
-            bucket_name=bucket,
+            bucket_name=self._bucket,
             object_name=dst,
-            source=CopySource(bucket, src),
+            source=CopySource(self._bucket, src),
         )
 
     @retry(

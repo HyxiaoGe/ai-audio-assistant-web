@@ -14,6 +14,7 @@ from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
 from app.prompts import get_prompt_manager
+from app.services.config_utils import get_config_value
 from app.services.llm.base import LLMService
 
 
@@ -43,13 +44,17 @@ class OpenRouterLLMService(LLMService):
         ),
     )
 
-    def __init__(self, model_id: Optional[str] = None) -> None:
-        api_key = settings.OPENROUTER_API_KEY
-        base_url = settings.OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1"
-        model = model_id or settings.OPENROUTER_MODEL
-        max_tokens = settings.OPENROUTER_MAX_TOKENS or 4096
-        http_referer = settings.OPENROUTER_HTTP_REFERER or settings.API_BASE_URL
-        app_title = settings.OPENROUTER_APP_TITLE
+    def __init__(self, model_id: Optional[str] = None, config: Optional[object] = None) -> None:
+        api_key = get_config_value(config, "api_key", settings.OPENROUTER_API_KEY)
+        base_url = get_config_value(
+            config, "base_url", settings.OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1"
+        )
+        model = model_id or get_config_value(config, "model", settings.OPENROUTER_MODEL)
+        max_tokens = get_config_value(config, "max_tokens", settings.OPENROUTER_MAX_TOKENS or 4096)
+        http_referer = get_config_value(
+            config, "http_referer", settings.OPENROUTER_HTTP_REFERER or settings.API_BASE_URL
+        )
+        app_title = get_config_value(config, "app_title", settings.OPENROUTER_APP_TITLE)
 
         if not api_key:
             raise RuntimeError("OpenRouter API key is not set")
