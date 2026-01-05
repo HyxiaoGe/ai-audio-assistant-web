@@ -15,13 +15,18 @@ class ServiceConfig(BaseRecord):
         UniqueConstraint(
             "service_type",
             "provider",
-            name="uk_service_configs_type_provider",
+            "owner_user_id",
+            name="uk_service_configs_type_provider_owner",
         ),
         Index("idx_service_configs_type", "service_type"),
+        Index("idx_service_configs_owner", "owner_user_id"),
     )
 
     service_type: Mapped[str] = mapped_column(String(20), nullable=False)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    owner_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     config: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

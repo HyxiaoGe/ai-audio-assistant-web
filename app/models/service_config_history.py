@@ -12,11 +12,20 @@ from app.models.base import BaseRecord
 class ServiceConfigHistory(BaseRecord):
     __tablename__ = "service_config_history"
     __table_args__ = (
-        Index("idx_service_config_history_key", "service_type", "provider", "version"),
+        Index(
+            "idx_service_config_history_key",
+            "service_type",
+            "provider",
+            "owner_user_id",
+            "version",
+        ),
     )
 
     service_type: Mapped[str] = mapped_column(String(20), nullable=False)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    owner_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     config: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")

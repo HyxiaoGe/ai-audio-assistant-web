@@ -112,6 +112,18 @@ class ConfigManager:
         "storage": {},
     }
 
+    _user_configs: Dict[str, Dict[str, Dict[str, ServiceConfig]]] = {
+        "llm": {},
+        "asr": {},
+        "storage": {},
+    }
+
+    _user_timestamps: Dict[str, Dict[str, Dict[str, float]]] = {
+        "llm": {},
+        "asr": {},
+        "storage": {},
+    }
+
     _db_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
     _cache_ttl_seconds: int = 0
 
@@ -269,7 +281,10 @@ class ConfigManager:
 
     @classmethod
     async def refresh_from_db(
-        cls, service_type: Optional[str] = None, name: Optional[str] = None
+        cls,
+        service_type: Optional[str] = None,
+        name: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> None:
         if not settings.CONFIG_CENTER_DB_ENABLED or cls._db_session_factory is None:
             return
@@ -277,10 +292,12 @@ class ConfigManager:
         try:
             async with cls._db_session_factory() as session:
                 if service_type and name:
-                    await cls._refresh_single_config(session, service_type, name)
+                    await cls._refresh_single_config(session, service_type, name, user_id)
                     return
 
                 stmt = select(ServiceConfigRecord)
+                if user_id:
+                    stmt = stmt.where(ServiceConfigRecord.owner_user_id == user_id)
                 records = (await session.execute(stmt)).scalars().all()
                 for record in records:
                     await cls._cache_record(record)
@@ -293,6 +310,7 @@ class ConfigManager:
         service_type: str,
         name: str,
         reload: bool = False,
+        user_id: Optional[str] = None,
     ) -> ServiceConfig:
         """获取服务配置（自动从 settings 加载和验证）
 
@@ -323,16 +341,21 @@ class ConfigManager:
                 f"No config schema registered for {service_type}/{name}. " f"Available: {available}"
             )
 
+        if user_id:
+            user_config = cls._get_user_cached(service_type, name, user_id, reload)
+            if user_config is not None:
+                return user_config
+
         with cls._lock:
             cached = cls._configs[service_type].get(name)
             if cached and not reload:
                 if cls._is_cache_fresh(service_type, name):
                     return cached
-                cls._schedule_refresh(service_type, name)
+                cls._schedule_refresh(service_type, name, None)
                 return cached
 
             if settings.CONFIG_CENTER_DB_ENABLED and cls._db_session_factory:
-                loaded = cls._load_config_from_db_sync(service_type, name)
+                loaded = cls._load_config_from_db_sync(service_type, name, None)
                 if loaded is not None:
                     return loaded
 
@@ -340,7 +363,7 @@ class ConfigManager:
             config_data = cls._load_config_from_settings(service_type, name)
             try:
                 config_instance = config_class(**config_data)
-                cls._cache_config(service_type, name, config_instance)
+                cls._cache_config(service_type, name, config_instance, None)
                 logger.debug(f"Loaded and validated config for {service_type}/{name}")
             except ValidationError as exc:
                 logger.error(
@@ -421,21 +444,33 @@ class ConfigManager:
                 if service_type in cls._configs:
                     cls._configs[service_type].clear()
                     cls._config_timestamps[service_type].clear()
+                    cls._user_configs[service_type].clear()
+                    cls._user_timestamps[service_type].clear()
                     logger.info(f"Cleared all {service_type} configs")
             else:
                 for svc_type in cls._configs:
                     cls._configs[svc_type].clear()
                     cls._config_timestamps[svc_type].clear()
+                    cls._user_configs[svc_type].clear()
+                    cls._user_timestamps[svc_type].clear()
                 logger.info("Cleared all configs")
 
     @classmethod
     async def _refresh_single_config(
-        cls, session: AsyncSession, service_type: str, name: str
+        cls,
+        session: AsyncSession,
+        service_type: str,
+        name: str,
+        user_id: Optional[str],
     ) -> None:
         stmt = select(ServiceConfigRecord).where(
             ServiceConfigRecord.service_type == service_type,
             ServiceConfigRecord.provider == name,
         )
+        if user_id is None:
+            stmt = stmt.where(ServiceConfigRecord.owner_user_id.is_(None))
+        else:
+            stmt = stmt.where(ServiceConfigRecord.owner_user_id == user_id)
         record = (await session.execute(stmt)).scalar_one_or_none()
         if record is None:
             return
@@ -445,6 +480,7 @@ class ConfigManager:
     async def _cache_record(cls, record: ServiceConfigRecord) -> None:
         service_type = record.service_type
         provider = record.provider
+        owner_user_id = record.owner_user_id
         config_class = cls._schemas.get(service_type, {}).get(provider)
         if config_class is None:
             return
@@ -460,10 +496,20 @@ class ConfigManager:
                 exc,
             )
             return
-        cls._cache_config(service_type, provider, instance)
+        cls._cache_config(service_type, provider, instance, owner_user_id)
 
     @classmethod
-    def _cache_config(cls, service_type: str, name: str, config: ServiceConfig) -> None:
+    def _cache_config(
+        cls,
+        service_type: str,
+        name: str,
+        config: ServiceConfig,
+        user_id: Optional[str],
+    ) -> None:
+        if user_id:
+            cls._user_configs[service_type].setdefault(user_id, {})[name] = config
+            cls._user_timestamps[service_type].setdefault(user_id, {})[name] = time.time()
+            return
         cls._configs[service_type][name] = config
         cls._config_timestamps[service_type][name] = time.time()
 
@@ -477,32 +523,57 @@ class ConfigManager:
         return (time.time() - cached_at) <= cls._cache_ttl_seconds
 
     @classmethod
-    def _schedule_refresh(cls, service_type: str, name: str) -> None:
+    def _is_user_cache_fresh(cls, service_type: str, name: str, user_id: str) -> bool:
+        if cls._cache_ttl_seconds <= 0:
+            return True
+        cached_at = cls._user_timestamps.get(service_type, {}).get(user_id, {}).get(name)
+        if not cached_at:
+            return False
+        return (time.time() - cached_at) <= cls._cache_ttl_seconds
+
+    @classmethod
+    def _schedule_refresh(cls, service_type: str, name: str, user_id: Optional[str]) -> None:
         if not settings.CONFIG_CENTER_DB_ENABLED or cls._db_session_factory is None:
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        loop.create_task(cls.refresh_from_db(service_type, name))
+        loop.create_task(cls.refresh_from_db(service_type, name, user_id=user_id))
 
     @classmethod
-    def _load_config_from_db_sync(cls, service_type: str, name: str) -> Optional[ServiceConfig]:
+    def _load_config_from_db_sync(
+        cls, service_type: str, name: str, user_id: Optional[str]
+    ) -> Optional[ServiceConfig]:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(cls._load_config_from_db(service_type, name))
+            return asyncio.run(cls._load_config_from_db(service_type, name, user_id))
         return None
 
     @classmethod
-    async def _load_config_from_db(cls, service_type: str, name: str) -> Optional[ServiceConfig]:
+    async def _load_config_from_db(
+        cls, service_type: str, name: str, user_id: Optional[str]
+    ) -> Optional[ServiceConfig]:
         if cls._db_session_factory is None:
             return None
         try:
             async with cls._db_session_factory() as session:
+                if user_id:
+                    stmt = select(ServiceConfigRecord).where(
+                        ServiceConfigRecord.service_type == service_type,
+                        ServiceConfigRecord.provider == name,
+                        ServiceConfigRecord.owner_user_id == user_id,
+                    )
+                    record = (await session.execute(stmt)).scalar_one_or_none()
+                    if record:
+                        await cls._cache_record(record)
+                        return cls._user_configs.get(service_type, {}).get(user_id, {}).get(name)
+
                 stmt = select(ServiceConfigRecord).where(
                     ServiceConfigRecord.service_type == service_type,
                     ServiceConfigRecord.provider == name,
+                    ServiceConfigRecord.owner_user_id.is_(None),
                 )
                 record = (await session.execute(stmt)).scalar_one_or_none()
                 if record is None:
@@ -512,6 +583,25 @@ class ConfigManager:
         except SQLAlchemyError as exc:
             logger.warning("Config DB lookup skipped: %s", exc)
             return None
+
+    @classmethod
+    def _get_user_cached(
+        cls, service_type: str, name: str, user_id: str, reload: bool
+    ) -> Optional[ServiceConfig]:
+        with cls._lock:
+            cached = cls._user_configs.get(service_type, {}).get(user_id, {}).get(name)
+            if cached and not reload:
+                if cls._is_user_cache_fresh(service_type, name, user_id):
+                    return cached
+                cls._schedule_refresh(service_type, name, user_id)
+                return cached
+
+            if settings.CONFIG_CENTER_DB_ENABLED and cls._db_session_factory:
+                loaded = cls._load_config_from_db_sync(service_type, name, user_id)
+                if loaded is not None:
+                    return loaded
+
+        return None
 
     @classmethod
     def _load_config_from_settings(
