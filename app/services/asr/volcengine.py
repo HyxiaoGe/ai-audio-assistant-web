@@ -192,7 +192,9 @@ class VolcengineASRService(ASRService):
         suffix = parsed.path.rsplit(".", 1)[-1].lower() if "." in parsed.path else ""
         if suffix in _SUPPORTED_FORMATS:
             return suffix
-        raise BusinessError(ErrorCode.UNSUPPORTED_FILE_FORMAT, allowed=", ".join(_SUPPORTED_FORMATS))
+        raise BusinessError(
+            ErrorCode.UNSUPPORTED_FILE_FORMAT, allowed=", ".join(_SUPPORTED_FORMATS)
+        )
 
     def _parse_result(self, payload: dict[str, object]) -> list[TranscriptSegment]:
         result = payload.get("result")
