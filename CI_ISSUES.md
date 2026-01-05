@@ -38,6 +38,12 @@ Context:
 - Recommended fix: run `black` and commit formatting changes.
 - Status: Ran `black app/ worker/ tests/`; formatting now passes locally.
 
+3) Black formatting failure on Volcengine ASR
+- Symptom: CI `black` reformatted `app/services/asr/volcengine.py`.
+- Impact: CI format check fails.
+- Recommended fix: apply Black formatting and commit.
+- Status: Fixed and committed (`chore: format volcengine asr`).
+
 3) isort import order failures
 - Symptom: `isort --check-only` reports multiple files with incorrect import order.
 - Impact: CI import sorting check fails.
@@ -72,4 +78,5 @@ Context:
   - Status: Replaced with `inspect.iscoroutinefunction` in `app/core/fault_tolerance.py`.
 - Aliyun ASR/OSS dependencies (`dashscope`, `oss2`) are now explicit in `pyproject.toml`; optional imports were reverted to strict imports.
 - Full test run passes after installing new dependencies.
+- Volcengine ASR + TOS smoke tests passed (presigned PUT/GET and ASR transcription).
 - After each fix, update this document to mark items resolved and any remaining sub-issues.
