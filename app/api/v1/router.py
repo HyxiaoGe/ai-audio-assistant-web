@@ -2,6 +2,7 @@
 
 from app.api.v1 import (
     auth,
+    config_center,
     health,
     llm,
     media,
@@ -16,6 +17,7 @@ from app.api.v1 import (
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
+api_router.include_router(config_center.router)
 api_router.include_router(health.router)
 api_router.include_router(llm.router)
 api_router.include_router(upload.router)

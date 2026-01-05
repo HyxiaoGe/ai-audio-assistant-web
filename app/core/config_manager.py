@@ -18,13 +18,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from threading import Lock
 from typing import Any, Dict, Optional, Type
 
 from pydantic import BaseModel, ConfigDict, ValidationError
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import settings
+from app.models.service_config import ServiceConfig as ServiceConfigRecord
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +105,15 @@ class ConfigManager:
         "asr": {},
         "storage": {},
     }
+
+    _config_timestamps: Dict[str, Dict[str, float]] = {
+        "llm": {},
+        "asr": {},
+        "storage": {},
+    }
+
+    _db_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+    _cache_ttl_seconds: int = 0
 
     # 线程锁：确保注册和加载过程线程安全
     _lock = Lock()
@@ -244,6 +259,35 @@ class ConfigManager:
             )
 
     @classmethod
+    def configure_db(
+        cls,
+        session_factory: async_sessionmaker[AsyncSession],
+        cache_ttl_seconds: int = 60,
+    ) -> None:
+        cls._db_session_factory = session_factory
+        cls._cache_ttl_seconds = max(0, cache_ttl_seconds)
+
+    @classmethod
+    async def refresh_from_db(
+        cls, service_type: Optional[str] = None, name: Optional[str] = None
+    ) -> None:
+        if not settings.CONFIG_CENTER_DB_ENABLED or cls._db_session_factory is None:
+            return
+
+        try:
+            async with cls._db_session_factory() as session:
+                if service_type and name:
+                    await cls._refresh_single_config(session, service_type, name)
+                    return
+
+                stmt = select(ServiceConfigRecord)
+                records = (await session.execute(stmt)).scalars().all()
+                for record in records:
+                    await cls._cache_record(record)
+        except SQLAlchemyError as exc:
+            logger.warning("Config DB refresh skipped: %s", exc)
+
+    @classmethod
     def get_config(
         cls,
         service_type: str,
@@ -280,24 +324,30 @@ class ConfigManager:
             )
 
         with cls._lock:
-            # 如果强制重新加载或没有缓存，则加载配置
-            if reload or name not in cls._configs[service_type]:
-                config_class = cls._schemas[service_type][name]
+            cached = cls._configs[service_type].get(name)
+            if cached and not reload:
+                if cls._is_cache_fresh(service_type, name):
+                    return cached
+                cls._schedule_refresh(service_type, name)
+                return cached
 
-                # 从配置加载器加载配置
-                config_data = cls._load_config_from_settings(service_type, name)
+            if settings.CONFIG_CENTER_DB_ENABLED and cls._db_session_factory:
+                loaded = cls._load_config_from_db_sync(service_type, name)
+                if loaded is not None:
+                    return loaded
 
-                # 验证并创建配置实例
-                try:
-                    config_instance = config_class(**config_data)
-                    cls._configs[service_type][name] = config_instance
-                    logger.debug(f"Loaded and validated config for {service_type}/{name}")
-                except ValidationError as exc:
-                    logger.error(
-                        f"Config validation failed for {service_type}/{name}: {exc}",
-                        exc_info=True,
-                    )
-                    raise
+            config_class = cls._schemas[service_type][name]
+            config_data = cls._load_config_from_settings(service_type, name)
+            try:
+                config_instance = config_class(**config_data)
+                cls._cache_config(service_type, name, config_instance)
+                logger.debug(f"Loaded and validated config for {service_type}/{name}")
+            except ValidationError as exc:
+                logger.error(
+                    f"Config validation failed for {service_type}/{name}: {exc}",
+                    exc_info=True,
+                )
+                raise
 
             return cls._configs[service_type][name]
 
@@ -318,6 +368,15 @@ class ConfigManager:
         except (ValueError, ValidationError) as exc:
             logger.warning(f"Config validation failed for {service_type}/{name}: {exc}")
             return False
+
+    @classmethod
+    def validate_config_data(
+        cls, service_type: str, name: str, data: Dict[str, Any]
+    ) -> ServiceConfig:
+        if service_type not in cls._schemas or name not in cls._schemas[service_type]:
+            raise ValueError(f"Unknown config schema for {service_type}/{name}")
+        config_class = cls._schemas[service_type][name]
+        return config_class(**data)
 
     @classmethod
     def is_schema_registered(cls, service_type: str, name: str) -> bool:
@@ -361,11 +420,98 @@ class ConfigManager:
             if service_type:
                 if service_type in cls._configs:
                     cls._configs[service_type].clear()
+                    cls._config_timestamps[service_type].clear()
                     logger.info(f"Cleared all {service_type} configs")
             else:
                 for svc_type in cls._configs:
                     cls._configs[svc_type].clear()
+                    cls._config_timestamps[svc_type].clear()
                 logger.info("Cleared all configs")
+
+    @classmethod
+    async def _refresh_single_config(
+        cls, session: AsyncSession, service_type: str, name: str
+    ) -> None:
+        stmt = select(ServiceConfigRecord).where(
+            ServiceConfigRecord.service_type == service_type,
+            ServiceConfigRecord.provider == name,
+        )
+        record = (await session.execute(stmt)).scalar_one_or_none()
+        if record is None:
+            return
+        await cls._cache_record(record)
+
+    @classmethod
+    async def _cache_record(cls, record: ServiceConfigRecord) -> None:
+        service_type = record.service_type
+        provider = record.provider
+        config_class = cls._schemas.get(service_type, {}).get(provider)
+        if config_class is None:
+            return
+        config_data = dict(record.config or {})
+        config_data["enabled"] = record.enabled
+        try:
+            instance = config_class(**config_data)
+        except ValidationError as exc:
+            logger.error(
+                "Config validation failed for %s/%s from DB: %s",
+                service_type,
+                provider,
+                exc,
+            )
+            return
+        cls._cache_config(service_type, provider, instance)
+
+    @classmethod
+    def _cache_config(cls, service_type: str, name: str, config: ServiceConfig) -> None:
+        cls._configs[service_type][name] = config
+        cls._config_timestamps[service_type][name] = time.time()
+
+    @classmethod
+    def _is_cache_fresh(cls, service_type: str, name: str) -> bool:
+        if cls._cache_ttl_seconds <= 0:
+            return True
+        cached_at = cls._config_timestamps.get(service_type, {}).get(name)
+        if not cached_at:
+            return False
+        return (time.time() - cached_at) <= cls._cache_ttl_seconds
+
+    @classmethod
+    def _schedule_refresh(cls, service_type: str, name: str) -> None:
+        if not settings.CONFIG_CENTER_DB_ENABLED or cls._db_session_factory is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(cls.refresh_from_db(service_type, name))
+
+    @classmethod
+    def _load_config_from_db_sync(cls, service_type: str, name: str) -> Optional[ServiceConfig]:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(cls._load_config_from_db(service_type, name))
+        return None
+
+    @classmethod
+    async def _load_config_from_db(cls, service_type: str, name: str) -> Optional[ServiceConfig]:
+        if cls._db_session_factory is None:
+            return None
+        try:
+            async with cls._db_session_factory() as session:
+                stmt = select(ServiceConfigRecord).where(
+                    ServiceConfigRecord.service_type == service_type,
+                    ServiceConfigRecord.provider == name,
+                )
+                record = (await session.execute(stmt)).scalar_one_or_none()
+                if record is None:
+                    return None
+                await cls._cache_record(record)
+                return cls._configs.get(service_type, {}).get(name)
+        except SQLAlchemyError as exc:
+            logger.warning("Config DB lookup skipped: %s", exc)
+            return None
 
     @classmethod
     def _load_config_from_settings(

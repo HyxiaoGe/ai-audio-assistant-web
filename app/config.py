@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     JWT_SECRET: Optional[str] = Field(default=None)
     JWT_ALGORITHM: Optional[str] = Field(default=None)
 
+    CONFIG_CENTER_DB_ENABLED: bool = Field(default=True)
+    CONFIG_CENTER_CACHE_TTL: int = Field(default=60)
+    ADMIN_EMAILS: Optional[str] = Field(default=None)
+
     MINIO_ENDPOINT: Optional[str] = Field(default=None)
     MINIO_ACCESS_KEY: Optional[str] = Field(default=None)
     MINIO_SECRET_KEY: Optional[str] = Field(default=None)

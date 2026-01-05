@@ -4,12 +4,15 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError
 
 from app.api.v1.router import api_router
+from app.config import settings
+from app.core.config_manager import ConfigManager
 from app.core.exceptions import BusinessError
 from app.core.i18n import get_message
 from app.core.middleware import LocaleMiddleware, LoggingMiddleware, RequestIDMiddleware
 from app.core.monitoring import MonitoringSystem
 from app.core.response import error
 from app.core.smart_factory import SelectionStrategy, SmartFactory, SmartFactoryConfig
+from app.db import async_session_factory
 from app.i18n.codes import ErrorCode
 from app.services.asr import aliyun  # noqa: F401
 from app.services.asr import tencent  # noqa: F401
@@ -56,6 +59,11 @@ def create_app() -> FastAPI:
             )
         )
         MonitoringSystem.get_instance().start()
+        ConfigManager.configure_db(
+            async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL
+        )
+        if settings.CONFIG_CENTER_DB_ENABLED:
+            await ConfigManager.refresh_from_db()
 
     @app.on_event("shutdown")
     async def shutdown_event() -> None:

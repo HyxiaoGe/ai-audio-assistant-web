@@ -7,6 +7,8 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context  # type: ignore[attr-defined]
 from app.config import settings
+from app.models import service_config as _service_config  # noqa: F401
+from app.models import service_config_history as _service_config_history  # noqa: F401
 from app.models import summary as _summary  # noqa: F401
 from app.models import task as _task  # noqa: F401
 from app.models import transcript as _transcript  # noqa: F401

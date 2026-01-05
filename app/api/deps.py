@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import AsyncGenerator, Optional
 
-from fastapi import Depends, Header, Query
+from fastapi import Depends, Header, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.security import decode_access_token, extract_bearer_token
 from app.db import get_db_session
@@ -31,6 +32,21 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if user is None:
         raise BusinessError(ErrorCode.USER_NOT_FOUND)
+    return user
+
+
+def _get_admin_emails() -> set[str]:
+    raw = settings.ADMIN_EMAILS or ""
+    emails = {item.strip().lower() for item in raw.split(",") if item.strip()}
+    return emails
+
+
+async def get_admin_user(user: User = Depends(get_current_user)) -> User:
+    admins = _get_admin_emails()
+    if not admins:
+        raise HTTPException(status_code=403, detail="Admin access not configured")
+    if user.email.lower() not in admins:
+        raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
 
