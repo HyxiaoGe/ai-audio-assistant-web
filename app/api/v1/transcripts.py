@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from typing import TypedDict
+
 from fastapi import APIRouter, Depends
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -19,13 +21,18 @@ from app.schemas.transcript import TranscriptItem, TranscriptListResponse
 
 router = APIRouter(prefix="/transcripts")
 
-_TIMESTAMP_PATTERN = re.compile(
-    r"\[(\d+):(\d+(?:\.\d+)?),(\d+):(\d+(?:\.\d+)?),(\d+)\]\s*(.*)"
-)
+_TIMESTAMP_PATTERN = re.compile(r"\[(\d+):(\d+(?:\.\d+)?),(\d+):(\d+(?:\.\d+)?),(\d+)\]\s*(.*)")
 
 
-def _split_timestamped_transcript(content: str) -> list[dict[str, object]]:
-    segments: list[dict[str, object]] = []
+class _TranscriptSegment(TypedDict):
+    speaker_id: str
+    start_time: float
+    end_time: float
+    content: str
+
+
+def _split_timestamped_transcript(content: str) -> list[_TranscriptSegment]:
+    segments: list[_TranscriptSegment] = []
     for match in _TIMESTAMP_PATTERN.finditer(content):
         start_min, start_sec, end_min, end_sec, speaker_id, text = match.groups()
         start_time = float(start_min) * 60 + float(start_sec)

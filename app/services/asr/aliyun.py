@@ -23,8 +23,8 @@ from app.services.config_utils import get_config_value
 
 logger = logging.getLogger("app.services.asr.aliyun")
 
-_TOKEN_DOMAIN = "nls-meta.cn-shanghai.aliyuncs.com"
-_TOKEN_VERSION = "2019-02-28"
+_TOKEN_DOMAIN = "nls-meta.cn-shanghai.aliyuncs.com"  # nosec B105
+_TOKEN_VERSION = "2019-02-28"  # nosec B105
 _GATEWAY_URL = "https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/asr"
 _SUPPORTED_FORMATS = {"wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "amr"}
 _TIMESTAMP_PATTERN = re.compile(r"\[(\d+):(\d+(?:\.\d+)?),(\d+):(\d+(?:\.\d+)?),(\d+)\]\s*(.*)")

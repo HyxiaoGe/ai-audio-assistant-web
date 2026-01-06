@@ -8,7 +8,7 @@ import subprocess  # nosec B404
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Awaitable, Optional, TypeVar, cast
+from typing import Any, Awaitable, Optional, cast
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -33,13 +33,10 @@ from worker.redis_client import publish_message_sync, publish_task_update_sync
 
 logger = logging.getLogger("worker.process_audio")
 
-T = TypeVar("T")
-
-
-async def _maybe_await(result: T | Awaitable[T]) -> T:
+async def _maybe_await(result: Awaitable[Any] | Any) -> Any:
     if inspect.isawaitable(result):
-        return cast(T, await result)
-    return cast(T, result)  # type: ignore[redundant-cast]
+        return await result
+    return result
 
 
 @asynccontextmanager
@@ -385,7 +382,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             await _update_task(session, task, "transcribing", 40, "transcribing", request_id)
             # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
             asr_provider = _resolve_asr_provider(task)
-            asr_service = await _maybe_await(
+            asr_service: ASRService = await _maybe_await(
                 get_asr_service(str(task.user_id), provider=asr_provider)
             )
             last_error: Optional[BusinessError] = None
