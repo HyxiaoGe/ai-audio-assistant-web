@@ -33,6 +33,7 @@ from worker.redis_client import publish_message_sync, publish_task_update_sync
 
 logger = logging.getLogger("worker.process_audio")
 
+
 async def _maybe_await(result: Awaitable[Any] | Any) -> Any:
     if inspect.isawaitable(result):
         return await result
