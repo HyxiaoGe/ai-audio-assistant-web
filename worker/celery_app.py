@@ -31,13 +31,21 @@ ConfigManager.configure_db(
     async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL
 )
 if settings.CONFIG_CENTER_DB_ENABLED:
-    asyncio.run(ConfigManager.refresh_from_db())
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(ConfigManager.refresh_from_db())
+    else:
+        loop.create_task(ConfigManager.refresh_from_db())
 
+from app.services.asr import configs as asr_configs  # noqa: F401, E402
 from app.services.asr import aliyun, tencent, volcengine  # noqa: F401, E402
 
 # Import all service modules to trigger @register_service decorators
 # This ensures services are registered in the ServiceRegistry
+from app.services.llm import configs as llm_configs  # noqa: F401, E402
 from app.services.llm import deepseek, doubao, moonshot, qwen  # noqa: F401, E402
+from app.services.storage import configs as storage_configs  # noqa: F401, E402
 from app.services.storage import cos, minio, oss, tos  # noqa: F401, E402
 
 # Import tasks to register them with Celery

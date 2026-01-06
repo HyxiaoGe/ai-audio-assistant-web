@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.services.llm import configs as _configs  # noqa: F401
 from app.services.llm.base import LLMService
 from app.services.llm.deepseek import DeepSeekLLMService
 from app.services.llm.doubao import DoubaoLLMService

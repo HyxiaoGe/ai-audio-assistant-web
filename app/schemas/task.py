@@ -10,6 +10,9 @@ class TaskOptions(BaseModel):
     language: str = Field(default="auto")
     enable_speaker_diarization: bool = Field(default=True)
     summary_style: str = Field(default="meeting")
+    provider: Optional[str] = Field(default=None)
+    model_id: Optional[str] = Field(default=None)
+    asr_provider: Optional[str] = Field(default=None)
 
 
 class TaskCreateRequest(BaseModel):

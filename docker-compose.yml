@@ -23,7 +23,7 @@ services:
     command: celery -A worker.celery_app worker --loglevel=info
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg2://user:pass@db:5432/audio_assistant
+      DATABASE_URL: postgresql+asyncpg://user:pass@db:5432/audio_assistant
       REDIS_URL: redis://redis:6379/0
       MINIO_ENDPOINT: minio:9000
       MINIO_USE_SSL: "false"

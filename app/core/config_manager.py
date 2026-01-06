@@ -181,6 +181,7 @@ class ConfigManager:
             "aliyun": {
                 "access_key_id": "ALIYUN_ACCESS_KEY_ID",
                 "access_key_secret": "ALIYUN_ACCESS_KEY_SECRET",
+                "app_key": "ALIYUN_NLS_APP_KEY",
             },
             "volcengine": {
                 "app_id": "VOLC_ASR_APP_ID",

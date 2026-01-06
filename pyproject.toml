@@ -21,6 +21,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.26.0",
     "tencentcloud-sdk-python>=3.0.1000",
+    "aliyun-python-sdk-core>=2.15.0",
     "yt-dlp>=2024.12.0",
     "aiohttp>=3.9.0",
     "python-multipart>=0.0.6",

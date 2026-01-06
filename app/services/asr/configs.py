@@ -38,6 +38,7 @@ class TencentASRConfig(ServiceConfig):
     res_text_format: int = Field(default=0, description="结果文本格式", ge=0, le=3)
     speaker_dia: int = Field(default=0, description="是否开启说话人分离", ge=0, le=1)
     speaker_number: int = Field(default=0, description="说话人数量", ge=0, le=10)
+    source_type: int = Field(default=0, description="音频来源类型（URL=0/Base64=1）", ge=0, le=1)
     poll_interval: int = Field(default=5, description="轮询间隔（秒）", ge=1, le=60)
     max_wait: int = Field(default=3600, description="最大等待时间（秒）", ge=60)
 
@@ -54,6 +55,7 @@ class TencentASRConfig(ServiceConfig):
                 "res_text_format": 0,
                 "speaker_dia": 1,
                 "speaker_number": 2,
+                "source_type": 0,
                 "poll_interval": 5,
                 "max_wait": 3600,
                 "enabled": True,
@@ -71,13 +73,17 @@ class AliyunASRConfig(ServiceConfig):
         access_key_id: 阿里云 Access Key ID
         access_key_secret: 阿里云 Access Key Secret
         region: 地域（如 "cn-shanghai"）
-        app_key: 应用 Key（可选）
+        app_key: 应用 Key（NLS AppKey）
+        poll_interval: 轮询间隔（秒）
+        max_wait: 最大等待时间（秒）
     """
 
     access_key_id: str = Field(..., description="阿里云 Access Key ID", min_length=1)
     access_key_secret: str = Field(..., description="阿里云 Access Key Secret", min_length=1)
     region: str = Field(default="cn-shanghai", description="地域")
-    app_key: str = Field(default="", description="应用 Key（可选）")
+    app_key: str = Field(..., description="应用 Key（NLS AppKey）", min_length=1)
+    poll_interval: int = Field(default=5, description="轮询间隔（秒）", ge=1, le=60)
+    max_wait: int = Field(default=600, description="最大等待时间（秒）", ge=60)
 
     class Config:
         """Pydantic 配置"""
@@ -88,6 +94,8 @@ class AliyunASRConfig(ServiceConfig):
                 "access_key_secret": "your-aliyun-access-key-secret",
                 "region": "cn-shanghai",
                 "app_key": "your-app-key",
+                "poll_interval": 5,
+                "max_wait": 600,
                 "enabled": True,
                 "timeout": 30,
                 "retry_count": 3,

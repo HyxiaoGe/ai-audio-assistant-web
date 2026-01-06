@@ -48,8 +48,8 @@ async def async_session_factory():
         yield session
 
 
-async def get_asr_service(user_id: Optional[str] = None) -> ASRService:
-    return await SmartFactory.get_service("asr", user_id=user_id)
+async def get_asr_service(user_id: Optional[str] = None, provider: Optional[str] = None) -> ASRService:
+    return await SmartFactory.get_service("asr", user_id=user_id, provider=provider)
 
 
 async def get_llm_service(
@@ -125,6 +125,12 @@ def _resolve_llm_selection(task: Task, user_id: Optional[str]) -> tuple[str, str
     provider = _select_default_llm_provider()
     model_id = _load_llm_model_id(provider, user_id) or provider
     return provider, model_id
+
+
+def _resolve_asr_provider(task: Task) -> Optional[str]:
+    options = task.options or {}
+    raw_provider = options.get("asr_provider")
+    return raw_provider if isinstance(raw_provider, str) else None
 
 
 async def _update_task(
@@ -376,7 +382,10 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
 
             await _update_task(session, task, "transcribing", 40, "transcribing", request_id)
             # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
-            asr_service: ASRService = await _maybe_await(get_asr_service(str(task.user_id)))
+            asr_provider = _resolve_asr_provider(task)
+            asr_service = await _maybe_await(
+                get_asr_service(str(task.user_id), provider=asr_provider)
+            )
             last_error: Optional[BusinessError] = None
             segments: list[TranscriptSegment] = []
 

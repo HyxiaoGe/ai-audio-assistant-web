@@ -64,6 +64,12 @@ def _resolve_llm_selection(task: Task, user_id: Optional[str]) -> tuple[str, str
     return provider, model_id
 
 
+def _resolve_asr_provider(task: Task) -> Optional[str]:
+    options = task.options or {}
+    raw_provider = options.get("asr_provider")
+    return raw_provider if isinstance(raw_provider, str) else None
+
+
 def _get_download_dir() -> Path:
     raw_dir = settings.YOUTUBE_DOWNLOAD_DIR
     if not raw_dir:
@@ -688,9 +694,14 @@ def _process_youtube(
 
                 _update_task(session, task, "transcribing", 40, "transcribing", request_id)
                 stage_manager.start_stage(session, StageType.TRANSCRIBE)
-                # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
+                # 使用 SmartFactory 获取 ASR 服务（支持指定 provider）
+                asr_provider = _resolve_asr_provider(task)
                 asr_service = asyncio.run(
-                    SmartFactory.get_service("asr", user_id=str(task.user_id))
+                    SmartFactory.get_service(
+                        "asr",
+                        user_id=str(task.user_id),
+                        provider=asr_provider,
+                    )
                 )
                 last_error: Optional[BusinessError] = None
                 segments = []

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Awaitable, Callable, Optional
 
@@ -203,6 +204,32 @@ class TencentASRService(ASRService):
                 raise BusinessError(
                     ErrorCode.ASR_SERVICE_FAILED, reason="missing ResultDetail/Result"
                 )
+        if isinstance(result_detail, str):
+            try:
+                parsed = json.loads(result_detail)
+            except json.JSONDecodeError:
+                timestamped = self._parse_timestamped_text(result_detail)
+                if timestamped:
+                    return timestamped
+                return [
+                    TranscriptSegment(
+                        speaker_id=None,
+                        start_time=0.0,
+                        end_time=0.0,
+                        content=result_detail,
+                        confidence=None,
+                    )
+                ]
+            if isinstance(parsed, list):
+                result_detail = parsed
+            elif isinstance(parsed, dict):
+                result_detail = [parsed]
+            else:
+                raise BusinessError(
+                    ErrorCode.ASR_SERVICE_FAILED, reason="ResultDetail/Result is not a list"
+                )
+        elif isinstance(result_detail, dict):
+            result_detail = [result_detail]
         if not isinstance(result_detail, list):
             raise BusinessError(
                 ErrorCode.ASR_SERVICE_FAILED, reason="ResultDetail/Result is not a list"
@@ -212,6 +239,9 @@ class TencentASRService(ASRService):
         for item in result_detail:
             if not isinstance(item, dict):
                 continue
+            use_detail = use_detail or any(
+                key in item for key in ("FinalSentence", "StartMs", "EndMs")
+            )
             if use_detail:
                 speaker_id = item.get("SpeakerId")
                 start_ms = item.get("StartMs")
@@ -227,6 +257,12 @@ class TencentASRService(ASRService):
                 text_value = item.get("Text")
                 confidence = item.get("Confidence")
 
+            if isinstance(text_value, str):
+                timestamped = self._parse_timestamped_text(text_value)
+                if timestamped:
+                    segments.extend(timestamped)
+                    continue
+
             segments.append(
                 TranscriptSegment(
                     speaker_id=str(speaker_id) if speaker_id is not None else None,
@@ -234,6 +270,32 @@ class TencentASRService(ASRService):
                     end_time=end_time,
                     content=str(text_value) if text_value is not None else "",
                     confidence=float(confidence) if confidence is not None else None,
+                )
+            )
+        if len(segments) == 1:
+            content = segments[0].content
+            if isinstance(content, str):
+                timestamped = self._parse_timestamped_text(content)
+                if timestamped:
+                    return timestamped
+        return segments
+
+    def _parse_timestamped_text(self, content: str) -> list[TranscriptSegment]:
+        pattern = re.compile(
+            r"\[(\d+):(\d+(?:\.\d+)?),(\d+):(\d+(?:\.\d+)?),(\d+)\]\s*(.*)"
+        )
+        segments: list[TranscriptSegment] = []
+        for match in pattern.finditer(content):
+            start_min, start_sec, end_min, end_sec, speaker_id, text = match.groups()
+            start_time = float(start_min) * 60 + float(start_sec)
+            end_time = float(end_min) * 60 + float(end_sec)
+            segments.append(
+                TranscriptSegment(
+                    speaker_id=str(speaker_id),
+                    start_time=start_time,
+                    end_time=end_time,
+                    content=text.strip(),
+                    confidence=None,
                 )
             )
         return segments

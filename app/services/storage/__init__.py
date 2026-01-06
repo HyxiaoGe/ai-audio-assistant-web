@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.services.storage import configs as _configs  # noqa: F401
 from app.services.storage.base import StorageService
 from app.services.storage.minio import MinioStorageService
 from app.services.storage.oss import OSSStorageService

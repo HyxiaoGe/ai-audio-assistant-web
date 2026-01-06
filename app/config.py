@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     TENCENT_ASR_MAX_WAIT_SECONDS: Optional[int] = Field(default=None)
     ALIYUN_ACCESS_KEY_ID: Optional[str] = Field(default=None)
     ALIYUN_ACCESS_KEY_SECRET: Optional[str] = Field(default=None)
+    ALIYUN_NLS_APP_KEY: Optional[str] = Field(default=None)
     VOLC_ASR_APP_ID: Optional[str] = Field(default=None)
     VOLC_ASR_ACCESS_TOKEN: Optional[str] = Field(default=None)
     VOLC_ASR_RESOURCE_ID: Optional[str] = Field(default=None)
