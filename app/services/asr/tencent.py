@@ -281,9 +281,7 @@ class TencentASRService(ASRService):
         return segments
 
     def _parse_timestamped_text(self, content: str) -> list[TranscriptSegment]:
-        pattern = re.compile(
-            r"\[(\d+):(\d+(?:\.\d+)?),(\d+):(\d+(?:\.\d+)?),(\d+)\]\s*(.*)"
-        )
+        pattern = re.compile(r"\[(\d+):(\d+(?:\.\d+)?),(\d+):(\d+(?:\.\d+)?),(\d+)\]\s*(.*)")
         segments: list[TranscriptSegment] = []
         for match in pattern.finditer(content):
             start_min, start_sec, end_min, end_sec, speaker_id, text = match.groups()

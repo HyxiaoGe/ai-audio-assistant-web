@@ -48,7 +48,9 @@ async def async_session_factory():
         yield session
 
 
-async def get_asr_service(user_id: Optional[str] = None, provider: Optional[str] = None) -> ASRService:
+async def get_asr_service(
+    user_id: Optional[str] = None, provider: Optional[str] = None
+) -> ASRService:
     return await SmartFactory.get_service("asr", user_id=user_id, provider=provider)
 
 

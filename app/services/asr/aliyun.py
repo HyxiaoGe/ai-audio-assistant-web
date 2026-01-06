@@ -204,9 +204,7 @@ class AliyunASRService(ASRService):
             status = result.get("status")
 
             if status == 20000000 and result.get("result"):
-                logger.info(
-                    "Aliyun NLS task %s completed after %s polls", task_id, poll_count
-                )
+                logger.info("Aliyun NLS task %s completed after %s polls", task_id, poll_count)
                 return result
 
             if status not in (None, 20000000):

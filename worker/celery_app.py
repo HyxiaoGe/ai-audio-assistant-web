@@ -38,8 +38,9 @@ if settings.CONFIG_CENTER_DB_ENABLED:
     else:
         loop.create_task(ConfigManager.refresh_from_db())
 
+from app.services.asr import aliyun  # noqa: F401, E402
 from app.services.asr import configs as asr_configs  # noqa: F401, E402
-from app.services.asr import aliyun, tencent, volcengine  # noqa: F401, E402
+from app.services.asr import tencent, volcengine  # noqa: F401, E402
 
 # Import all service modules to trigger @register_service decorators
 # This ensures services are registered in the ServiceRegistry
