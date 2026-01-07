@@ -13,6 +13,7 @@ from app.models import summary as _summary  # noqa: F401
 from app.models import task as _task  # noqa: F401
 from app.models import transcript as _transcript  # noqa: F401
 from app.models import user as _user  # noqa: F401
+from app.models import asr_quota as _asr_quota  # noqa: F401
 from app.models.base import Base
 
 config: Any = context.config

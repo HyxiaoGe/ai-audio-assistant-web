@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import subprocess  # nosec B404
 import time
 from datetime import datetime, timezone
@@ -24,6 +25,12 @@ from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
 from app.models.transcript import Transcript
+from app.services.asr.base import TranscriptSegment
+from app.services.asr_quota_service import (
+    get_quota_providers_sync,
+    record_usage_sync,
+    select_available_provider_sync,
+)
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_task_update_sync
@@ -68,6 +75,30 @@ def _resolve_asr_provider(task: Task) -> Optional[str]:
     options = task.options or {}
     raw_provider = options.get("asr_provider")
     return raw_provider if isinstance(raw_provider, str) else None
+
+
+def _select_asr_provider_by_quota(session: Session) -> Optional[str]:
+    providers = ServiceRegistry.list_services("asr")
+    quota_providers = get_quota_providers_sync(session, providers)
+    available = select_available_provider_sync(session, providers)
+    if available:
+        return random.choice(available)  # nosec B311
+    if quota_providers:
+        fallback = [provider for provider in providers if provider not in quota_providers]
+        if fallback:
+            return random.choice(fallback)  # nosec B311
+    return None
+
+
+def _estimate_asr_duration(task: Task, segments: list[TranscriptSegment]) -> int:
+    if task.duration_seconds and task.duration_seconds > 0:
+        return int(task.duration_seconds)
+    if not segments:
+        return 0
+    end_times = [seg.end_time for seg in segments if seg.end_time]
+    if not end_times:
+        return 0
+    return int(max(end_times))
 
 
 def _get_download_dir() -> Path:
@@ -696,6 +727,11 @@ def _process_youtube(
                 stage_manager.start_stage(session, StageType.TRANSCRIBE)
                 # 使用 SmartFactory 获取 ASR 服务（支持指定 provider）
                 asr_provider = _resolve_asr_provider(task)
+                if not asr_provider:
+                    asr_provider = _select_asr_provider_by_quota(session)
+                if asr_provider:
+                    task.asr_provider = asr_provider
+                    session.commit()
                 asr_service = asyncio.run(
                     SmartFactory.get_service(
                         "asr",
@@ -775,6 +811,11 @@ def _process_youtube(
                 )
                 session.add_all(transcripts)
                 session.commit()
+                duration_seconds = _estimate_asr_duration(task, segments)
+                if duration_seconds and not task.duration_seconds:
+                    task.duration_seconds = duration_seconds
+                    session.commit()
+                record_usage_sync(session, asr_service.provider, duration_seconds)
                 stage_manager.complete_stage(
                     session, StageType.TRANSCRIBE, {"segment_count": len(transcripts)}
                 )

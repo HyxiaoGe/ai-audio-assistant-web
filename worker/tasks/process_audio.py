@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import logging
+import random
 import subprocess  # nosec B404
 import tempfile
 from contextlib import asynccontextmanager
@@ -25,6 +26,11 @@ from app.models.summary import Summary
 from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import ASRService, TranscriptSegment
+from app.services.asr_quota_service import (
+    get_quota_providers_sync,
+    record_usage_sync,
+    select_available_provider_sync,
+)
 from app.services.llm.base import LLMService
 from app.services.storage.base import StorageService
 from worker.celery_app import celery_app
@@ -131,6 +137,30 @@ def _resolve_asr_provider(task: Task) -> Optional[str]:
     options = task.options or {}
     raw_provider = options.get("asr_provider")
     return raw_provider if isinstance(raw_provider, str) else None
+
+
+def _select_asr_provider_by_quota(session: Session) -> Optional[str]:
+    providers = ServiceRegistry.list_services("asr")
+    quota_providers = get_quota_providers_sync(session, providers)
+    available = select_available_provider_sync(session, providers)
+    if available:
+        return random.choice(available)  # nosec B311
+    if quota_providers:
+        fallback = [provider for provider in providers if provider not in quota_providers]
+        if fallback:
+            return random.choice(fallback)  # nosec B311
+    return None
+
+
+def _estimate_asr_duration(task: Task, segments: list[TranscriptSegment]) -> int:
+    if task.duration_seconds and task.duration_seconds > 0:
+        return int(task.duration_seconds)
+    if not segments:
+        return 0
+    end_times = [seg.end_time for seg in segments if seg.end_time]
+    if not end_times:
+        return 0
+    return int(max(end_times))
 
 
 async def _update_task(
@@ -383,6 +413,11 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             await _update_task(session, task, "transcribing", 40, "transcribing", request_id)
             # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
             asr_provider = _resolve_asr_provider(task)
+            if not asr_provider:
+                asr_provider = _select_asr_provider_by_quota(session)
+            if asr_provider:
+                task.asr_provider = asr_provider
+                await _commit(session)
             asr_service: ASRService = await _maybe_await(
                 get_asr_service(str(task.user_id), provider=asr_provider)
             )
@@ -465,6 +500,11 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                 )
             session.add_all(transcripts)
             await _commit(session)
+            duration_seconds = _estimate_asr_duration(task, segments)
+            if duration_seconds and not task.duration_seconds:
+                task.duration_seconds = duration_seconds
+                await _commit(session)
+            record_usage_sync(session, asr_service.provider, duration_seconds)
 
             await _update_task(session, task, "summarizing", 80, "summarizing", request_id)
             # 使用 SmartFactory 获取 LLM 服务（自动选择最优服务）

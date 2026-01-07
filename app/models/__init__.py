@@ -1,3 +1,4 @@
+from app.models.asr_quota import AsrQuota
 from app.models.notification import Notification
 from app.models.service_config import ServiceConfig
 from app.models.service_config_history import ServiceConfigHistory
@@ -14,6 +15,7 @@ __all__ = [
     "Transcript",
     "Summary",
     "Notification",
+    "AsrQuota",
     "ServiceConfig",
     "ServiceConfigHistory",
 ]

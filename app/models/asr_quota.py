@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import DateTime, Integer, String, UniqueConstraint, text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.models.base import BaseRecord
+
+
+class AsrQuota(BaseRecord):
+    __tablename__ = "asr_quotas"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "window_type",
+            "window_start",
+            name="uk_asr_quotas_provider_window",
+        ),
+    )
+
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    window_type: Mapped[str] = mapped_column(String(10), nullable=False)  # day | month
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    quota_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    used_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'active'"))
