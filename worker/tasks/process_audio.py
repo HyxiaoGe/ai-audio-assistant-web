@@ -139,10 +139,10 @@ def _resolve_asr_provider(task: Task) -> Optional[str]:
     return raw_provider if isinstance(raw_provider, str) else None
 
 
-def _select_asr_provider_by_quota(session: Session) -> Optional[str]:
+def _select_asr_provider_by_quota(session: Session, owner_user_id: Optional[str]) -> Optional[str]:
     providers = ServiceRegistry.list_services("asr")
-    quota_providers = get_quota_providers_sync(session, providers)
-    available = select_available_provider_sync(session, providers)
+    quota_providers = get_quota_providers_sync(session, providers, owner_user_id)
+    available = select_available_provider_sync(session, providers, owner_user_id)
     if available:
         return random.choice(available)  # nosec B311
     if quota_providers:
@@ -414,7 +414,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
             asr_provider = _resolve_asr_provider(task)
             if not asr_provider:
-                asr_provider = _select_asr_provider_by_quota(session)
+                asr_provider = _select_asr_provider_by_quota(session, str(task.user_id))
             if asr_provider:
                 task.asr_provider = asr_provider
                 await _commit(session)
@@ -504,7 +504,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             if duration_seconds and not task.duration_seconds:
                 task.duration_seconds = duration_seconds
                 await _commit(session)
-            record_usage_sync(session, asr_service.provider, duration_seconds)
+            record_usage_sync(session, asr_service.provider, duration_seconds, str(task.user_id))
 
             await _update_task(session, task, "summarizing", 80, "summarizing", request_id)
             # 使用 SmartFactory 获取 LLM 服务（自动选择最优服务）

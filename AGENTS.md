@@ -43,3 +43,5 @@
 - Configure secrets and providers via `.env.example` keys; never commit real secrets.
 - Respect backend conventions (unified response helpers, `BusinessError`, DI with `Depends`).
 - Avoid "flair" or showcasing skills. Default to implementing the most standard option; if not appropriate, do not mention it.
+- When the user reports an issue, immediately check logs/service status instead of asking whether to do so.
+- Only commit or push when the user explicitly instructs; do not ask repeatedly.

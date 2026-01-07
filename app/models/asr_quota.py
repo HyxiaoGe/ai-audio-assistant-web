@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import DateTime, Integer, String, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import BaseRecord
@@ -15,10 +16,12 @@ class AsrQuota(BaseRecord):
             "provider",
             "window_type",
             "window_start",
+            "owner_user_id",
             name="uk_asr_quotas_provider_window",
         ),
     )
 
+    owner_user_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     window_type: Mapped[str] = mapped_column(String(10), nullable=False)  # day | month
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
