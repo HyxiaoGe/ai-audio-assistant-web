@@ -45,3 +45,4 @@
 - Avoid "flair" or showcasing skills. Default to implementing the most standard option; if not appropriate, do not mention it.
 - When the user reports an issue, immediately check logs/service status instead of asking whether to do so.
 - Only commit or push when the user explicitly instructs; do not ask repeatedly.
+- After code changes, restart relevant services without asking.

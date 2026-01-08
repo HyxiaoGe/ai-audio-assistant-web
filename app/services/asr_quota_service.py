@@ -17,7 +17,12 @@ class QuotaWindow:
     end: datetime
 
 
-def _window_bounds(now: datetime, window_type: str) -> QuotaWindow:
+def _window_bounds(
+    now: datetime,
+    window_type: str,
+    window_start: Optional[datetime] = None,
+    window_end: Optional[datetime] = None,
+) -> QuotaWindow:
     if window_type == "day":
         start = datetime(now.year, now.month, now.day, tzinfo=now.tzinfo or timezone.utc)
         end = start.replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -30,6 +35,12 @@ def _window_bounds(now: datetime, window_type: str) -> QuotaWindow:
             end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc) - timedelta(
                 microseconds=1
             )
+        return QuotaWindow(start=start, end=end)
+    if window_type == "total":
+        if window_start and window_end:
+            return QuotaWindow(start=window_start, end=window_end)
+        start = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2099, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc)
         return QuotaWindow(start=start, end=end)
     raise ValueError(f"Unsupported window_type: {window_type}")
 
@@ -210,10 +221,13 @@ async def upsert_quota(
     quota_seconds: int,
     reset: bool,
     owner_user_id: Optional[str],
+    window_start: Optional[datetime] = None,
+    window_end: Optional[datetime] = None,
+    used_seconds: Optional[int] = None,
     now: Optional[datetime] = None,
 ) -> AsrQuota:
     now = now or datetime.now(timezone.utc)
-    window = _window_bounds(now, window_type)
+    window = _window_bounds(now, window_type, window_start=window_start, window_end=window_end)
 
     stmt = select(AsrQuota).where(
         AsrQuota.provider == provider,
@@ -224,8 +238,12 @@ async def upsert_quota(
     existing = (await db.execute(stmt)).scalar_one_or_none()
 
     if existing:
-        used = 0 if reset else existing.used_seconds
-        status = "active" if reset else existing.status
+        if used_seconds is not None:
+            used = used_seconds
+            status = "exhausted" if used >= quota_seconds else "active"
+        else:
+            used = 0 if reset else existing.used_seconds
+            status = "active" if reset else existing.status
         existing.quota_seconds = quota_seconds
         existing.used_seconds = used
         existing.status = status
@@ -234,6 +252,8 @@ async def upsert_quota(
         await db.refresh(existing)
         return existing
 
+    used = used_seconds or 0
+    status = "exhausted" if used >= quota_seconds else "active"
     new_row = AsrQuota(
         owner_user_id=owner_user_id,
         provider=provider,
@@ -241,8 +261,8 @@ async def upsert_quota(
         window_start=window.start,
         window_end=window.end,
         quota_seconds=quota_seconds,
-        used_seconds=0,
-        status="active",
+        used_seconds=used,
+        status=status,
     )
     db.add(new_row)
     await db.commit()

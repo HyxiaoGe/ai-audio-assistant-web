@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, UniqueConstraint, text
+from sqlalchemy import DateTime, Float, Integer, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,8 +26,8 @@ class AsrQuota(BaseRecord):
     window_type: Mapped[str] = mapped_column(String(10), nullable=False)  # day | month
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    quota_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
-    used_seconds: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
+    quota_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    used_seconds: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0")
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'active'"))

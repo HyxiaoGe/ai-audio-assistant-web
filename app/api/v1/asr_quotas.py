@@ -28,7 +28,7 @@ def _ensure_admin(user: User) -> None:
         raise BusinessError(ErrorCode.PERMISSION_DENIED)
 
 
-def _resolve_quota_seconds(payload: AsrQuotaUpsertRequest) -> int:
+def _resolve_quota_seconds(payload: AsrQuotaUpsertRequest) -> float:
     if payload.quota_seconds is not None:
         return payload.quota_seconds
     hours = payload.quota_hours or 0
@@ -94,6 +94,9 @@ async def refresh_asr_quota(
         quota_seconds=quota_seconds,
         reset=payload.reset,
         owner_user_id=str(user.id),
+        window_start=payload.window_start,
+        window_end=payload.window_end,
+        used_seconds=payload.used_seconds,
     )
     item = AsrQuotaItem(
         provider=row.provider,
@@ -123,6 +126,9 @@ async def refresh_global_asr_quota(
         quota_seconds=quota_seconds,
         reset=payload.reset,
         owner_user_id=None,
+        window_start=payload.window_start,
+        window_end=payload.window_end,
+        used_seconds=payload.used_seconds,
     )
     item = AsrQuotaItem(
         provider=row.provider,
