@@ -103,6 +103,7 @@ async def get_transcripts(
             start_time=float(t.start_time),
             end_time=float(t.end_time),
             confidence=float(t.confidence) if t.confidence else None,
+            words=t.words,
             sequence=t.sequence,
             is_edited=t.is_edited,
             original_content=t.original_content,

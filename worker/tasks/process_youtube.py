@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import random
+import re
 import subprocess  # nosec B404
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Awaitable, Callable, Optional
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -25,7 +28,7 @@ from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
 from app.models.transcript import Transcript
-from app.services.asr.base import TranscriptSegment
+from app.services.asr.base import TranscriptSegment, WordTimestamp
 from app.services.asr_quota_service import (
     get_quota_providers_sync,
     record_usage_sync,
@@ -77,17 +80,60 @@ def _resolve_asr_provider(task: Task) -> Optional[str]:
     return raw_provider if isinstance(raw_provider, str) else None
 
 
-def _select_asr_provider_by_quota(session: Session, owner_user_id: Optional[str]) -> Optional[str]:
-    providers = ServiceRegistry.list_services("asr")
-    quota_providers = get_quota_providers_sync(session, providers, owner_user_id)
-    available = select_available_provider_sync(session, providers, owner_user_id)
-    if available:
-        return random.choice(available)  # nosec B311
-    if quota_providers:
-        fallback = [provider for provider in providers if provider not in quota_providers]
-        if fallback:
-            return random.choice(fallback)  # nosec B311
+def _resolve_asr_variant(task: Task) -> str:
+    options = task.options or {}
+    raw_variant = options.get("asr_variant")
+    return raw_variant if isinstance(raw_variant, str) and raw_variant else "file"
+
+
+def _select_asr_provider_by_quota(
+    session: Session,
+    owner_user_id: Optional[str],
+    variants: list[str],
+    providers: Optional[list[str]] = None,
+) -> tuple[Optional[str], str]:
+    providers = providers or ServiceRegistry.list_services("asr")
+    for variant in variants:
+        quota_providers = get_quota_providers_sync(
+            session, providers, owner_user_id, variant=variant
+        )
+        available = select_available_provider_sync(
+            session, providers, owner_user_id, variant=variant
+        )
+        if available:
+            return random.choice(available), variant  # nosec B311
+        if quota_providers:
+            fallback = [provider for provider in providers if provider not in quota_providers]
+            if fallback:
+                return random.choice(fallback), variant  # nosec B311
+    return None, variants[-1] if variants else "file"
+
+
+def _preferred_asr_providers_for_diarization() -> list[str]:
+    return ["tencent"]
+
+
+def _resolve_tencent_app_id(user_id: Optional[str]) -> Optional[str]:
+    try:
+        config = ConfigManager.get_config("asr", "tencent", user_id=user_id)
+    except Exception:
+        config = None
+    app_id = getattr(config, "app_id", None) if config else None
+    if app_id:
+        return str(app_id).strip()
+    if settings.TENCENT_ASR_APP_ID:
+        return str(settings.TENCENT_ASR_APP_ID).strip()
+    if settings.COS_BUCKET:
+        match = re.search(r"-(\d+)$", settings.COS_BUCKET.strip())
+        if match:
+            return match.group(1)
     return None
+
+
+def _supports_file_fast(user_id: Optional[str]) -> bool:
+    if "tencent" not in ServiceRegistry.list_services("asr"):
+        return False
+    return bool(_resolve_tencent_app_id(user_id))
 
 
 def _estimate_asr_duration(task: Task, segments: list[TranscriptSegment]) -> int:
@@ -99,6 +145,52 @@ def _estimate_asr_duration(task: Task, segments: list[TranscriptSegment]) -> int
     if not end_times:
         return 0
     return int(max(end_times))
+
+
+def _normalize_speaker_segments(
+    segments: list[TranscriptSegment],
+    enable_speaker_diarization: Optional[bool],
+) -> list[TranscriptSegment]:
+    if enable_speaker_diarization is False:
+        return [replace(segment, speaker_id=None) for segment in segments]
+    if enable_speaker_diarization is True:
+        has_speaker = any(segment.speaker_id for segment in segments)
+        if not has_speaker:
+            return [replace(segment, speaker_id="spk_0") for segment in segments]
+    return segments
+
+
+def _serialize_words(
+    words: Optional[list[WordTimestamp]],
+) -> Optional[list[dict[str, float | str | None]]]:
+    if not words:
+        return None
+    return [
+        {
+            "word": word.word,
+            "start_time": float(word.start_time),
+            "end_time": float(word.end_time),
+            "confidence": float(word.confidence) if word.confidence is not None else None,
+        }
+        for word in words
+    ]
+
+
+def _build_asr_kwargs(
+    transcribe: Any,
+    status_callback: Optional[Callable[[str], Awaitable[None]]],
+    enable_speaker_diarization: Optional[bool],
+    asr_variant: Optional[str],
+) -> dict[str, Any]:
+    params = inspect.signature(transcribe).parameters
+    kwargs: dict[str, Any] = {}
+    if "status_callback" in params:
+        kwargs["status_callback"] = status_callback
+    if "enable_speaker_diarization" in params:
+        kwargs["enable_speaker_diarization"] = enable_speaker_diarization
+    if "asr_variant" in params:
+        kwargs["asr_variant"] = asr_variant
+    return kwargs
 
 
 def _get_download_dir() -> Path:
@@ -727,10 +819,50 @@ def _process_youtube(
                 stage_manager.start_stage(session, StageType.TRANSCRIBE)
                 # 使用 SmartFactory 获取 ASR 服务（支持指定 provider）
                 asr_provider = _resolve_asr_provider(task)
+                asr_variant = _resolve_asr_variant(task)
+                diarization = None
+                if isinstance(task.options, dict):
+                    diarization = task.options.get("enable_speaker_diarization")
                 if not asr_provider:
-                    asr_provider = _select_asr_provider_by_quota(session, str(task.user_id))
+                    if asr_variant != "file":
+                        variants = [asr_variant]
+                    else:
+                        variants = ["file", "file_fast"]
+                    if "file_fast" in variants and not _supports_file_fast(str(task.user_id)):
+                        variants = [variant for variant in variants if variant != "file_fast"]
+                        if not variants:
+                            variants = ["file"]
+                    if diarization is True:
+                        preferred = [
+                            provider
+                            for provider in _preferred_asr_providers_for_diarization()
+                            if provider in ServiceRegistry.list_services("asr")
+                        ]
+                        if preferred:
+                            asr_provider, asr_variant = _select_asr_provider_by_quota(
+                                session,
+                                str(task.user_id),
+                                variants,
+                                providers=preferred,
+                            )
+                            if not asr_provider:
+                                asr_provider = preferred[0]
+                        else:
+                            asr_provider, asr_variant = _select_asr_provider_by_quota(
+                                session,
+                                str(task.user_id),
+                                variants,
+                            )
+                    else:
+                        asr_provider, asr_variant = _select_asr_provider_by_quota(
+                            session,
+                            str(task.user_id),
+                            variants,
+                        )
                 if asr_provider:
                     task.asr_provider = asr_provider
+                    if isinstance(task.options, dict):
+                        task.options["asr_variant"] = asr_variant
                     session.commit()
                 asr_service = asyncio.run(
                     SmartFactory.get_service(
@@ -742,80 +874,92 @@ def _process_youtube(
                 last_error: Optional[BusinessError] = None
                 segments = []
 
-            async def _asr_status(stage: str) -> None:
-                # ASR status callback (currently not used for progress updates)
-                pass
+                async def _asr_status(stage: str) -> None:
+                    # ASR status callback (currently not used for progress updates)
+                    pass
 
-            # 尝试使用不同的音频 URL 进行转写
-            for idx, audio_url in enumerate(audio_candidates, start=1):
-                try:
-                    logger.info(
-                        "Task %s: Attempting ASR with URL %d/%d",
-                        task_id,
-                        idx,
-                        len(audio_candidates),
-                        extra={"task_id": task_id, "audio_url_index": idx},
-                    )
-                    segments = asyncio.run(
-                        asr_service.transcribe(audio_url, status_callback=_asr_status)
-                    )
-                    logger.info(
-                        "Task %s: ASR succeeded with URL %d, got %d segments",
-                        task_id,
-                        idx,
-                        len(segments),
-                        extra={"task_id": task_id, "segment_count": len(segments)},
-                    )
-                    last_error = None
-                    break
-                except BusinessError as exc:
-                    last_error = exc
-                    if exc.code not in {
-                        ErrorCode.ASR_SERVICE_FAILED,
-                        ErrorCode.ASR_SERVICE_TIMEOUT,
-                        ErrorCode.ASR_SERVICE_UNAVAILABLE,
-                    }:
-                        raise
-                    logger.warning(
-                        "Task %s: ASR failed for URL %d/%d with error %s: %s",
-                        task_id,
-                        idx,
-                        len(audio_candidates),
-                        exc.code.value,
-                        exc.kwargs.get("reason", str(exc)),
-                        extra={
-                            "task_id": task_id,
-                            "error_code": exc.code.value,
-                            "audio_url_index": idx,
-                        },
-                    )
+                # 尝试使用不同的音频 URL 进行转写
+                for idx, audio_url in enumerate(audio_candidates, start=1):
+                    try:
+                        logger.info(
+                            "Task %s: Attempting ASR with URL %d/%d",
+                            task_id,
+                            idx,
+                            len(audio_candidates),
+                            extra={"task_id": task_id, "audio_url_index": idx},
+                        )
+                        kwargs = _build_asr_kwargs(
+                            asr_service.transcribe,
+                            status_callback=_asr_status,
+                            enable_speaker_diarization=diarization,
+                            asr_variant=asr_variant,
+                        )
+                        segments = asyncio.run(asr_service.transcribe(audio_url, **kwargs))
+                        logger.info(
+                            "Task %s: ASR succeeded with URL %d, got %d segments",
+                            task_id,
+                            idx,
+                            len(segments),
+                            extra={"task_id": task_id, "segment_count": len(segments)},
+                        )
+                        last_error = None
+                        break
+                    except BusinessError as exc:
+                        last_error = exc
+                        if exc.code not in {
+                            ErrorCode.ASR_SERVICE_FAILED,
+                            ErrorCode.ASR_SERVICE_TIMEOUT,
+                            ErrorCode.ASR_SERVICE_UNAVAILABLE,
+                        }:
+                            raise
+                        logger.warning(
+                            "Task %s: ASR failed for URL %d/%d with error %s: %s",
+                            task_id,
+                            idx,
+                            len(audio_candidates),
+                            exc.code.value,
+                            exc.kwargs.get("reason", str(exc)),
+                            extra={
+                                "task_id": task_id,
+                                "error_code": exc.code.value,
+                                "audio_url_index": idx,
+                            },
+                        )
 
-            if last_error is not None and not segments:
-                raise last_error
+                if last_error is not None and not segments:
+                    raise last_error
 
-            transcripts = []
-            for idx, segment in enumerate(segments, start=1):
-                transcripts.append(
-                    Transcript(
-                        task_id=task.id,
-                        speaker_id=segment.speaker_id,
-                        speaker_label=None,
-                        content=segment.content,
-                        start_time=segment.start_time,
-                        end_time=segment.end_time,
-                        confidence=segment.confidence,
-                        sequence=idx,
-                        is_edited=False,
-                        original_content=None,
+                segments = _normalize_speaker_segments(segments, diarization)
+                transcripts = []
+                for idx, segment in enumerate(segments, start=1):
+                    transcripts.append(
+                        Transcript(
+                            task_id=task.id,
+                            speaker_id=segment.speaker_id,
+                            speaker_label=None,
+                            content=segment.content,
+                            start_time=segment.start_time,
+                            end_time=segment.end_time,
+                            confidence=segment.confidence,
+                            words=_serialize_words(segment.words),
+                            sequence=idx,
+                            is_edited=False,
+                            original_content=None,
+                        )
                     )
-                )
                 session.add_all(transcripts)
                 session.commit()
                 duration_seconds = _estimate_asr_duration(task, segments)
                 if duration_seconds and not task.duration_seconds:
                     task.duration_seconds = duration_seconds
                     session.commit()
-                record_usage_sync(session, asr_service.provider, duration_seconds, str(task.user_id))
+                record_usage_sync(
+                    session,
+                    asr_service.provider,
+                    duration_seconds,
+                    str(task.user_id),
+                    variant=asr_variant,
+                )
                 stage_manager.complete_stage(
                     session, StageType.TRANSCRIBE, {"segment_count": len(transcripts)}
                 )

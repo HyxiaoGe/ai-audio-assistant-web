@@ -167,10 +167,12 @@ class ConfigManager:
         },
         "asr": {
             "tencent": {
+                "app_id": "TENCENT_ASR_APP_ID",
                 "secret_id": "TENCENT_SECRET_ID",
                 "secret_key": "TENCENT_SECRET_KEY",
                 "region": "TENCENT_REGION",
                 "engine_model_type": "TENCENT_ASR_ENGINE_MODEL_TYPE",
+                "engine_model_type_file_fast": "TENCENT_ASR_ENGINE_MODEL_TYPE_FILE_FAST",
                 "channel_num": "TENCENT_ASR_CHANNEL_NUM",
                 "res_text_format": "TENCENT_ASR_RES_TEXT_FORMAT",
                 "speaker_dia": "TENCENT_ASR_SPEAKER_DIA",

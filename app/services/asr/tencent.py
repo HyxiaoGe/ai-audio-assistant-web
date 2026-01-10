@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
+import mimetypes
 import re
 import time
 from typing import Awaitable, Callable, Optional
+from urllib.parse import urlencode, urlparse
 
+import httpx
 from tencentcloud.asr.v20190614 import asr_client, models
 from tencentcloud.common import credential
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
@@ -18,7 +24,7 @@ from app.core.exceptions import BusinessError
 from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
-from app.services.asr.base import ASRService, TranscriptSegment
+from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp
 from app.services.config_utils import get_config_value
 
 logger = logging.getLogger("app.services.asr.tencent")
@@ -37,17 +43,25 @@ logger = logging.getLogger("app.services.asr.tencent")
 class TencentASRService(ASRService):
     # 腾讯云ASR base64方式限制为5MB，URL方式限制为1GB
     _BASE64_MAX_BYTES = 5 * 1024 * 1024
+    _FLASH_MAX_BYTES = 100 * 1024 * 1024
+    _FLASH_HOST = "asr.cloud.tencent.com"
 
     @property
     def provider(self) -> str:
         return "tencent"
 
     def __init__(self, config: Optional[object] = None) -> None:
+        app_id = get_config_value(config, "app_id", settings.TENCENT_ASR_APP_ID)
         secret_id = get_config_value(config, "secret_id", settings.TENCENT_SECRET_ID)
         secret_key = get_config_value(config, "secret_key", settings.TENCENT_SECRET_KEY)
         region = get_config_value(config, "region", settings.TENCENT_REGION)
         engine_model_type = get_config_value(
             config, "engine_model_type", settings.TENCENT_ASR_ENGINE_MODEL_TYPE
+        )
+        engine_model_type_file_fast = get_config_value(
+            config,
+            "engine_model_type_file_fast",
+            settings.TENCENT_ASR_ENGINE_MODEL_TYPE_FILE_FAST,
         )
         channel_num = get_config_value(config, "channel_num", settings.TENCENT_ASR_CHANNEL_NUM)
         res_text_format = get_config_value(
@@ -78,7 +92,9 @@ class TencentASRService(ASRService):
         self._secret_id = secret_id
         self._secret_key = secret_key
         self._region = region
+        self._app_id = self._normalize_app_id(app_id)
         self._engine_model_type = engine_model_type
+        self._engine_model_type_file_fast = engine_model_type_file_fast
         self._channel_num = channel_num
         self._res_text_format = res_text_format
         self._speaker_dia = speaker_dia
@@ -87,19 +103,59 @@ class TencentASRService(ASRService):
         self._max_wait = max_wait
         self._source_type = source_type
 
+    def _resolve_speaker_settings(
+        self,
+        enable_speaker_diarization: Optional[bool],
+    ) -> tuple[int, int]:
+        speaker_dia = self._speaker_dia
+        speaker_number = self._speaker_number
+        if enable_speaker_diarization is False:
+            return 0, 0
+        if enable_speaker_diarization is True and speaker_dia in (0, None):
+            return 1, max(speaker_number or 0, 0)
+        return speaker_dia, speaker_number
+
     @monitor("asr", "tencent")
     async def transcribe(
-        self, audio_url: str, status_callback: Optional[Callable[[str], Awaitable[None]]] = None
+        self,
+        audio_url: str,
+        status_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        *,
+        enable_speaker_diarization: Optional[bool] = None,
+        asr_variant: Optional[str] = None,
     ) -> list[TranscriptSegment]:
         if not audio_url:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="audio_url")
         if status_callback:
             await status_callback("asr_submitting")
-        task_id = await asyncio.to_thread(self._create_task, audio_url)
+        if asr_variant == "file_fast":
+            segments = await self._transcribe_flash(
+                audio_url,
+                enable_speaker_diarization=enable_speaker_diarization,
+            )
+            if status_callback:
+                await status_callback("asr_completed")
+            return segments
+        task_id = await asyncio.to_thread(
+            self._create_task,
+            audio_url,
+            enable_speaker_diarization=enable_speaker_diarization,
+            asr_variant=asr_variant,
+        )
         if status_callback:
             await status_callback("asr_polling")
         result = await self._poll_task(task_id)
         return self._parse_result(result)
+
+    def _normalize_app_id(self, raw: Optional[str]) -> Optional[str]:
+        if raw:
+            return str(raw).strip()
+        bucket = settings.COS_BUCKET
+        if isinstance(bucket, str):
+            match = re.search(r"-(\d+)$", bucket.strip())
+            if match:
+                return match.group(1)
+        return None
 
     def _create_client(self) -> asr_client.AsrClient:
         cred = credential.Credential(self._secret_id, self._secret_key)
@@ -109,13 +165,21 @@ class TencentASRService(ASRService):
         client_profile.signMethod = "TC3-HMAC-SHA256"
         return asr_client.AsrClient(cred, self._region, client_profile)
 
-    def _create_task(self, audio_url: str) -> str:
-        engine_model_type = self._engine_model_type
+    def _create_task(
+        self,
+        audio_url: str,
+        *,
+        enable_speaker_diarization: Optional[bool] = None,
+        asr_variant: Optional[str] = None,
+    ) -> str:
+        if asr_variant == "file_fast" and self._engine_model_type_file_fast:
+            engine_model_type = self._engine_model_type_file_fast
+        else:
+            engine_model_type = self._engine_model_type
         channel_num = self._channel_num
         source_type = self._source_type
         res_text_format = self._res_text_format
-        speaker_dia = self._speaker_dia
-        speaker_number = self._speaker_number
+        speaker_dia, speaker_number = self._resolve_speaker_settings(enable_speaker_diarization)
 
         logger.info(f"ASR submitting with audio_url: {audio_url}")
 
@@ -150,6 +214,202 @@ class TencentASRService(ASRService):
             raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="missing task id")
         logger.info(f"ASR task created successfully: TaskId={task_id}")
         return str(task_id)
+
+    async def _transcribe_flash(
+        self,
+        audio_url: str,
+        *,
+        enable_speaker_diarization: Optional[bool] = None,
+    ) -> list[TranscriptSegment]:
+        if not self._app_id:
+            raise BusinessError(
+                ErrorCode.ASR_SERVICE_FAILED,
+                reason="missing tencent app id for flash asr",
+            )
+        audio_bytes = await self._download_flash_audio(audio_url)
+        voice_format = self._guess_voice_format(audio_url)
+        timestamp = int(time.time())
+        speaker_dia, _speaker_number = self._resolve_speaker_settings(enable_speaker_diarization)
+        word_info = 0 if self._res_text_format is None else int(self._res_text_format)
+        params = {
+            "secretid": self._secret_id,
+            "timestamp": timestamp,
+            "engine_type": self._engine_model_type_file_fast or self._engine_model_type,
+            "voice_format": voice_format,
+            "word_info": word_info,
+            "speaker_diarization": int(speaker_dia),
+            "first_channel_only": 1,
+        }
+        signature = self._sign_flash(params)
+        query = urlencode(sorted(params.items()), doseq=True)
+        url = f"https://{self._FLASH_HOST}/asr/flash/v1/{self._app_id}?{query}"
+        headers = {
+            "Authorization": signature,
+            "Content-Type": "application/octet-stream",
+            "Content-Length": str(len(audio_bytes)),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=300.0)) as client:
+                response = await client.post(url, content=audio_bytes, headers=headers)
+        except httpx.HTTPError as exc:
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=str(exc)) from exc
+        if response.status_code >= 400:
+            raise BusinessError(
+                ErrorCode.ASR_SERVICE_FAILED,
+                reason=f"flash api http {response.status_code}",
+            )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise BusinessError(
+                ErrorCode.ASR_SERVICE_FAILED, reason="invalid flash response"
+            ) from exc
+        code = payload.get("code")
+        if code != 0:
+            message = payload.get("message") or "flash api error"
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=str(message))
+        return self._parse_flash_result(payload)
+
+    async def _download_flash_audio(self, audio_url: str) -> bytes:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0)) as client:
+                async with client.stream("GET", audio_url) as response:
+                    response.raise_for_status()
+                    content_length = response.headers.get("Content-Length")
+                    if content_length and int(content_length) > self._FLASH_MAX_BYTES:
+                        raise BusinessError(
+                            ErrorCode.ASR_SERVICE_FAILED,
+                            reason="flash audio too large",
+                        )
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > self._FLASH_MAX_BYTES:
+                            raise BusinessError(
+                                ErrorCode.ASR_SERVICE_FAILED,
+                                reason="flash audio too large",
+                            )
+                        chunks.append(chunk)
+        except httpx.HTTPError as exc:
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=str(exc)) from exc
+        return b"".join(chunks)
+
+    def _guess_voice_format(self, audio_url: str) -> str:
+        parsed = urlparse(audio_url)
+        suffix = parsed.path.rsplit(".", 1)[-1].lower() if "." in parsed.path else ""
+        if suffix:
+            return suffix
+        mime_type, _ = mimetypes.guess_type(parsed.path)
+        if mime_type:
+            if mime_type.endswith("wav"):
+                return "wav"
+            if mime_type.endswith("mpeg"):
+                return "mp3"
+            if mime_type.endswith("aac"):
+                return "aac"
+            if mime_type.endswith("amr"):
+                return "amr"
+            if mime_type.endswith("ogg"):
+                return "ogg-opus"
+        raise BusinessError(ErrorCode.UNSUPPORTED_FILE_FORMAT)
+
+    def _sign_flash(self, params: dict[str, object]) -> str:
+        query = urlencode(sorted(params.items()), doseq=True)
+        sign_source = f"POST{self._FLASH_HOST}/asr/flash/v1/{self._app_id}?{query}"
+        digest = hmac.new(
+            self._secret_key.encode("utf-8"),
+            sign_source.encode("utf-8"),
+            hashlib.sha1,
+        ).digest()
+        return base64.b64encode(digest).decode("utf-8")
+
+    def _parse_flash_result(self, payload: dict[str, object]) -> list[TranscriptSegment]:
+        results = payload.get("flash_result")
+        if not isinstance(results, list):
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="missing flash_result")
+        segments: list[TranscriptSegment] = []
+        for channel in results:
+            if not isinstance(channel, dict):
+                continue
+            sentence_list = channel.get("sentence_list")
+            if not isinstance(sentence_list, list):
+                text = channel.get("text")
+                if isinstance(text, str) and text:
+                    segments.append(
+                        TranscriptSegment(
+                            speaker_id=None,
+                            start_time=0.0,
+                            end_time=0.0,
+                            content=text,
+                            confidence=None,
+                        )
+                    )
+                continue
+            for sentence in sentence_list:
+                if not isinstance(sentence, dict):
+                    continue
+                text = sentence.get("text")
+                start_ms = sentence.get("start_time")
+                end_ms = sentence.get("end_time")
+                speaker_id = sentence.get("speaker_id")
+                words = self._parse_flash_words(sentence.get("word_list"))
+                start_time = self._ms_to_seconds(start_ms) or 0.0
+                end_time = self._ms_to_seconds(end_ms) or 0.0
+                segments.append(
+                    TranscriptSegment(
+                        speaker_id=str(speaker_id) if speaker_id is not None else None,
+                        start_time=start_time,
+                        end_time=end_time,
+                        content=str(text) if text is not None else "",
+                        confidence=None,
+                        words=words,
+                    )
+                )
+        return segments
+
+    @staticmethod
+    def _parse_flash_words(raw: object) -> Optional[list[WordTimestamp]]:
+        if not isinstance(raw, list):
+            return None
+        words: list[WordTimestamp] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            word_value = entry.get("word")
+            if not isinstance(word_value, str):
+                continue
+            start_ms = entry.get("start_time")
+            end_ms = entry.get("end_time")
+            start_time = TencentASRService._ms_to_seconds(start_ms)
+            end_time = TencentASRService._ms_to_seconds(end_ms)
+            if start_time is None or end_time is None:
+                continue
+            words.append(
+                WordTimestamp(
+                    word=word_value,
+                    start_time=start_time,
+                    end_time=end_time,
+                    confidence=None,
+                )
+            )
+        return words or None
+
+    @staticmethod
+    def _ms_to_seconds(value: object) -> Optional[float]:
+        numeric = TencentASRService._to_float(value)
+        if numeric is None:
+            return None
+        return numeric / 1000.0
+
+    @staticmethod
+    def _to_float(value: object) -> Optional[float]:
+        if isinstance(value, (int, float, str)):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+        return None
 
     async def _poll_task(self, task_id: str) -> dict[str, object]:
         poll_interval = self._poll_interval
@@ -242,18 +502,19 @@ class TencentASRService(ASRService):
             use_detail = use_detail or any(
                 key in item for key in ("FinalSentence", "StartMs", "EndMs")
             )
+            words = self._parse_words(item)
             if use_detail:
                 speaker_id = item.get("SpeakerId")
                 start_ms = item.get("StartMs")
                 end_ms = item.get("EndMs")
                 text_value = item.get("FinalSentence")
                 confidence = None
-                start_time = float(start_ms) / 1000.0 if start_ms is not None else 0.0
-                end_time = float(end_ms) / 1000.0 if end_ms is not None else 0.0
+                start_time = self._ms_to_seconds(start_ms) or 0.0
+                end_time = self._ms_to_seconds(end_ms) or 0.0
             else:
                 speaker_id = item.get("SpeakerId")
-                start_time = float(item.get("StartTime", 0.0))
-                end_time = float(item.get("EndTime", 0.0))
+                start_time = self._to_seconds(item.get("StartTime")) or 0.0
+                end_time = self._to_seconds(item.get("EndTime")) or 0.0
                 text_value = item.get("Text")
                 confidence = item.get("Confidence")
 
@@ -270,6 +531,7 @@ class TencentASRService(ASRService):
                     end_time=end_time,
                     content=str(text_value) if text_value is not None else "",
                     confidence=float(confidence) if confidence is not None else None,
+                    words=words,
                 )
             )
         if len(segments) == 1:
@@ -279,6 +541,59 @@ class TencentASRService(ASRService):
                 if timestamped:
                     return timestamped
         return segments
+
+    def _parse_words(self, item: dict[str, object]) -> Optional[list[WordTimestamp]]:
+        words_raw = (
+            item.get("SentenceWords")
+            or item.get("Words")
+            or item.get("WordList")
+            or item.get("WordSet")
+        )
+        if not isinstance(words_raw, list):
+            return None
+        words: list[WordTimestamp] = []
+        for entry in words_raw:
+            if not isinstance(entry, dict):
+                continue
+            word_value = (
+                entry.get("Word") or entry.get("WordStr") or entry.get("Text") or entry.get("Value")
+            )
+            if not isinstance(word_value, str):
+                continue
+            base_start_ms = self._to_float(item.get("StartMs"))
+            offset_start = self._to_float(
+                entry.get("OffsetStartMs") or entry.get("OffsetStartTime")
+            )
+            offset_end = self._to_float(entry.get("OffsetEndMs") or entry.get("OffsetEndTime"))
+            start_val = entry.get("StartTime") or entry.get("StartMs") or entry.get("BeginTime")
+            end_val = entry.get("EndTime") or entry.get("EndMs") or entry.get("FinishTime")
+            if base_start_ms is not None and offset_start is not None and offset_end is not None:
+                start_time = (base_start_ms + offset_start) / 1000.0
+                end_time = (base_start_ms + offset_end) / 1000.0
+            else:
+                start_time = self._to_seconds(start_val)
+                end_time = self._to_seconds(end_val)
+            if start_time is None or end_time is None:
+                continue
+            confidence = entry.get("Confidence") or entry.get("WordConfidence")
+            words.append(
+                WordTimestamp(
+                    word=word_value,
+                    start_time=start_time,
+                    end_time=end_time,
+                    confidence=float(confidence) if confidence is not None else None,
+                )
+            )
+        return words or None
+
+    @staticmethod
+    def _to_seconds(value: object) -> Optional[float]:
+        numeric = TencentASRService._to_float(value)
+        if numeric is None:
+            return None
+        if numeric > 1000:
+            return numeric / 1000.0
+        return numeric
 
     def _parse_timestamped_text(self, content: str) -> list[TranscriptSegment]:
         pattern = re.compile(r"\[(\d+):(\d+(?:\.\d+)?),(\d+):(\d+(?:\.\d+)?),(\d+)\]\s*(.*)")

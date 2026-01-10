@@ -6,11 +6,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
+from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.models.user import User
-from app.config import settings
 from app.schemas.asr_quota import (
     AsrQuotaItem,
     AsrQuotaListResponse,
@@ -32,7 +32,7 @@ def _resolve_quota_seconds(payload: AsrQuotaUpsertRequest) -> float:
     if payload.quota_seconds is not None:
         return payload.quota_seconds
     hours = payload.quota_hours or 0
-    return int(hours * 3600)
+    return hours * 3600
 
 
 @router.get("")
@@ -44,6 +44,7 @@ async def get_asr_quotas(
     items = [
         AsrQuotaItem(
             provider=row.provider,
+            variant=row.variant,
             window_type=row.window_type,
             window_start=row.window_start,
             window_end=row.window_end,
@@ -67,6 +68,7 @@ async def get_global_asr_quotas(
     items = [
         AsrQuotaItem(
             provider=row.provider,
+            variant=row.variant,
             window_type=row.window_type,
             window_start=row.window_start,
             window_end=row.window_end,
@@ -90,6 +92,7 @@ async def refresh_asr_quota(
     row = await upsert_quota(
         db,
         provider=payload.provider,
+        variant=payload.variant,
         window_type=payload.window_type,
         quota_seconds=quota_seconds,
         reset=payload.reset,
@@ -100,6 +103,7 @@ async def refresh_asr_quota(
     )
     item = AsrQuotaItem(
         provider=row.provider,
+        variant=row.variant,
         window_type=row.window_type,
         window_start=row.window_start,
         window_end=row.window_end,
@@ -122,6 +126,7 @@ async def refresh_global_asr_quota(
     row = await upsert_quota(
         db,
         provider=payload.provider,
+        variant=payload.variant,
         window_type=payload.window_type,
         quota_seconds=quota_seconds,
         reset=payload.reset,
@@ -132,6 +137,7 @@ async def refresh_global_asr_quota(
     )
     item = AsrQuotaItem(
         provider=row.provider,
+        variant=row.variant,
         window_type=row.window_type,
         window_start=row.window_start,
         window_end=row.window_end,

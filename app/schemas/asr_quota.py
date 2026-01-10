@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 class AsrQuotaItem(BaseModel):
     provider: str
+    variant: str
     window_type: Literal["day", "month", "total"]
     window_start: datetime
     window_end: datetime
@@ -22,6 +23,7 @@ class AsrQuotaListResponse(BaseModel):
 
 class AsrQuotaUpsertRequest(BaseModel):
     provider: str = Field(min_length=1)
+    variant: str = Field(default="file", min_length=1)
     window_type: Literal["day", "month", "total"]
     quota_seconds: float | None = Field(default=None, gt=0)
     quota_hours: float | None = Field(default=None, gt=0)

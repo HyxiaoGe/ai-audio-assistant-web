@@ -5,15 +5,17 @@
 ## 设计原则
 - 以“调用消耗时长（秒）”为唯一计量单位。
 - 不依赖官方余额 API（如后续可用，再接入同步）。
-- 支持日/月两类窗口，按 provider 维护。
+- 支持日/月/总量三类窗口，按 provider+variant 维护。
 - 可动态刷新（手动更新额度、重置窗口），支持前端查询。
+- variant 约定：file / file_fast / stream_async / stream_realtime（可扩展）。
 
 ## 范围与阶段
 ### P0：数据与统计（只做本地额度池）
 1) 数据模型 ✅
 - 新表 `asr_quota`：
   - provider
-  - window_type: day | month
+  - variant（录音文件识别/流式等）
+  - window_type: day | month | total
   - window_start / window_end
   - quota_seconds
   - used_seconds
@@ -47,7 +49,7 @@
 
 ### P2：可刷新与查询接口
 1) 查询接口 ✅
-- GET `/api/v1/asr/quotas` 返回各 provider 当前额度、已用、窗口、状态。
+- GET `/api/v1/asr/quotas` 返回各 provider+variant 当前额度、已用、窗口、状态。
 
 2) 手动刷新接口 ✅
 - POST `/api/v1/asr/quotas/refresh` 支持：
@@ -58,6 +60,7 @@
 ## 数据来源与窗口计算
 - day：以服务商时区 00:00 为边界（默认本地时区，后续可配置）。
 - month：当月 1 日 00:00 起。
+- total：可选传入 window_start/window_end 作为有效期。
 
 ## 风险与处理
 - duration_seconds 可能为空：
@@ -66,7 +69,7 @@
   - 数据库层原子更新（UPDATE used_seconds = used_seconds + ?）。
 
 ## 验收标准
-- 指定 provider 时必定使用该 provider。
+- 指定 provider 时必定使用该 provider（默认 variant=file）。
 - 未指定时，额度不足的 provider 不再被选中。
 - 刷新额度后 provider 可再次被选中。
 - 前端可查询额度与使用情况。

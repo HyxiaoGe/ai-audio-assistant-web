@@ -6,6 +6,13 @@ from typing import Optional
 from pydantic import BaseModel
 
 
+class WordTimestamp(BaseModel):
+    word: str
+    start_time: float
+    end_time: float
+    confidence: Optional[float] = None
+
+
 class TranscriptItem(BaseModel):
     id: str
     speaker_id: Optional[str] = None
@@ -14,6 +21,7 @@ class TranscriptItem(BaseModel):
     start_time: float
     end_time: float
     confidence: Optional[float] = None
+    words: Optional[list[WordTimestamp]] = None
     sequence: int
     is_edited: bool = False
     original_content: Optional[str] = None

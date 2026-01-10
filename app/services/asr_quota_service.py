@@ -57,25 +57,29 @@ def _active_window_clause(now: datetime) -> object:
     return and_(AsrQuota.window_start <= now, AsrQuota.window_end >= now)
 
 
+QuotaKey = tuple[str, str]
+
+
 def _effective_quotas(
     rows: list[AsrQuota],
-    providers: list[str],
+    keys: list[QuotaKey],
     owner_user_id: Optional[str],
-) -> dict[str, list[AsrQuota]]:
-    user_map: dict[str, list[AsrQuota]] = {}
-    global_map: dict[str, list[AsrQuota]] = {}
+) -> dict[QuotaKey, list[AsrQuota]]:
+    user_map: dict[QuotaKey, list[AsrQuota]] = {}
+    global_map: dict[QuotaKey, list[AsrQuota]] = {}
     for row in rows:
+        key = (row.provider, row.variant)
         if row.owner_user_id:
-            user_map.setdefault(row.provider, []).append(row)
+            user_map.setdefault(key, []).append(row)
         else:
-            global_map.setdefault(row.provider, []).append(row)
+            global_map.setdefault(key, []).append(row)
 
-    effective: dict[str, list[AsrQuota]] = {}
-    for provider in providers:
-        if owner_user_id and provider in user_map:
-            effective[provider] = user_map[provider]
-        elif provider in global_map:
-            effective[provider] = global_map[provider]
+    effective: dict[QuotaKey, list[AsrQuota]] = {}
+    for key in keys:
+        if owner_user_id and key in user_map:
+            effective[key] = user_map[key]
+        elif key in global_map:
+            effective[key] = global_map[key]
     return effective
 
 
@@ -83,6 +87,7 @@ def select_available_provider_sync(
     session: Session,
     providers: Iterable[str],
     owner_user_id: Optional[str] = None,
+    variant: str = "file",
     now: Optional[datetime] = None,
 ) -> list[str]:
     now = now or datetime.now(timezone.utc)
@@ -94,10 +99,9 @@ def select_available_provider_sync(
         session.execute(
             select(AsrQuota)
             .where(AsrQuota.provider.in_(provider_list))
+            .where(AsrQuota.variant == variant)
             .where(_active_window_clause(now))
-            .where(
-                or_(AsrQuota.owner_user_id.is_(None), AsrQuota.owner_user_id == owner_user_id)
-            )
+            .where(or_(AsrQuota.owner_user_id.is_(None), AsrQuota.owner_user_id == owner_user_id))
         )
         .scalars()
         .all()
@@ -106,10 +110,11 @@ def select_available_provider_sync(
     if not rows:
         return []
 
-    quotas_by_provider = _effective_quotas(rows, provider_list, owner_user_id)
+    keys = [(provider, variant) for provider in provider_list]
+    quotas_by_key = _effective_quotas(rows, keys, owner_user_id)
 
     available: list[str] = []
-    for provider, quotas in quotas_by_provider.items():
+    for (provider, _variant), quotas in quotas_by_key.items():
         if all(_is_available(q) for q in quotas):
             available.append(provider)
 
@@ -120,6 +125,7 @@ def get_quota_providers_sync(
     session: Session,
     providers: Iterable[str],
     owner_user_id: Optional[str] = None,
+    variant: str = "file",
     now: Optional[datetime] = None,
 ) -> set[str]:
     now = now or datetime.now(timezone.utc)
@@ -131,23 +137,24 @@ def get_quota_providers_sync(
         session.execute(
             select(AsrQuota)
             .where(AsrQuota.provider.in_(provider_list))
+            .where(AsrQuota.variant == variant)
             .where(_active_window_clause(now))
-            .where(
-                or_(AsrQuota.owner_user_id.is_(None), AsrQuota.owner_user_id == owner_user_id)
-            )
+            .where(or_(AsrQuota.owner_user_id.is_(None), AsrQuota.owner_user_id == owner_user_id))
         )
         .scalars()
         .all()
     )
-    effective = _effective_quotas(rows, provider_list, owner_user_id)
-    return set(effective.keys())
+    keys = [(provider, variant) for provider in provider_list]
+    effective = _effective_quotas(rows, keys, owner_user_id)
+    return {provider for (provider, _variant) in effective.keys()}
 
 
 def record_usage_sync(
     session: Session,
     provider: str,
-    duration_seconds: int,
+    duration_seconds: float,
     owner_user_id: Optional[str] = None,
+    variant: str = "file",
     now: Optional[datetime] = None,
 ) -> None:
     if not provider or duration_seconds <= 0:
@@ -158,6 +165,7 @@ def record_usage_sync(
         session.execute(
             select(AsrQuota)
             .where(AsrQuota.provider == provider)
+            .where(AsrQuota.variant == variant)
             .where(_active_window_clause(now))
             .where(or_(AsrQuota.owner_user_id.is_(None), AsrQuota.owner_user_id == owner_user_id))
         )
@@ -168,7 +176,8 @@ def record_usage_sync(
     if not rows:
         return
 
-    effective = _effective_quotas(rows, [provider], owner_user_id).get(provider, [])
+    key = (provider, variant)
+    effective = _effective_quotas(rows, [key], owner_user_id).get(key, [])
     for row in effective:
         new_used = row.used_seconds + duration_seconds
         status = "exhausted" if new_used >= row.quota_seconds else row.status
@@ -193,11 +202,11 @@ async def list_effective_quotas(
         .where(or_(AsrQuota.owner_user_id.is_(None), AsrQuota.owner_user_id == owner_user_id))
     )
     rows = result.scalars().all()
-    providers = sorted({row.provider for row in rows})
-    effective = _effective_quotas(rows, providers, owner_user_id)
+    keys = sorted({(row.provider, row.variant) for row in rows})
+    effective = _effective_quotas(rows, keys, owner_user_id)
     merged: list[AsrQuota] = []
-    for provider in providers:
-        merged.extend(effective.get(provider, []))
+    for key in keys:
+        merged.extend(effective.get(key, []))
     return merged
 
 
@@ -207,9 +216,7 @@ async def list_global_quotas(
 ) -> list[AsrQuota]:
     now = now or datetime.now(timezone.utc)
     result = await db.execute(
-        select(AsrQuota)
-        .where(_active_window_clause(now))
-        .where(AsrQuota.owner_user_id.is_(None))
+        select(AsrQuota).where(_active_window_clause(now)).where(AsrQuota.owner_user_id.is_(None))
     )
     return result.scalars().all()
 
@@ -217,13 +224,14 @@ async def list_global_quotas(
 async def upsert_quota(
     db: AsyncSession,
     provider: str,
+    variant: str,
     window_type: str,
-    quota_seconds: int,
+    quota_seconds: float,
     reset: bool,
     owner_user_id: Optional[str],
     window_start: Optional[datetime] = None,
     window_end: Optional[datetime] = None,
-    used_seconds: Optional[int] = None,
+    used_seconds: Optional[float] = None,
     now: Optional[datetime] = None,
 ) -> AsrQuota:
     now = now or datetime.now(timezone.utc)
@@ -231,6 +239,7 @@ async def upsert_quota(
 
     stmt = select(AsrQuota).where(
         AsrQuota.provider == provider,
+        AsrQuota.variant == variant,
         AsrQuota.window_type == window_type,
         AsrQuota.window_start == window.start,
         AsrQuota.owner_user_id == owner_user_id,
@@ -257,6 +266,7 @@ async def upsert_quota(
     new_row = AsrQuota(
         owner_user_id=owner_user_id,
         provider=provider,
+        variant=variant,
         window_type=window_type,
         window_start=window.start,
         window_end=window.end,

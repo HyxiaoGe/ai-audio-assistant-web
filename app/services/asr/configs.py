@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import Field
 
 from app.core.config_manager import ServiceConfig, register_config_schema
@@ -29,10 +31,18 @@ class TencentASRConfig(ServiceConfig):
 
     secret_id: str = Field(..., description="腾讯云 Secret ID", min_length=1)
     secret_key: str = Field(..., description="腾讯云 Secret Key", min_length=1)
+    app_id: Optional[str] = Field(
+        default=None,
+        description="AppID（录音文件识别极速版使用）",
+    )
     region: str = Field(..., description="地域", min_length=1)
     engine_model_type: str = Field(
         default="16k_zh",
         description="引擎模型类型",
+    )
+    engine_model_type_file_fast: Optional[str] = Field(
+        default=None,
+        description="极速版引擎模型类型（对应 asr_variant=file_fast）",
     )
     channel_num: int = Field(default=1, description="声道数", ge=1, le=2)
     res_text_format: int = Field(default=0, description="结果文本格式", ge=0, le=3)

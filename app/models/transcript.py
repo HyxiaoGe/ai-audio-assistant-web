@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, Numeric, String, Text, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import BaseRecord
@@ -33,6 +33,7 @@ class Transcript(BaseRecord):
     start_time: Mapped[float] = mapped_column(Numeric(10, 3), nullable=False)
     end_time: Mapped[float] = mapped_column(Numeric(10, 3), nullable=False)
     confidence: Mapped[Optional[float]] = mapped_column(Numeric(4, 3), nullable=True)
+    words: Mapped[Optional[list[dict[str, object]]]] = mapped_column(JSONB, nullable=True)
 
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
 

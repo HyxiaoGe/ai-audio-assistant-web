@@ -6,6 +6,16 @@ from typing import Awaitable, Callable, List, Optional
 
 
 @dataclass(frozen=True)
+class WordTimestamp:
+    """词级时间戳"""
+
+    word: str
+    start_time: float
+    end_time: float
+    confidence: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class TranscriptSegment:
     """转写结果片段
 
@@ -15,6 +25,7 @@ class TranscriptSegment:
         end_time: 结束时间（秒）
         content: 转写文本内容
         confidence: 置信度（0.0-1.0），None 表示未提供
+        words: 词级时间戳（可选）
     """
 
     speaker_id: Optional[str]
@@ -22,6 +33,7 @@ class TranscriptSegment:
     end_time: float
     content: str
     confidence: Optional[float]
+    words: Optional[List[WordTimestamp]] = None
 
 
 class ASRService(ABC):

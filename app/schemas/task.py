@@ -13,6 +13,7 @@ class TaskOptions(BaseModel):
     provider: Optional[str] = Field(default=None)
     model_id: Optional[str] = Field(default=None)
     asr_provider: Optional[str] = Field(default=None)
+    asr_variant: Optional[str] = Field(default=None)
 
 
 class TaskCreateRequest(BaseModel):
