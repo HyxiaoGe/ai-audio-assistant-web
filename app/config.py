@@ -111,5 +111,7 @@ class Settings(BaseSettings):
     YOUTUBE_OUTPUT_TEMPLATE: Optional[str] = Field(default=None)
     YOUTUBE_DOWNLOAD_FORMAT: Optional[str] = Field(default=None)
 
+    STATS_CURRENCY: str = Field(default="CNY")
+
 
 settings = Settings()

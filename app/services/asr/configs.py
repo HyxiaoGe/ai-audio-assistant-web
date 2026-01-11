@@ -50,7 +50,7 @@ class TencentASRConfig(ServiceConfig):
     speaker_number: int = Field(default=0, description="说话人数量", ge=0, le=10)
     source_type: int = Field(default=0, description="音频来源类型（URL=0/Base64=1）", ge=0, le=1)
     poll_interval: int = Field(default=5, description="轮询间隔（秒）", ge=1, le=60)
-    max_wait: int = Field(default=3600, description="最大等待时间（秒）", ge=60)
+    max_wait: int = Field(default=3600, description="最大等待时间（秒）", ge=1)
 
     class Config:
         """Pydantic 配置"""

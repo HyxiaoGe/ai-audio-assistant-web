@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.config_manager import ConfigManager
+from app.core.cost_optimizer import cost_tracker
 from app.core.exceptions import BusinessError
 from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
@@ -29,9 +30,9 @@ from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp
 from app.services.asr_quota_service import (
-    get_quota_providers_sync,
-    record_usage_sync,
-    select_available_provider_sync,
+    get_quota_providers,
+    record_usage,
+    select_available_provider,
 )
 from app.services.llm.base import LLMService
 from app.services.storage.base import StorageService
@@ -46,6 +47,31 @@ async def _maybe_await(result: Awaitable[Any] | Any) -> Any:
     if inspect.isawaitable(result):
         return await result
     return result
+
+
+def _call_factory(factory: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):
+        return factory(*args, **kwargs)
+
+    params = list(signature.parameters.values())
+    if any(param.kind == param.VAR_POSITIONAL for param in params):
+        return factory(*args, **kwargs)
+    if any(param.kind == param.VAR_KEYWORD for param in params):
+        return factory(*args, **kwargs)
+
+    accepted_kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
+    positional_params = [
+        param
+        for param in params
+        if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+    ]
+    max_positional = len(positional_params) - len(
+        [param for param in positional_params if param.name in accepted_kwargs]
+    )
+    filtered_args = list(args[:max_positional])
+    return factory(*filtered_args, **accepted_kwargs)
 
 
 @asynccontextmanager
@@ -147,7 +173,7 @@ def _resolve_asr_variant(task: Task) -> str:
     return raw_variant if isinstance(raw_variant, str) and raw_variant else "file"
 
 
-def _select_asr_provider_by_quota(
+async def _select_asr_provider_by_quota(
     session: Session,
     owner_user_id: Optional[str],
     variants: list[str],
@@ -155,10 +181,10 @@ def _select_asr_provider_by_quota(
 ) -> tuple[Optional[str], str]:
     providers = providers or ServiceRegistry.list_services("asr")
     for variant in variants:
-        quota_providers = get_quota_providers_sync(
+        quota_providers = await get_quota_providers(
             session, providers, owner_user_id, variant=variant
         )
-        available = select_available_provider_sync(
+        available = await select_available_provider(
             session, providers, owner_user_id, variant=variant
         )
         if available:
@@ -175,10 +201,12 @@ def _preferred_asr_providers_for_diarization() -> list[str]:
 
 
 def _resolve_tencent_app_id(user_id: Optional[str]) -> Optional[str]:
-    try:
-        config = ConfigManager.get_config("asr", "tencent", user_id=user_id)
-    except Exception:
-        config = None
+    config = None
+    if settings.CONFIG_CENTER_DB_ENABLED:
+        try:
+            config = ConfigManager.get_config("asr", "tencent", user_id=user_id)
+        except Exception:
+            config = None
     app_id = getattr(config, "app_id", None) if config else None
     if app_id:
         return str(app_id).strip()
@@ -450,7 +478,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                         # 上传到 MinIO（用于前端播放）
                         # 使用 SmartFactory 获取 MinIO storage
                         minio_storage: StorageService = await _maybe_await(
-                            get_storage_service("minio", user_id=str(task.user_id))
+                            _call_factory(get_storage_service, "minio", user_id=str(task.user_id))
                         )
                         logger.info(f"Uploading to MinIO: {task.source_key}")
                         minio_storage.upload_file(task.source_key, tmp_path, "audio/wav")
@@ -474,7 +502,9 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     )
                 # 使用 COS 存储生成带签名的 URL 供 ASR 访问
                 # 使用 SmartFactory 获取 COS storage
-                cos_storage = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
+                cos_storage = await _maybe_await(
+                    _call_factory(get_storage_service, user_id=str(task.user_id))
+                )
                 audio_candidates.append(
                     cos_storage.generate_presigned_url(task.source_key, expires_in)
                 )
@@ -487,7 +517,9 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                             ErrorCode.INVALID_PARAMETER, detail="upload_presign_expires"
                         )
                     # 使用 SmartFactory 获取 COS storage
-                    cos_storage = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
+                    cos_storage = await _maybe_await(
+                        _call_factory(get_storage_service, user_id=str(task.user_id))
+                    )
                     audio_candidates.append(
                         cos_storage.generate_presigned_url(task.source_key, expires_in)
                     )
@@ -524,7 +556,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                         if provider in ServiceRegistry.list_services("asr")
                     ]
                     if preferred:
-                        asr_provider, asr_variant = _select_asr_provider_by_quota(
+                        asr_provider, asr_variant = await _select_asr_provider_by_quota(
                             session,
                             str(task.user_id),
                             variants,
@@ -533,13 +565,13 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                         if not asr_provider:
                             asr_provider = preferred[0]
                     else:
-                        asr_provider, asr_variant = _select_asr_provider_by_quota(
+                        asr_provider, asr_variant = await _select_asr_provider_by_quota(
                             session,
                             str(task.user_id),
                             variants,
                         )
                 else:
-                    asr_provider, asr_variant = _select_asr_provider_by_quota(
+                    asr_provider, asr_variant = await _select_asr_provider_by_quota(
                         session,
                         str(task.user_id),
                         variants,
@@ -550,7 +582,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     task.options["asr_variant"] = asr_variant
                 await _commit(session)
             asr_service: ASRService = await _maybe_await(
-                get_asr_service(str(task.user_id), provider=asr_provider)
+                _call_factory(get_asr_service, str(task.user_id), provider=asr_provider)
             )
             last_error: Optional[BusinessError] = None
             segments: list[TranscriptSegment] = []
@@ -640,20 +672,36 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             if duration_seconds and not task.duration_seconds:
                 task.duration_seconds = duration_seconds
                 await _commit(session)
-            record_usage_sync(
-                session,
-                asr_service.provider,
-                duration_seconds,
-                str(task.user_id),
-                variant=asr_variant,
-            )
+            provider_name = getattr(asr_service, "provider", None) or asr_provider
+            if provider_name and duration_seconds:
+                estimated_cost = 0.0
+                if hasattr(asr_service, "estimate_cost"):
+                    estimated_cost = asr_service.estimate_cost(duration_seconds)
+                cost_tracker.record_usage(
+                    "asr",
+                    provider_name,
+                    {"duration_seconds": duration_seconds},
+                    estimated_cost,
+                )
+            if provider_name:
+                await record_usage(
+                    session,
+                    provider_name,
+                    duration_seconds,
+                    str(task.user_id),
+                    variant=asr_variant,
+                )
 
             await _update_task(session, task, "summarizing", 80, "summarizing", request_id)
             # 使用 SmartFactory 获取 LLM 服务（自动选择最优服务）
             provider, model_id = _resolve_llm_selection(task, str(task.user_id))
             llm_service: LLMService = await _maybe_await(
-                get_llm_service(provider, model_id, str(task.user_id))
+                _call_factory(get_llm_service, provider, model_id, str(task.user_id))
             )
+            llm_provider = getattr(llm_service, "provider", None) or provider
+            if llm_provider:
+                task.llm_provider = llm_provider
+                await _commit(session)
             full_text = "\n".join([seg.content for seg in segments])
 
             options = task.options or {}
@@ -693,6 +741,19 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                 else:
                     summarize_result = summarize(full_text, summary_type)
                 content = cast(str, await _maybe_await(summarize_result))
+                llm_provider = getattr(llm_service, "provider", None) or provider
+                if llm_provider:
+                    input_tokens = len(full_text)
+                    output_tokens = len(content)
+                    estimated_cost = 0.0
+                    if hasattr(llm_service, "estimate_cost"):
+                        estimated_cost = llm_service.estimate_cost(input_tokens, output_tokens)
+                    cost_tracker.record_usage(
+                        "llm",
+                        llm_provider,
+                        {"input_tokens": input_tokens, "output_tokens": output_tokens},
+                        estimated_cost,
+                    )
                 logger.info(
                     "Task %s: Generated %s summary (%d characters)",
                     task_id,

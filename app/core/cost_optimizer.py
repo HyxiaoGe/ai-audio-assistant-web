@@ -60,11 +60,12 @@ class CostOptimizer:
 
     def __init__(self, config: CostOptimizerConfig):
         self.config = config
-        self.tracker = (
-            CostTracker(use_redis=config.enable_redis_persistence)
-            if config.enable_cost_tracking
-            else None
-        )
+        if not config.enable_cost_tracking:
+            self.tracker = None
+        elif config.enable_redis_persistence:
+            self.tracker = cost_tracker
+        else:
+            self.tracker = CostTracker(use_redis=False)
 
     def select_service(
         self,
@@ -344,6 +345,105 @@ class CostTracker:
         today = record.timestamp.date()
         self._daily_cache[today] = self._daily_cache.get(today, 0.0) + record.estimated_cost
 
+    def get_records_in_range(
+        self,
+        start: datetime,
+        end: datetime,
+        service_type: Optional[str] = None,
+        service_name: Optional[str] = None,
+    ) -> List[UsageRecord]:
+        """获取指定时间范围内的使用记录。"""
+        with self._lock:
+            if self._use_redis and self._redis_client:
+                return self._get_records_in_range_from_redis(start, end, service_type, service_name)
+
+            return [
+                record
+                for record in self._records
+                if start <= record.timestamp <= end
+                and (not service_type or record.service_type == service_type)
+                and (not service_name or record.service_name == service_name)
+            ]
+
+    def _get_records_in_range_from_redis(
+        self,
+        start: datetime,
+        end: datetime,
+        service_type: Optional[str],
+        service_name: Optional[str],
+    ) -> List[UsageRecord]:
+        try:
+            start_ts = start.timestamp()
+            end_ts = end.timestamp()
+
+            if service_type and service_name:
+                pattern = f"cost:records:{service_type}:{service_name}"
+            elif service_type:
+                pattern = f"cost:records:{service_type}:*"
+            else:
+                pattern = "cost:records:*"
+
+            records: List[UsageRecord] = []
+            for key in self._redis_client.scan_iter(match=pattern, count=100):
+                raw_records = self._redis_client.zrangebyscore(key, start_ts, end_ts)
+                for raw in raw_records:
+                    record_dict = json.loads(raw)
+                    record_dict["timestamp"] = datetime.fromisoformat(record_dict["timestamp"])
+                    records.append(UsageRecord(**record_dict))
+
+            return records
+        except Exception as exc:
+            logger.error(f"Failed to get records from Redis: {exc}", exc_info=True)
+            self._use_redis = False
+            return []
+
+    def get_daily_summary(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> Dict[date, Dict[str, float]]:
+        """获取每日成本汇总（按 service_type:service_name 聚合）。"""
+        with self._lock:
+            if self._use_redis and self._redis_client:
+                return self._get_daily_summary_from_redis(start_date, end_date)
+
+            summary: Dict[date, Dict[str, float]] = {}
+            for record in self._records:
+                record_date = record.timestamp.date()
+                if record_date < start_date or record_date > end_date:
+                    continue
+                summary.setdefault(record_date, {})
+                key = f"{record.service_type}:{record.service_name}"
+                summary[record_date][key] = summary[record_date].get(key, 0.0) + record.estimated_cost
+            return summary
+
+    def _get_daily_summary_from_redis(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> Dict[date, Dict[str, float]]:
+        result: Dict[date, Dict[str, float]] = {}
+        current = start_date
+
+        while current <= end_date:
+            daily_key = f"cost:daily:{current.isoformat()}"
+            try:
+                daily_data = self._redis_client.hgetall(daily_key)
+            except Exception as exc:
+                logger.error(f"Failed to read daily cost from Redis: {exc}", exc_info=True)
+                self._use_redis = False
+                break
+
+            if daily_data:
+                result[current] = {
+                    key.decode(): float(value.decode())
+                    for key, value in daily_data.items()
+                }
+
+            current += timedelta(days=1)
+
+        return result
+
     def get_daily_cost(self, target_date: date) -> float:
         """获取指定日期的总成本
 
@@ -500,6 +600,9 @@ class CostTracker:
             service_breakdown=breakdown,
             daily_costs=daily_costs,
         )
+
+
+cost_tracker = CostTracker(use_redis=True)
 
 
 @dataclass
