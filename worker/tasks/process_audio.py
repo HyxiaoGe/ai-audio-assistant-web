@@ -571,11 +571,24 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                             variants,
                         )
                 else:
-                    asr_provider, asr_variant = await _select_asr_provider_by_quota(
-                        session,
-                        str(task.user_id),
-                        variants,
-                    )
+                    all_providers = ServiceRegistry.list_services("asr")
+                    preferred = [provider for provider in all_providers if provider != "tencent"]
+                    if preferred:
+                        asr_provider, asr_variant = await _select_asr_provider_by_quota(
+                            session,
+                            str(task.user_id),
+                            variants,
+                            providers=preferred,
+                        )
+                    if not asr_provider:
+                        asr_provider, asr_variant = await _select_asr_provider_by_quota(
+                            session,
+                            str(task.user_id),
+                            variants,
+                            providers=all_providers,
+                        )
+                    if not asr_provider and "tencent" in all_providers:
+                        asr_provider = "tencent"
             if asr_provider:
                 task.asr_provider = asr_provider
                 if isinstance(task.options, dict):

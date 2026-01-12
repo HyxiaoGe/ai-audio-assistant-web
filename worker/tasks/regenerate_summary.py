@@ -168,6 +168,11 @@ def _regenerate_summary(
     used_model_id = resolved_model_id or (
         llm_service.model_name if hasattr(llm_service, "model_name") else provider
     )
+    with get_sync_db_session() as session:
+        task = session.query(Task).filter(Task.id == task_id).first()
+        if task is not None and used_provider:
+            task.llm_provider = used_provider
+            session.commit()
     if model:
         logger.info(
             "[%s] Using user-specified LLM - provider: %s, model_id: %s",

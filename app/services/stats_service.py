@@ -94,13 +94,14 @@ class StatsService:
                 Task.asr_provider if service_type == "asr" else Task.llm_provider
             ).label("provider")
             stage_type = _SERVICE_STAGE[service_type]
+            time_field = Task.created_at if service_type == "asr" else Task.updated_at
 
             status_stmt = (
                 select(provider_field, Task.status, func.count(Task.id).label("count"))
                 .where(
                     Task.user_id == self.user.id,
-                    Task.created_at >= start,
-                    Task.created_at <= end,
+                    time_field >= start,
+                    time_field <= end,
                     Task.deleted_at.is_(None),
                     provider_field.is_not(None),
                 )
@@ -135,8 +136,8 @@ class StatsService:
                 select(provider_field, func.sum(Task.duration_seconds).label("duration"))
                 .where(
                     Task.user_id == self.user.id,
-                    Task.created_at >= start,
-                    Task.created_at <= end,
+                    time_field >= start,
+                    time_field <= end,
                     Task.deleted_at.is_(None),
                     provider_field.is_not(None),
                 )
@@ -154,8 +155,8 @@ class StatsService:
                 .join(TaskStage, TaskStage.task_id == Task.id)
                 .where(
                     Task.user_id == self.user.id,
-                    Task.created_at >= start,
-                    Task.created_at <= end,
+                    time_field >= start,
+                    time_field <= end,
                     Task.deleted_at.is_(None),
                     provider_field.is_not(None),
                     TaskStage.stage_type == stage_type,

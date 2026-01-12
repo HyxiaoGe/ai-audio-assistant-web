@@ -1024,6 +1024,10 @@ def _process_youtube(
                         user_id=str(task.user_id),
                     )
                 )
+                llm_provider = getattr(llm_service, "provider", None) or provider
+                if llm_provider:
+                    task.llm_provider = llm_provider
+                    session.commit()
                 full_text = "\n".join([seg.content for seg in segments])
                 logger.info(
                     "Task %s: Starting LLM summarization with %d characters of text",
