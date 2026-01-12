@@ -119,9 +119,9 @@ class StatsService:
                     Task.deleted_at.is_(None),
                     Task.asr_provider.is_not(None),
                 )
-                status_rows = (await self.db.execute(
-                    status_query.group_by(provider_field, Task.status)
-                )).all()
+                status_rows = (
+                    await self.db.execute(status_query.group_by(provider_field, Task.status))
+                ).all()
 
                 for row in status_rows:
                     provider = row.provider
@@ -149,9 +149,7 @@ class StatsService:
                     .group_by(provider_field)
                 )
                 duration_rows = (await self.db.execute(duration_stmt)).all()
-                duration_map = {
-                    row.provider: float(row.duration or 0.0) for row in duration_rows
-                }
+                duration_map = {row.provider: float(row.duration or 0.0) for row in duration_rows}
 
                 stage_stmt = (
                     select(
@@ -280,9 +278,7 @@ class StatsService:
                         "failure_rate": round(failure_rate, 1),
                         "avg_stage_seconds": round(avg_stage, 1),
                         "median_stage_seconds": round(median_stage, 1),
-                        "total_audio_duration_seconds": round(
-                            duration_map.get(provider, 0.0), 1
-                        ),
+                        "total_audio_duration_seconds": round(duration_map.get(provider, 0.0), 1),
                     }
                 )
 
@@ -293,7 +289,9 @@ class StatsService:
             total_processing = sum(stats["processing"] for stats in provider_stats.values())
             success_rate = (total_completed / total_calls * 100) if total_calls > 0 else 0.0
             failure_rate = (total_failed / total_calls * 100) if total_calls > 0 else 0.0
-            avg_stage = sum(service_durations) / len(service_durations) if service_durations else 0.0
+            avg_stage = (
+                sum(service_durations) / len(service_durations) if service_durations else 0.0
+            )
             median_stage = statistics.median(service_durations) if service_durations else 0.0
             total_audio_duration = sum(duration_map.values()) if service_type == "asr" else 0.0
 

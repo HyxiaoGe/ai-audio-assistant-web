@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import inspect
 from typing import Iterable, Optional
 
 from sqlalchemy import and_, or_, select, update

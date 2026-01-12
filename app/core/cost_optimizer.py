@@ -414,7 +414,9 @@ class CostTracker:
                     continue
                 summary.setdefault(record_date, {})
                 key = f"{record.service_type}:{record.service_name}"
-                summary[record_date][key] = summary[record_date].get(key, 0.0) + record.estimated_cost
+                summary[record_date][key] = (
+                    summary[record_date].get(key, 0.0) + record.estimated_cost
+                )
             return summary
 
     def _get_daily_summary_from_redis(
@@ -436,8 +438,7 @@ class CostTracker:
 
             if daily_data:
                 result[current] = {
-                    key.decode(): float(value.decode())
-                    for key, value in daily_data.items()
+                    key.decode(): float(value.decode()) for key, value in daily_data.items()
                 }
 
             current += timedelta(days=1)

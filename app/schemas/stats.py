@@ -45,4 +45,3 @@ class TaskOverviewResponse(BaseModel):
     processing_time_by_stage: Dict[str, float]
     total_audio_duration_seconds: float
     total_audio_duration_formatted: str
-

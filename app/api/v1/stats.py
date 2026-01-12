@@ -39,4 +39,3 @@ async def get_task_overview(
     service = StatsService(db, user)
     data = await service.get_task_overview(time_range, start_date, end_date)
     return success(data=jsonable_encoder(data))
-
