@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
+from app.models.llm_usage import LLMUsage
 from app.models.task import Task
 from app.models.task_stage import TaskStage
 from app.models.user import User
@@ -90,25 +91,7 @@ class StatsService:
         usage_by_service_type: list[Dict[str, Any]] = []
 
         for service_type in _SERVICE_TYPES:
-            provider_field = (
-                Task.asr_provider if service_type == "asr" else Task.llm_provider
-            ).label("provider")
             stage_type = _SERVICE_STAGE[service_type]
-            time_field = Task.created_at if service_type == "asr" else Task.updated_at
-
-            status_stmt = (
-                select(provider_field, Task.status, func.count(Task.id).label("count"))
-                .where(
-                    Task.user_id == self.user.id,
-                    time_field >= start,
-                    time_field <= end,
-                    Task.deleted_at.is_(None),
-                    provider_field.is_not(None),
-                )
-                .group_by(provider_field, Task.status)
-            )
-            status_rows = (await self.db.execute(status_stmt)).all()
-
             provider_stats: dict[str, Dict[str, Any]] = defaultdict(
                 lambda: {
                     "total": 0,
@@ -118,62 +101,160 @@ class StatsService:
                     "processing": 0,
                 }
             )
-            for row in status_rows:
-                provider = row.provider
-                if not provider:
-                    continue
-                provider_stats[provider]["total"] += row.count
-                if row.status == "completed":
-                    provider_stats[provider]["completed"] += row.count
-                elif row.status == "failed":
-                    provider_stats[provider]["failed"] += row.count
-                elif row.status == "pending":
-                    provider_stats[provider]["pending"] += row.count
-                elif row.status == "processing":
-                    provider_stats[provider]["processing"] += row.count
-
-            duration_stmt = (
-                select(provider_field, func.sum(Task.duration_seconds).label("duration"))
-                .where(
-                    Task.user_id == self.user.id,
-                    time_field >= start,
-                    time_field <= end,
-                    Task.deleted_at.is_(None),
-                    provider_field.is_not(None),
-                )
-                .group_by(provider_field)
-            )
-            duration_rows = (await self.db.execute(duration_stmt)).all()
-            duration_map = {row.provider: float(row.duration or 0.0) for row in duration_rows}
-
-            stage_stmt = (
-                select(
-                    provider_field,
-                    TaskStage.started_at,
-                    TaskStage.completed_at,
-                )
-                .join(TaskStage, TaskStage.task_id == Task.id)
-                .where(
-                    Task.user_id == self.user.id,
-                    time_field >= start,
-                    time_field <= end,
-                    Task.deleted_at.is_(None),
-                    provider_field.is_not(None),
-                    TaskStage.stage_type == stage_type,
-                    TaskStage.is_active.is_(True),
-                    TaskStage.started_at.is_not(None),
-                    TaskStage.completed_at.is_not(None),
-                )
-            )
-            stage_rows = (await self.db.execute(stage_stmt)).all()
+            duration_map: dict[str, float] = {}
             durations_by_provider: dict[str, list[float]] = defaultdict(list)
-            for row in stage_rows:
-                provider = row.provider
-                if not provider:
-                    continue
-                durations_by_provider[provider].append(
-                    (row.completed_at - row.started_at).total_seconds()
+
+            if service_type == "asr":
+                provider_field = Task.asr_provider.label("provider")
+                time_field = Task.created_at
+
+                status_query = select(
+                    provider_field,
+                    Task.status,
+                    func.count(func.distinct(Task.id)).label("count"),
+                ).where(
+                    Task.user_id == self.user.id,
+                    time_field >= start,
+                    time_field <= end,
+                    Task.deleted_at.is_(None),
+                    Task.asr_provider.is_not(None),
                 )
+                status_rows = (await self.db.execute(
+                    status_query.group_by(provider_field, Task.status)
+                )).all()
+
+                for row in status_rows:
+                    provider = row.provider
+                    if not provider:
+                        continue
+                    provider_stats[provider]["total"] += row.count
+                    if row.status == "completed":
+                        provider_stats[provider]["completed"] += row.count
+                    elif row.status == "failed":
+                        provider_stats[provider]["failed"] += row.count
+                    elif row.status == "pending":
+                        provider_stats[provider]["pending"] += row.count
+                    elif row.status == "processing":
+                        provider_stats[provider]["processing"] += row.count
+
+                duration_stmt = (
+                    select(provider_field, func.sum(Task.duration_seconds).label("duration"))
+                    .where(
+                        Task.user_id == self.user.id,
+                        time_field >= start,
+                        time_field <= end,
+                        Task.deleted_at.is_(None),
+                        Task.asr_provider.is_not(None),
+                    )
+                    .group_by(provider_field)
+                )
+                duration_rows = (await self.db.execute(duration_stmt)).all()
+                duration_map = {
+                    row.provider: float(row.duration or 0.0) for row in duration_rows
+                }
+
+                stage_stmt = (
+                    select(
+                        provider_field,
+                        TaskStage.started_at,
+                        TaskStage.completed_at,
+                    )
+                    .join(TaskStage, TaskStage.task_id == Task.id)
+                    .where(
+                        Task.user_id == self.user.id,
+                        time_field >= start,
+                        time_field <= end,
+                        Task.deleted_at.is_(None),
+                        provider_field.is_not(None),
+                        TaskStage.stage_type == stage_type,
+                        TaskStage.is_active.is_(True),
+                        TaskStage.started_at.is_not(None),
+                        TaskStage.completed_at.is_not(None),
+                    )
+                )
+                stage_rows = (await self.db.execute(stage_stmt)).all()
+                for row in stage_rows:
+                    provider = row.provider
+                    if not provider:
+                        continue
+                    durations_by_provider[provider].append(
+                        (row.completed_at - row.started_at).total_seconds()
+                    )
+            else:
+                provider_field = LLMUsage.model_id.label("provider")
+                time_field = LLMUsage.created_at
+
+                status_query = (
+                    select(
+                        provider_field,
+                        LLMUsage.status,
+                        func.count(LLMUsage.id).label("count"),
+                    )
+                    .where(
+                        LLMUsage.user_id == self.user.id,
+                        time_field >= start,
+                        time_field <= end,
+                        LLMUsage.model_id.is_not(None),
+                        LLMUsage.model_id != "",
+                    )
+                    .group_by(provider_field, LLMUsage.status)
+                )
+                status_rows = (await self.db.execute(status_query)).all()
+                for row in status_rows:
+                    provider = row.provider
+                    if not provider:
+                        continue
+                    provider_stats[provider]["total"] += row.count
+                    if row.status == "failed":
+                        provider_stats[provider]["failed"] += row.count
+                    elif row.status == "pending":
+                        provider_stats[provider]["pending"] += row.count
+                    elif row.status == "processing":
+                        provider_stats[provider]["processing"] += row.count
+                    else:
+                        provider_stats[provider]["completed"] += row.count
+
+                provider_task_subq = (
+                    select(
+                        LLMUsage.model_id.label("provider"),
+                        LLMUsage.task_id.label("task_id"),
+                    )
+                    .where(
+                        LLMUsage.user_id == self.user.id,
+                        time_field >= start,
+                        time_field <= end,
+                        LLMUsage.model_id.is_not(None),
+                        LLMUsage.model_id != "",
+                        LLMUsage.task_id.is_not(None),
+                    )
+                    .distinct()
+                    .subquery()
+                )
+                stage_stmt = (
+                    select(
+                        provider_task_subq.c.provider,
+                        TaskStage.started_at,
+                        TaskStage.completed_at,
+                    )
+                    .join(
+                        TaskStage,
+                        TaskStage.task_id == provider_task_subq.c.task_id,
+                    )
+                    .where(
+                        TaskStage.stage_type == stage_type,
+                        TaskStage.is_active.is_(True),
+                        TaskStage.started_at.is_not(None),
+                        TaskStage.completed_at.is_not(None),
+                    )
+                )
+                stage_rows = (await self.db.execute(stage_stmt)).all()
+                for row in stage_rows:
+                    provider = row.provider
+                    if not provider:
+                        continue
+                    durations_by_provider[provider].append(
+                        (row.completed_at - row.started_at).total_seconds()
+                    )
 
             service_durations: list[float] = []
             for provider, stats in provider_stats.items():

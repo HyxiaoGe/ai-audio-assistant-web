@@ -14,6 +14,7 @@ from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
+from app.models.llm_usage import LLMUsage
 from app.models.task import Task
 from app.models.transcript import Transcript
 from worker.celery_app import celery_app
@@ -250,6 +251,18 @@ def _regenerate_summary(
                 comparison_id=comparison_id,  # 记录对比 ID
             )
             session.add(new_summary)
+            if used_provider:
+                session.add(
+                    LLMUsage(
+                        user_id=user_id,
+                        task_id=task_id,
+                        provider=used_provider,
+                        model_id=used_model_id,
+                        call_type="summarize",
+                        summary_type=summary_type,
+                        status="success",
+                    )
+                )
             session.commit()
 
             summary_id = str(new_summary.id)
@@ -282,6 +295,20 @@ def _regenerate_summary(
 
     except Exception as e:
         error_code = getattr(e, "code", "UNKNOWN_ERROR")
+        if used_provider:
+            with get_sync_db_session() as session:
+                session.add(
+                    LLMUsage(
+                        user_id=user_id,
+                        task_id=task_id,
+                        provider=used_provider,
+                        model_id=used_model_id,
+                        call_type="summarize",
+                        summary_type=summary_type,
+                        status="failed",
+                    )
+                )
+                session.commit()
         redis_client.publish(
             stream_key,
             json.dumps(

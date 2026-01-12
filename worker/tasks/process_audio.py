@@ -26,6 +26,7 @@ from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
+from app.models.llm_usage import LLMUsage
 from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp
@@ -735,6 +736,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             )
 
             summaries = []
+            llm_usages: list[LLMUsage] = []
             for summary_type in ("overview", "key_points", "action_items"):
                 logger.info(
                     "Task %s: Generating %s summary (style: %s)",
@@ -749,12 +751,28 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                 )
                 # LLM service is async, so we run it in asyncio.run()
                 summarize = llm_service.summarize
-                if len(inspect.signature(summarize).parameters) >= 3:
-                    summarize_result = summarize(full_text, summary_type, content_style)
-                else:
-                    summarize_result = summarize(full_text, summary_type)
-                content = cast(str, await _maybe_await(summarize_result))
-                llm_provider = getattr(llm_service, "provider", None) or provider
+                try:
+                    if len(inspect.signature(summarize).parameters) >= 3:
+                        summarize_result = summarize(full_text, summary_type, content_style)
+                    else:
+                        summarize_result = summarize(full_text, summary_type)
+                    content = cast(str, await _maybe_await(summarize_result))
+                except Exception:
+                    if llm_provider:
+                        llm_usages.append(
+                            LLMUsage(
+                                user_id=str(task.user_id),
+                                task_id=str(task.id),
+                                provider=llm_provider,
+                                model_id=llm_service.model_name,
+                                call_type="summarize",
+                                summary_type=summary_type,
+                                status="failed",
+                            )
+                        )
+                        session.add_all(llm_usages)
+                        await _commit(session)
+                    raise
                 if llm_provider:
                     input_tokens = len(full_text)
                     output_tokens = len(content)
@@ -766,6 +784,17 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                         llm_provider,
                         {"input_tokens": input_tokens, "output_tokens": output_tokens},
                         estimated_cost,
+                    )
+                    llm_usages.append(
+                        LLMUsage(
+                            user_id=str(task.user_id),
+                            task_id=str(task.id),
+                            provider=llm_provider,
+                            model_id=llm_service.model_name,
+                            call_type="summarize",
+                            summary_type=summary_type,
+                            status="success",
+                        )
                     )
                 logger.info(
                     "Task %s: Generated %s summary (%d characters)",
@@ -791,6 +820,8 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     )
                 )
             session.add_all(summaries)
+            if llm_usages:
+                session.add_all(llm_usages)
             await _commit(session)
             logger.info(
                 "Task %s: All summaries saved to database",

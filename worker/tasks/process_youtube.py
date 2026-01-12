@@ -26,6 +26,7 @@ from app.core.smart_factory import SmartFactory
 from app.core.task_stages import StageType
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
+from app.models.llm_usage import LLMUsage
 from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import TranscriptSegment, WordTimestamp
@@ -1037,6 +1038,7 @@ def _process_youtube(
                 )
 
                 summaries = []
+                llm_usages: list[LLMUsage] = []
                 for summary_type in ("overview", "key_points", "action_items"):
                     logger.info(
                         "Task %s: Generating %s summary",
@@ -1044,7 +1046,24 @@ def _process_youtube(
                         summary_type,
                         extra={"task_id": task_id, "summary_type": summary_type},
                     )
-                    content = asyncio.run(llm_service.summarize(full_text, summary_type))
+                    try:
+                        content = asyncio.run(llm_service.summarize(full_text, summary_type))
+                    except Exception:
+                        if llm_provider:
+                            llm_usages.append(
+                                LLMUsage(
+                                    user_id=str(task.user_id),
+                                    task_id=str(task.id),
+                                    provider=llm_provider,
+                                    model_id=llm_service.model_name,
+                                    call_type="summarize",
+                                    summary_type=summary_type,
+                                    status="failed",
+                                )
+                            )
+                            session.add_all(llm_usages)
+                            session.commit()
+                        raise
                     logger.info(
                         "Task %s: Generated %s summary (%d characters)",
                         task_id,
@@ -1056,6 +1075,18 @@ def _process_youtube(
                             "content_length": len(content),
                         },
                     )
+                    if llm_provider:
+                        llm_usages.append(
+                            LLMUsage(
+                                user_id=str(task.user_id),
+                                task_id=str(task.id),
+                                provider=llm_provider,
+                                model_id=llm_service.model_name,
+                                call_type="summarize",
+                                summary_type=summary_type,
+                                status="success",
+                            )
+                        )
                     summaries.append(
                         Summary(
                             task_id=task.id,
@@ -1069,6 +1100,8 @@ def _process_youtube(
                         )
                     )
                 session.add_all(summaries)
+                if llm_usages:
+                    session.add_all(llm_usages)
                 session.commit()
                 stage_manager.complete_stage(
                     session, StageType.SUMMARIZE, {"summary_count": len(summaries)}

@@ -3,6 +3,7 @@ from app.models.notification import Notification
 from app.models.service_config import ServiceConfig
 from app.models.service_config_history import ServiceConfigHistory
 from app.models.summary import Summary
+from app.models.llm_usage import LLMUsage
 from app.models.task import Task
 from app.models.task_stage import TaskStage
 from app.models.transcript import Transcript
@@ -14,6 +15,7 @@ __all__ = [
     "TaskStage",
     "Transcript",
     "Summary",
+    "LLMUsage",
     "Notification",
     "AsrQuota",
     "ServiceConfig",

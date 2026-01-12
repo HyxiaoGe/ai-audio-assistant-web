@@ -205,7 +205,9 @@ Accept-Language: zh
 - 服务使用统计与任务统计均按当前用户维度过滤。
 - 时间参数为 RFC3339；无时区时按 UTC 处理。
 - `services/trend` 已下线：趋势口径对用户价值低，且易被偶发波动误导（暂不提供）。
-- LLM 使用统计按任务的 `updated_at` 过滤（保证摘要重生成也能统计）。
+- LLM 使用统计基于 LLM 调用记录（`llm_usages`），任意 LLM 调用都会计入。
+- `call_count` 按实际 LLM 调用次数累计（摘要生成与重生成均计入）。
+- LLM 的 `provider` 字段返回模型名（`model_id`），例如 `anthropic/claude-3.5-sonnet`。
 
 ### 4.1 服务使用概览
 
@@ -276,12 +278,12 @@ Query：
       "service_type": "llm",
       "provider": "doubao",
       "call_count": 6,
-      "success_count": 5,
-      "failure_count": 1,
+      "success_count": 6,
+      "failure_count": 0,
       "pending_count": 0,
       "processing_count": 0,
-      "success_rate": 83.3,
-      "failure_rate": 16.7,
+      "success_rate": 100.0,
+      "failure_rate": 0.0,
       "avg_stage_seconds": 6.2,
       "median_stage_seconds": 5.8,
       "total_audio_duration_seconds": 0.0
