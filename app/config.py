@@ -103,6 +103,17 @@ class Settings(BaseSettings):
     OPENROUTER_APP_TITLE: Optional[str] = Field(default=None)
     OPENROUTER_DYNAMIC_MODELS: bool = Field(default=False)
 
+    OPENAI_API_KEY: Optional[str] = Field(default=None)
+    OPENAI_BASE_URL: Optional[str] = Field(default="https://api.openai.com/v1")
+
+    RAG_EMBEDDING_ENABLED: bool = Field(default=True)
+    RAG_EMBEDDING_PROVIDER: Optional[str] = Field(default="openrouter")
+    RAG_EMBEDDING_MODEL: Optional[str] = Field(default="text-embedding-3-small")
+    RAG_EMBEDDING_DIM: Optional[int] = Field(default=1536)
+    RAG_CHUNK_SIZE: int = Field(default=300)
+    RAG_CHUNK_OVERLAP: int = Field(default=50)
+    RAG_EMBED_BATCH_SIZE: int = Field(default=64)
+
     UPLOAD_ALLOWED_EXTENSIONS: Optional[str] = Field(default=None)
     UPLOAD_MAX_SIZE_BYTES: Optional[int] = Field(default=None)
     UPLOAD_PRESIGN_EXPIRES: Optional[int] = Field(default=None)

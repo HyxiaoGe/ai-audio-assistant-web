@@ -172,10 +172,19 @@ class AliyunASRService(ASRService):
         logger.info("Aliyun NLS ASR submitting: url=%s", audio_url)
 
         try:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "X-NLS-Token": token,
+            }
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(_GATEWAY_URL, json=payload)
-                response.raise_for_status()
-                data = response.json()
+                response = await client.post(_GATEWAY_URL, json=payload, headers=headers)
+            if response.status_code >= 400:
+                reason = self._extract_http_error(response)
+                raise BusinessError(
+                    ErrorCode.ASR_SERVICE_FAILED,
+                    reason=f"Submit task failed (HTTP {response.status_code}): {reason}",
+                )
+            data = response.json()
         except httpx.HTTPError as exc:
             raise BusinessError(
                 ErrorCode.ASR_SERVICE_FAILED, reason=f"Submit task failed: {exc}"
@@ -191,6 +200,21 @@ class AliyunASRService(ASRService):
             raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=str(reason))
 
         return data
+
+    @staticmethod
+    def _extract_http_error(response: httpx.Response) -> str:
+        content_type = response.headers.get("content-type", "")
+        if "application/json" in content_type:
+            try:
+                payload = response.json()
+            except json.JSONDecodeError:
+                return response.text or "Invalid JSON response"
+            if isinstance(payload, dict):
+                return str(
+                    payload.get("message") or payload.get("msg") or payload.get("error") or payload
+                )
+            return str(payload)
+        return response.text or "Empty response body"
 
     async def _poll_task(self, task_id: str, token: str) -> dict:
         poll_interval = max(1, self._poll_interval)
@@ -223,8 +247,12 @@ class AliyunASRService(ASRService):
         }
 
         try:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "X-NLS-Token": token,
+            }
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.get(_GATEWAY_URL, params=params)
+                response = await client.get(_GATEWAY_URL, params=params, headers=headers)
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPError as exc:

@@ -1,6 +1,7 @@
 from app.models.asr_quota import AsrQuota
 from app.models.llm_usage import LLMUsage
 from app.models.notification import Notification
+from app.models.rag_chunk import RagChunk  # noqa: F401
 from app.models.service_config import ServiceConfig
 from app.models.service_config_history import ServiceConfigHistory
 from app.models.summary import Summary

@@ -36,6 +36,7 @@ from app.services.asr_quota_service import (
     select_available_provider,
 )
 from app.services.llm.base import LLMService
+from app.services.rag import ingest_task_chunks_async
 from app.services.storage.base import StorageService
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
@@ -704,6 +705,17 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     duration_seconds,
                     str(task.user_id),
                     variant=asr_variant,
+                )
+
+            try:
+                await ingest_task_chunks_async(session, task, transcripts, str(task.user_id))
+            except Exception as exc:
+                logger.warning(
+                    "Task %s: RAG chunk ingest failed: %s",
+                    task_id,
+                    exc,
+                    exc_info=True,
+                    extra={"task_id": task_id},
                 )
 
             await _update_task(session, task, "summarizing", 80, "summarizing", request_id)

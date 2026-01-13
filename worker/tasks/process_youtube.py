@@ -35,6 +35,7 @@ from app.services.asr_quota_service import (
     record_usage_sync,
     select_available_provider_sync,
 )
+from app.services.rag import ingest_task_chunks_sync
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_task_update_sync
@@ -961,6 +962,16 @@ def _process_youtube(
                     str(task.user_id),
                     variant=asr_variant,
                 )
+                try:
+                    ingest_task_chunks_sync(session, task, transcripts, str(task.user_id))
+                except Exception as exc:
+                    logger.warning(
+                        "Task %s: RAG chunk ingest failed: %s",
+                        task_id,
+                        exc,
+                        exc_info=True,
+                        extra={"task_id": task_id},
+                    )
                 stage_manager.complete_stage(
                     session, StageType.TRANSCRIBE, {"segment_count": len(transcripts)}
                 )
