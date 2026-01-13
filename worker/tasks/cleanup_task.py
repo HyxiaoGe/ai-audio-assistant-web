@@ -23,9 +23,7 @@ logger = logging.getLogger("worker.cleanup_task")
 
 
 def _load_task(session: Session, task_id: str, user_id: str) -> Optional[Task]:
-    result = session.execute(
-        select(Task).where(Task.id == task_id, Task.user_id == user_id)
-    )
+    result = session.execute(select(Task).where(Task.id == task_id, Task.user_id == user_id))
     return result.scalar_one_or_none()
 
 
