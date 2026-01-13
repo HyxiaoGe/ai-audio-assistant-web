@@ -712,6 +712,11 @@ GET /api/v1/tasks/:id/summary
 DELETE /api/v1/tasks/:id
 ```
 
+**说明**：
+- 接口只执行**软删除**（写入 `deleted_at`），保证历史可审计。
+- 后端会**异步清理**该任务的文件与数据（转写/摘要/RAG 等），默认延迟 `TASK_CLEANUP_DELAY_SECONDS` 秒。
+- 前端只需做**二次确认**后直接调用本接口；无需传任何参数。
+
 **响应**：
 ```json
 {

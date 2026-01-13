@@ -124,5 +124,7 @@ class Settings(BaseSettings):
 
     STATS_CURRENCY: str = Field(default="CNY")
 
+    TASK_CLEANUP_DELAY_SECONDS: int = Field(default=300)
+
 
 settings = Settings()

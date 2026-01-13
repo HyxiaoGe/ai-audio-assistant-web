@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from yt_dlp import YoutubeDL
 
+from app.config import settings
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
@@ -436,6 +437,19 @@ class TaskService:
             raise BusinessError(ErrorCode.TASK_NOT_FOUND)
         task.deleted_at = datetime.now(timezone.utc)
         await db.commit()
+
+        from worker.celery_app import celery_app
+
+        delay_seconds = max(settings.TASK_CLEANUP_DELAY_SECONDS, 0)
+        task_args = [task.id, str(task.user_id)]
+        if delay_seconds > 0:
+            celery_app.send_task(
+                "worker.tasks.cleanup_task_data",
+                args=task_args,
+                countdown=delay_seconds,
+            )
+        else:
+            celery_app.send_task("worker.tasks.cleanup_task_data", args=task_args)
 
     @staticmethod
     async def retry_task(db: AsyncSession, user: User, task_id: str) -> dict[str, object]:
