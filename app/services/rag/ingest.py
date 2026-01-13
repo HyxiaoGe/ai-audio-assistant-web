@@ -15,7 +15,6 @@ from app.models.transcript import Transcript
 from app.services.rag.chunking import RagChunkPayload, build_rag_chunks
 from app.services.rag.embedder import EmbeddingClient
 
-
 logger = logging.getLogger("rag.ingest")
 
 
@@ -73,7 +72,9 @@ async def _embed_chunks_async(
         logger.warning("Embedding is enabled but API key is missing, skipping vectors")
         return None, None, None, "failed"
     if embedder.provider not in {"openai", "openrouter"}:
-        logger.warning("Embedding provider %s not supported yet, skipping vectors", embedder.provider)
+        logger.warning(
+            "Embedding provider %s not supported yet, skipping vectors", embedder.provider
+        )
         return None, None, None, "failed"
 
     try:
@@ -93,7 +94,9 @@ def _embed_chunks_sync(
         logger.warning("Embedding is enabled but API key is missing, skipping vectors")
         return None, None, None, "failed"
     if embedder.provider not in {"openai", "openrouter"}:
-        logger.warning("Embedding provider %s not supported yet, skipping vectors", embedder.provider)
+        logger.warning(
+            "Embedding provider %s not supported yet, skipping vectors", embedder.provider
+        )
         return None, None, None, "failed"
 
     try:

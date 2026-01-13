@@ -7,7 +7,6 @@ import httpx
 
 from app.config import settings
 
-
 logger = logging.getLogger("rag.embedder")
 
 
