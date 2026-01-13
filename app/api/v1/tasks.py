@@ -15,7 +15,6 @@ from app.schemas.task import (
     TaskCreateResponse,
     TaskDetailResponse,
     TaskListItem,
-    TaskRetryRequest,
 )
 from app.services.task_service import TaskService
 
@@ -97,26 +96,18 @@ async def delete_task(
 @router.post("/{task_id}/retry")
 async def retry_task(
     task_id: str,
-    retry_request: TaskRetryRequest = TaskRetryRequest(),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> JSONResponse:
     """重试失败的任务.
 
-    支持多种重试模式：
-    - full: 完整重试（清空所有阶段，从头开始）
-    - auto: 智能重试（自动从失败的阶段继续，默认）
-    - from_transcribe: 从转写开始（复用下载/上传）
-    - transcribe_only: 仅重新转写
-    - summarize_only: 仅重新生成摘要
-
     其他逻辑：
     - 检查任务状态（只有 failed 状态才能重试）
     - 检查是否有相同内容的成功任务
     - 如果有成功任务，返回 duplicate_found 并自动跳转（不允许强制重试）
-    - 如果没有成功任务，根据重试模式重新提交任务
+    - 如果没有成功任务，自动智能重试
     """
-    result = await TaskService.retry_task(db, user, task_id, retry_request.mode)
+    result = await TaskService.retry_task(db, user, task_id)
     return success(data=jsonable_encoder(result))
 
 

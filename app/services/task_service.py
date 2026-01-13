@@ -438,17 +438,13 @@ class TaskService:
         await db.commit()
 
     @staticmethod
-    async def retry_task(
-        db: AsyncSession, user: User, task_id: str, retry_mode: str = "auto"
-    ) -> dict[str, object]:
+    async def retry_task(db: AsyncSession, user: User, task_id: str) -> dict[str, object]:
         """重试失败的任务.
 
         Args:
             db: 数据库会话
             user: 当前用户
             task_id: 任务ID
-            retry_mode: 重试模式 (full/auto/from_transcribe/transcribe_only/summarize_only)
-
         Returns:
             {
                 "action": "retrying" | "duplicate_found",
@@ -518,11 +514,7 @@ class TaskService:
         from app.core.task_stages import RetryMode
         from app.services.task_stage_service import TaskStageService
 
-        # 转换 retry_mode 字符串为枚举
-        try:
-            mode = RetryMode(retry_mode)
-        except ValueError:
-            mode = RetryMode.AUTO
+        mode = RetryMode.AUTO
 
         # 准备重试（清理阶段状态，返回起始阶段）
         start_stage = await TaskStageService.prepare_retry(db, task, mode)
@@ -539,11 +531,7 @@ class TaskService:
         # 7. 触发 Celery 任务（传递重试模式和起始阶段）
         from worker.celery_app import celery_app
 
-        task_kwargs = {
-            "request_id": task.request_id,
-            "retry_mode": retry_mode,
-            "start_stage": start_stage.value,
-        }
+        task_kwargs = {"request_id": task.request_id}
 
         if task.source_type == "youtube":
             celery_app.send_task(

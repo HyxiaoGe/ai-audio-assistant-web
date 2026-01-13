@@ -491,16 +491,12 @@ def _mark_failed(
 def _process_youtube(
     task_id: str,
     request_id: Optional[str],
-    retry_mode: str = "auto",
-    start_stage: Optional[str] = None,
 ) -> None:
     """处理 YouTube 任务（支持阶段管理和智能重试）
 
     Args:
         task_id: 任务ID
         request_id: 请求追踪ID
-        retry_mode: 重试模式 (full/auto/from_transcribe/transcribe_only/summarize_only)
-        start_stage: 起始阶段 (如果指定，从该阶段开始执行)
     """
     stage_manager = StageManager(task_id, request_id)
 
@@ -526,12 +522,7 @@ def _process_youtube(
     with get_sync_db_session() as session:
         task = _get_task(session, task_id)
         # 如果已有 source_key（上传成功），跳过下载/转码/上传
-        if task.source_key and retry_mode in [
-            "auto",
-            "from_transcribe",
-            "transcribe_only",
-            "summarize_only",
-        ]:
+        if task.source_key:
             skip_download = True
             logger.info(
                 "[%s] Skipping download/transcode/upload (source_key exists: %s)",
@@ -763,7 +754,7 @@ def _process_youtube(
             session.query(Transcript).filter(Transcript.task_id == task_id).count()
         )
 
-        if existing_transcripts > 0 and retry_mode in ["auto", "summarize_only"]:
+        if existing_transcripts > 0:
             skip_transcribe = True
             logger.info(
                 "[%s] Skipping transcription (found %s existing transcripts)",
@@ -1008,7 +999,7 @@ def _process_youtube(
             .count()
         )
 
-        if existing_summaries > 0 and retry_mode == "auto":
+        if existing_summaries > 0:
             skip_summarize = True
             logger.info(
                 "[%s] Skipping summarization (found %s existing summaries)",
@@ -1171,15 +1162,11 @@ def process_youtube(
     self,
     task_id: str,
     request_id: Optional[str] = None,
-    retry_mode: str = "auto",
-    start_stage: Optional[str] = None,
 ) -> None:
     """Celery 任务入口：处理 YouTube 视频
 
     Args:
         task_id: 任务ID
         request_id: 请求追踪ID
-        retry_mode: 重试模式 (full/auto/from_transcribe/transcribe_only/summarize_only)
-        start_stage: 起始阶段
     """
-    _process_youtube(task_id, request_id, retry_mode, start_stage)
+    _process_youtube(task_id, request_id)

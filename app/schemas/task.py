@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -70,22 +70,6 @@ class TaskDetailResponse(BaseModel):
     updated_at: datetime
     error_message: Optional[str]
     stages: list[TaskStageResponse] = Field(default_factory=list)  # 阶段信息
-
-
-class TaskRetryRequest(BaseModel):
-    """任务重试请求"""
-
-    mode: Literal["full", "auto", "from_transcribe", "transcribe_only", "summarize_only"] = Field(
-        default="auto"
-    )
-    """
-    重试模式：
-    - full: 完整重试（清空所有阶段，从头开始）
-    - auto: 智能重试（自动从失败的阶段继续，默认）
-    - from_transcribe: 从转写开始（复用下载/上传）
-    - transcribe_only: 仅重新转写
-    - summarize_only: 仅重新生成摘要
-    """
 
 
 class TaskBatchDeleteRequest(BaseModel):
