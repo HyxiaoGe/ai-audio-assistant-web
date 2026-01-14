@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_db
 from app.config import settings
 from app.core.response import success
 from app.core.smart_factory import SmartFactory
-from app.schemas.user import UserProfileResponse
+from app.schemas.user import (
+    NotificationPreferences,
+    TaskDefaultsPreferences,
+    UiPreferences,
+    UserPreferencesResponse,
+    UserPreferencesUpdateRequest,
+    UserProfileResponse,
+)
+from app.services.user_preferences import get_user_preferences, update_user_preferences
 
 router = APIRouter(prefix="/users")
 
@@ -19,6 +28,41 @@ async def get_me(user=Depends(get_current_user)) -> JSONResponse:
         email=user.email,
         name=user.name,
         avatar_url="/api/v1/users/me/avatar",
+    )
+    return success(data=response.model_dump())
+
+
+@router.get("/me/preferences")
+async def get_preferences(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+) -> JSONResponse:
+    preferences = get_user_preferences(user)
+    task_defaults = TaskDefaultsPreferences.model_validate(preferences["task_defaults"])
+    ui = UiPreferences.model_validate(preferences["ui"])
+    notifications = NotificationPreferences.model_validate(preferences["notifications"])
+    response = UserPreferencesResponse(
+        task_defaults=task_defaults,
+        ui=ui,
+        notifications=notifications,
+    )
+    return success(data=response.model_dump())
+
+
+@router.patch("/me/preferences")
+async def update_preferences(
+    payload: UserPreferencesUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+) -> JSONResponse:
+    preferences = await update_user_preferences(db, user, payload)
+    task_defaults = TaskDefaultsPreferences.model_validate(preferences["task_defaults"])
+    ui = UiPreferences.model_validate(preferences["ui"])
+    notifications = NotificationPreferences.model_validate(preferences["notifications"])
+    response = UserPreferencesResponse(
+        task_defaults=task_defaults,
+        ui=ui,
+        notifications=notifications,
     )
     return success(data=response.model_dump())
 
