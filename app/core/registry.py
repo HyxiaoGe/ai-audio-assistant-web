@@ -211,11 +211,6 @@ class ServiceRegistry:
                         kwargs["config"] = config
                     instance = service_class(**kwargs)
 
-                    logger.debug(
-                        f"Created new {service_type} service instance: {name}"
-                        + (f" with model_id={model_id}" if model_id else "")
-                    )
-
                     # 如果不是强制创建，则缓存实例
                     if not force_new:
                         cls._services[service_type][name] = (service_class, metadata, instance)

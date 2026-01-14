@@ -84,7 +84,7 @@ class ConfigManager:
 
         # 2. 获取配置（自动从 settings 读取并验证）
         config = ConfigManager.get_config("llm", "doubao")
-        print(config.api_key)
+        _ = config.api_key
 
         # 3. 验证配置
         is_valid = ConfigManager.validate_config("llm", "doubao")
@@ -333,7 +333,7 @@ class ConfigManager:
 
         Example:
             config = ConfigManager.get_config("llm", "doubao")
-            print(config.api_key)  # 访问配置字段
+            _ = config.api_key  # 访问配置字段
         """
         if service_type not in cls._schemas:
             raise ValueError(f"Unsupported service_type: {service_type}")
@@ -367,7 +367,6 @@ class ConfigManager:
             try:
                 config_instance = config_class(**config_data)
                 cls._cache_config(service_type, name, config_instance, None)
-                logger.debug(f"Loaded and validated config for {service_type}/{name}")
             except ValidationError as exc:
                 logger.error(
                     f"Config validation failed for {service_type}/{name}: {exc}",
@@ -634,10 +633,6 @@ class ConfigManager:
 
         # 检查服务名称是否在映射表中
         if name not in cls._CONFIG_MAPPING[service_type]:
-            logger.debug(
-                f"No config mapping for {service_type}/{name}, "
-                f"available: {list(cls._CONFIG_MAPPING[service_type].keys())}"
-            )
             return {}
 
         # 获取字段映射表
@@ -658,10 +653,6 @@ class ConfigManager:
             # 只添加非 None 的值
             if value is not None:
                 config_data[field_name] = value
-
-        logger.debug(
-            f"Loaded config for {service_type}/{name}: " f"{list(config_data.keys())} fields"
-        )
 
         return config_data
 

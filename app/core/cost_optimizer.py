@@ -624,12 +624,3 @@ class CostReport:
             "service_breakdown": self.service_breakdown,
             "daily_costs": {day.isoformat(): cost for day, cost in self.daily_costs.items()},
         }
-
-    def print_summary(self) -> None:
-        print(f"成本报告: {self.start_date} ~ {self.end_date}")
-        print(f"总成本: ¥{self.total_cost:.2f}")
-        print("按服务分解:")
-        for service_type, services in self.service_breakdown.items():
-            print(f"  {service_type}:")
-            for service_name, cost in services.items():
-                print(f"    {service_name}: ¥{cost:.2f}")

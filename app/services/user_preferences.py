@@ -1,16 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
-from app.schemas.user import (
-    NotificationPreferences,
-    TaskDefaultsPreferences,
-    UiPreferences,
-    UserPreferencesUpdateRequest,
-)
+from app.schemas.user import UserPreferencesUpdateRequest
 
 DEFAULT_TASK_DEFAULTS: dict[str, object] = {
     "language": "auto",

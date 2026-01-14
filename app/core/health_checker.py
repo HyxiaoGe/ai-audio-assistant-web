@@ -164,10 +164,6 @@ class HealthChecker:
             if not force and result.last_check_time:
                 elapsed = (datetime.now() - result.last_check_time).total_seconds()
                 if elapsed < cls.cache_duration:
-                    logger.debug(
-                        f"Using cached health result for {service_type}/{name} "
-                        f"(age: {elapsed:.1f}s)"
-                    )
                     return result
 
             result.status = HealthStatus.CHECKING
@@ -209,10 +205,6 @@ class HealthChecker:
         except NotImplementedError:
             # 如果服务未实现 health_check，默认认为健康
             is_healthy = True
-            logger.debug(
-                f"Service {service_type}/{name} has not implemented health_check(), "
-                f"assuming healthy"
-            )
 
         except (RuntimeError, ValueError, TypeError, KeyError) as exc:
             # 致命错误（配置缺失、参数错误等）：立即标记为不健康
@@ -275,9 +267,7 @@ class HealthChecker:
 
         Example:
             results = await HealthChecker.check_all()
-            for service_type, services in results.items():
-                for name, result in services.items():
-                    print(f"{service_type}/{name}: {result.status}")
+            # inspect results as needed
         """
         tasks = []
 
