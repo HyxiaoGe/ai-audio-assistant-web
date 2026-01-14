@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.user import User
 from app.schemas.user import UserPreferencesUpdateRequest
@@ -83,6 +84,7 @@ async def update_user_preferences(
 
     settings["preferences"] = prefs
     user.settings = settings
+    flag_modified(user, "settings")
 
     await db.commit()
     await db.refresh(user)
