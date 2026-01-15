@@ -321,6 +321,42 @@ class QwenLLMService(LLMService):
         except Exception:
             return False
 
+    @monitor("llm", "qwen")
+    async def generate(
+        self,
+        prompt: str,
+        system_message: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> str:
+        """通用文本生成（用于章节划分等场景）
+
+        Args:
+            prompt: 用户提示词
+            system_message: 系统消息（可选）
+            temperature: 温度参数（可选）
+            max_tokens: 最大token数（可选）
+            **kwargs: 额外参数
+
+        Returns:
+            生成的文本内容
+        """
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": self._model,
+            "messages": messages,
+            "max_tokens": max_tokens or 4096,
+            "temperature": temperature if temperature is not None else 0.7,
+        }
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+
+        return await self._call_llm_api(payload, headers)
+
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """估算成本（人民币元）
 

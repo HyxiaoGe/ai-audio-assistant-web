@@ -70,6 +70,35 @@ class LLMService(ABC):
         yield  # Make it a generator
 
     @abstractmethod
+    async def generate(
+        self,
+        prompt: str,
+        system_message: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> str:
+        """通用文本生成（非流式）
+
+        用于章节划分、自定义prompt等需要灵活生成的场景
+
+        Args:
+            prompt: 用户提示词
+            system_message: 系统消息（可选）
+            temperature: 温度参数（可选，使用服务默认值）
+            max_tokens: 最大token数（可选，使用服务默认值）
+            **kwargs: 其他参数
+
+        Returns:
+            生成的文本
+
+        Raises:
+            BusinessError: 业务错误
+            Exception: 其他异常
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def chat(self, messages: List[Dict[str, str]], **kwargs: Any) -> str:
         """通用对话接口（非流式）
 

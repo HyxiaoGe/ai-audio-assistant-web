@@ -1,0 +1,32 @@
+{
+  "version": "1.0.0",
+  "description": "章节划分提示词配置",
+  "supported_content_styles": [
+    "meeting",
+    "lecture",
+    "podcast",
+    "video",
+    "general"
+  ],
+  "supported_locales": ["zh-CN", "en-US"],
+  "model_params": {
+    "segment": {
+      "temperature": 0.3,
+      "max_tokens": 1500,
+      "top_p": 0.9,
+      "frequency_penalty": 0.0,
+      "presence_penalty": 0.0
+    }
+  },
+  "default_locale": "zh-CN",
+  "changelog": {
+    "1.0.0": {
+      "date": "2025-01-15",
+      "changes": [
+        "Initial version for chapter segmentation",
+        "Support for 5 content styles (meeting/lecture/podcast/video/general)",
+        "Quality-aware prompts with error tolerance guidance"
+      ]
+    }
+  }
+}
