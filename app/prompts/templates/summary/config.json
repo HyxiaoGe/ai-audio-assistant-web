@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "supported_content_styles": [
     "meeting",
     "lecture",
@@ -16,22 +16,22 @@
   },
   "model_params": {
     "overview": {
-      "temperature": 0.7,
-      "max_tokens": 500,
+      "temperature": 0.6,
+      "max_tokens": 1500,
       "top_p": 0.9,
       "frequency_penalty": 0.0,
       "presence_penalty": 0.0
     },
     "key_points": {
       "temperature": 0.5,
-      "max_tokens": 800,
+      "max_tokens": 1200,
       "top_p": 0.9,
-      "frequency_penalty": 0.2,
+      "frequency_penalty": 0.3,
       "presence_penalty": 0.0
     },
     "action_items": {
       "temperature": 0.3,
-      "max_tokens": 600,
+      "max_tokens": 1000,
       "top_p": 0.9,
       "frequency_penalty": 0.0,
       "presence_penalty": 0.0
@@ -40,6 +40,16 @@
   "default_locale": "zh-CN",
   "supported_locales": ["zh-CN", "en-US"],
   "changelog": {
+    "1.2.0": {
+      "date": "2025-01-15",
+      "changes": [
+        "Added quality-aware error tolerance guidance",
+        "Increased max_tokens for richer structured output (overview: 500→1500, key_points: 800→1200, action_items: 600→1000)",
+        "Added chapter-aware summary generation",
+        "Improved formatting with structured sections and tables",
+        "Enhanced style differentiation (meeting/lecture/podcast with distinct structures)"
+      ]
+    },
     "1.1.0": {
       "date": "2026-01-02",
       "changes": [

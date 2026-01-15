@@ -232,6 +232,42 @@ class DeepSeekLLMService(LLMService):
             ) from exc
 
     @monitor("llm", "deepseek")
+    async def generate(
+        self,
+        prompt: str,
+        system_message: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> str:
+        """通用文本生成
+
+        Args:
+            prompt: 用户提示词
+            system_message: 系统消息（可选）
+            temperature: 温度参数（可选）
+            max_tokens: 最大token数（可选）
+            **kwargs: 其他参数
+
+        Returns:
+            生成的文本
+        """
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": self._model,
+            "messages": messages,
+            "max_tokens": max_tokens or self._max_tokens,
+            "temperature": temperature or 0.7,
+        }
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+
+        return await self._call_llm_api(payload, headers)
+
+    @monitor("llm", "deepseek")
     async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
         """通用对话功能
 

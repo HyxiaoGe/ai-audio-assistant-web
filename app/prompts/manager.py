@@ -32,14 +32,16 @@ class PromptManager:
         prompt_type: str,
         locale: str = "zh-CN",
         variables: Optional[Dict[str, Any]] = None,
+        content_style: Optional[str] = None,
     ) -> Dict[str, Any]:
         """获取提示词
 
         Args:
-            category: 类别（如 summary）
-            prompt_type: 提示词类型（如 overview, key_points, action_items）
+            category: 类别（如 summary, segmentation）
+            prompt_type: 提示词类型（如 overview, key_points, action_items, segment）
             locale: 语言（如 zh-CN, en-US）
-            variables: 模板变量（如 {transcript}）
+            variables: 模板变量（如 {transcript}, {quality_notice}）
+            content_style: 内容风格（如 meeting, lecture, podcast）- 可选，也可在variables中提供
 
         Returns:
             包含 system, user_prompt, model_params 的字典
@@ -52,26 +54,67 @@ class PromptManager:
                 ErrorCode.INVALID_PARAMETER, detail=f"Unknown prompt type: {prompt_type}"
             )
 
-        prompt_template = prompt_data["prompts"][prompt_type]["template"]
-        system_config = prompt_data["system"]
+        # 获取content_style（优先使用参数，其次从variables中获取，最后默认为meeting）
+        if content_style is None:
+            content_style = variables.get("content_style", "meeting") if variables else "meeting"
 
+        # 获取prompt模板（支持新旧两种格式）
+        prompt_config = prompt_data["prompts"][prompt_type]
+
+        # 新格式：templates字典（针对不同content_style）
+        if "templates" in prompt_config:
+            templates = prompt_config["templates"]
+            if content_style in templates:
+                prompt_template = templates[content_style]
+            else:
+                # 如果没有指定风格的模板，使用meeting或第一个可用的
+                prompt_template = templates.get("meeting", list(templates.values())[0])
+        # 旧格式：单个template字符串
+        elif "template" in prompt_config:
+            prompt_template = prompt_config["template"]
+        else:
+            raise BusinessError(
+                ErrorCode.SYSTEM_ERROR,
+                reason=f"No template found for {category}/{prompt_type}",
+            )
+
+        # 替换模板变量
         if variables:
-            user_prompt = prompt_template.format(**variables)
+            try:
+                user_prompt = prompt_template.format(**variables)
+            except KeyError as e:
+                # 缺少必需的变量，提供更友好的错误信息
+                raise BusinessError(
+                    ErrorCode.INVALID_PARAMETER,
+                    reason=f"Missing required variable in prompt template: {e}",
+                )
         else:
             user_prompt = prompt_template
 
-        content_style = variables.get("content_style", "meeting") if variables else "meeting"
+        # 获取system配置
+        system_config = prompt_data["system"]
 
-        if isinstance(system_config.get("meeting"), dict):
+        # 根据content_style选择system message
+        if isinstance(system_config.get(content_style), dict):
+            # 新格式：每个风格有独立的配置
             style_config = system_config.get(content_style, system_config.get("general", {}))
             system_message = style_config.get("role", "你是一个专业的内容分析助手。")
+
+            # 添加style和tolerance说明（如果有）
+            if style_config.get("style"):
+                system_message += f"\n\n风格要求：{style_config['style']}"
+            if style_config.get("tolerance"):
+                system_message += f"\n\n容错说明：{style_config['tolerance']}"
         else:
+            # 旧格式：单一的role配置
             system_message = system_config.get("role", "你是一个专业的内容分析助手。")
 
+        # 添加约束条件
         if system_config.get("constraints"):
             constraints = "\n".join(f"- {c}" for c in system_config["constraints"])
             system_message += f"\n\n约束条件：\n{constraints}"
 
+        # 获取model参数
         model_params = config_data["model_params"].get(prompt_type, {})
 
         return {
@@ -82,6 +125,7 @@ class PromptManager:
                 "category": category,
                 "type": prompt_type,
                 "locale": locale,
+                "content_style": content_style,
                 "version": config_data.get("version", "unknown"),
             },
         }

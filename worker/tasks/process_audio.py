@@ -41,6 +41,7 @@ from app.services.storage.base import StorageService
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_message_sync, publish_task_update_sync
+from worker.tasks.summary_generator import generate_summaries_with_quality_awareness
 
 logger = logging.getLogger("worker.process_audio")
 
@@ -719,127 +720,80 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                 )
 
             await _update_task(session, task, "summarizing", 80, "summarizing", request_id)
-            # 使用 SmartFactory 获取 LLM 服务（自动选择最优服务）
-            provider, model_id = _resolve_llm_selection(task, str(task.user_id))
-            llm_service: LLMService = await _maybe_await(
-                _call_factory(get_llm_service, provider, model_id, str(task.user_id))
-            )
-            llm_provider = getattr(llm_service, "provider", None) or provider
-            if llm_provider:
-                task.llm_provider = llm_provider
-                await _commit(session)
-            full_text = "\n".join([seg.content for seg in segments])
 
+            # 提取content_style和LLM配置
             options = task.options or {}
             content_style = options.get("summary_style", "meeting")
             if not isinstance(content_style, str):
                 content_style = "meeting"
 
+            # 提取LLM provider配置（如果用户指定了）
+            llm_provider_option = options.get("provider")
+            llm_model_id_option = options.get("model_id")
+
             logger.info(
-                "Task %s: Starting LLM summarization with %d characters of text (style: %s)",
+                "Task %s: Starting quality-aware summary generation (style: %s)",
                 task_id,
-                len(full_text),
                 content_style,
                 extra={
                     "task_id": task_id,
-                    "text_length": len(full_text),
                     "content_style": content_style,
+                    "segments_count": len(segments),
                 },
             )
 
-            summaries = []
-            llm_usages: list[LLMUsage] = []
-            for summary_type in ("overview", "key_points", "action_items"):
+            # 使用新的质量感知摘要生成函数
+            try:
+                summaries, summary_metadata = await generate_summaries_with_quality_awareness(
+                    task_id=str(task.id),
+                    segments=segments,
+                    content_style=content_style,
+                    session=session,
+                    user_id=str(task.user_id),
+                    provider=llm_provider_option,
+                    model_id=llm_model_id_option,
+                )
+
+                # 记录元数据
                 logger.info(
-                    "Task %s: Generating %s summary (style: %s)",
+                    "Task %s: Summary generation completed - quality: %s, confidence: %.2f, "
+                    "provider: %s, model: %s, summaries: %d",
                     task_id,
-                    summary_type,
-                    content_style,
-                    extra={
-                        "task_id": task_id,
-                        "summary_type": summary_type,
-                        "content_style": content_style,
-                    },
+                    summary_metadata["quality_score"],
+                    summary_metadata["avg_confidence"],
+                    summary_metadata["llm_provider"],
+                    summary_metadata["llm_model"],
+                    summary_metadata["summaries_generated"],
+                    extra={"task_id": task_id, "summary_metadata": summary_metadata},
                 )
-                # LLM service is async, so we run it in asyncio.run()
-                summarize = llm_service.summarize
-                try:
-                    if len(inspect.signature(summarize).parameters) >= 3:
-                        summarize_result = summarize(full_text, summary_type, content_style)
-                    else:
-                        summarize_result = summarize(full_text, summary_type)
-                    content = cast(str, await _maybe_await(summarize_result))
-                except Exception:
-                    if llm_provider:
-                        llm_usages.append(
-                            LLMUsage(
-                                user_id=str(task.user_id),
-                                task_id=str(task.id),
-                                provider=llm_provider,
-                                model_id=llm_service.model_name,
-                                call_type="summarize",
-                                summary_type=summary_type,
-                                status="failed",
-                            )
-                        )
-                        session.add_all(llm_usages)
-                        await _commit(session)
-                    raise
-                if llm_provider:
-                    input_tokens = len(full_text)
-                    output_tokens = len(content)
-                    estimated_cost = 0.0
-                    if hasattr(llm_service, "estimate_cost"):
-                        estimated_cost = llm_service.estimate_cost(input_tokens, output_tokens)
-                    cost_tracker.record_usage(
-                        "llm",
-                        llm_provider,
-                        {"input_tokens": input_tokens, "output_tokens": output_tokens},
-                        estimated_cost,
-                    )
-                    llm_usages.append(
-                        LLMUsage(
-                            user_id=str(task.user_id),
-                            task_id=str(task.id),
-                            provider=llm_provider,
-                            model_id=llm_service.model_name,
-                            call_type="summarize",
-                            summary_type=summary_type,
-                            status="success",
-                        )
-                    )
+
+                # 更新任务的llm_provider字段
+                if summary_metadata.get("llm_provider"):
+                    task.llm_provider = summary_metadata["llm_provider"]
+
+                # 保存所有摘要到数据库
+                session.add_all(summaries)
+                await _commit(session)
+
                 logger.info(
-                    "Task %s: Generated %s summary (%d characters)",
+                    "Task %s: All summaries saved to database",
                     task_id,
-                    summary_type,
-                    len(content),
-                    extra={
-                        "task_id": task_id,
-                        "summary_type": summary_type,
-                        "content_length": len(content),
-                    },
+                    extra={"task_id": task_id, "summary_count": len(summaries)},
                 )
-                summaries.append(
-                    Summary(
-                        task_id=task.id,
-                        summary_type=summary_type,
-                        version=1,
-                        is_active=True,
-                        content=content,
-                        model_used=llm_service.model_name,
-                        prompt_version=None,
-                        token_count=None,
-                    )
+
+            except Exception as exc:
+                logger.error(
+                    "Task %s: Summary generation failed: %s",
+                    task_id,
+                    exc,
+                    exc_info=True,
+                    extra={"task_id": task_id},
                 )
-            session.add_all(summaries)
-            if llm_usages:
-                session.add_all(llm_usages)
-            await _commit(session)
-            logger.info(
-                "Task %s: All summaries saved to database",
-                task_id,
-                extra={"task_id": task_id, "summary_count": len(summaries)},
-            )
+                # 摘要生成失败，任务标记为failed
+                raise BusinessError(
+                    ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                    reason=f"Failed to generate summaries: {exc}",
+                ) from exc
 
             # 设置语言（根据 ASR 模型推断，目前使用中文模型）
             if not task.detected_language:
