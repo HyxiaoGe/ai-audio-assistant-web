@@ -86,10 +86,11 @@ async def generate_summaries_with_quality_awareness(
             )
         except Exception as e:
             logger.warning(
-                f"Task {task_id}: Failed to get premium model, "
-                f"fallback to standard: {e}"
+                f"Task {task_id}: Failed to get premium model, " f"fallback to standard: {e}"
             )
-            llm_service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
+            llm_service = await SmartFactory.get_service(
+                "llm", provider=provider, model_id=model_id
+            )
     else:
         # 正常质量：使用用户指定或自动选择的服务
         llm_service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
@@ -132,9 +133,7 @@ async def generate_summaries_with_quality_awareness(
             )
 
         except Exception as e:
-            logger.warning(
-                f"Task {task_id}: Chapter segmentation failed: {e}", exc_info=True
-            )
+            logger.warning(f"Task {task_id}: Chapter segmentation failed: {e}", exc_info=True)
             # 章节划分失败不影响后续摘要生成
             chapters_data = None
     else:
@@ -147,9 +146,7 @@ async def generate_summaries_with_quality_awareness(
     summaries = []
 
     for summary_type in ("overview", "key_points", "action_items"):
-        logger.info(
-            f"Task {task_id}: Generating {summary_type} summary (style: {content_style})"
-        )
+        logger.info(f"Task {task_id}: Generating {summary_type} summary (style: {content_style})")
 
         try:
             content = await _generate_single_summary(
@@ -173,8 +170,7 @@ async def generate_summaries_with_quality_awareness(
             summaries.append(summary)
 
             logger.info(
-                f"Task {task_id}: Generated {summary_type} summary "
-                f"({len(content)} characters)"
+                f"Task {task_id}: Generated {summary_type} summary " f"({len(content)} characters)"
             )
 
         except Exception as e:
