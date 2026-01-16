@@ -152,6 +152,7 @@ asr = await SmartFactory.get_service(
 ASR Providers (`app/services/asr/`):
 - `tencent`: Tencent Cloud ASR
 - `aliyun`: Alibaba Cloud ASR
+- `volcengine`: Volcano Engine ASR
 
 LLM Providers (`app/services/llm/`):
 - `doubao`: ByteDance Doubao (豆包)
@@ -165,6 +166,43 @@ Storage Providers (`app/services/storage/`):
 - `cos`: Tencent Cloud COS
 - `oss`: Alibaba Cloud OSS
 - `tos`: Volcano Engine TOS
+
+### Additional Features
+
+**Prompt Management** (`app/prompts/`):
+- Centralized prompt template management for LLM services
+- Support for multiple locales and content styles
+- Version control and A/B testing capabilities
+
+**User Preferences API** (`app/api/v1/users.py`):
+- GET/PATCH `/api/v1/users/me/preferences` - Manage user default settings
+- Preferences stored in `users.settings` JSONB field
+- Three-tier priority: request params > user preferences > system defaults
+- Namespaces: `task_defaults`, `ui`, `rag`, `notifications`
+
+**Configuration Center** (`app/api/v1/config_center.py`):
+- Runtime service configuration management
+- Dynamic enable/disable of ASR/LLM/Storage providers
+- Configuration history tracking
+- Admin-only access with audit logs
+
+**ASR Quota Management** (`app/services/asr_quota_service.py`):
+- Track ASR usage per provider
+- Monthly quota limits and alerts
+- Cost tracking and reporting
+- API: `/api/v1/asr-quotas`
+
+**RAG (Retrieval-Augmented Generation)** (`app/services/rag/`):
+- Semantic chunking of transcripts
+- Vector embeddings for intelligent search
+- Context retrieval for enhanced summaries
+- Models: `RagChunk` for storing embedded content
+
+**Statistics & Analytics** (`app/api/v1/stats.py`):
+- Task completion rates and processing times
+- Service usage breakdown (ASR/LLM providers)
+- Cost analytics per user/provider
+- Error rate monitoring
 
 ### Key Components
 
@@ -192,6 +230,7 @@ Storage Providers (`app/services/storage/`):
 - 40100-40199: Authentication errors
 - 40300-40399: Authorization errors
 - 40400-40499: Resource not found
+- 40900-40999: Business conflicts (e.g., quota exceeded)
 - 50000-50099: System errors
 - 51000-51999: Third-party service errors
 
@@ -204,12 +243,20 @@ All models inherit from `app/models/base.py`:
 
 Key models:
 - `User`: User accounts and settings
+  - `settings`: JSONB field for user preferences
 - `Task`: Processing tasks with status tracking
+- `TaskStage`: Detailed stage tracking for each task phase
 - `Transcript`: ASR results with speaker diarization
 - `Summary`: LLM-generated summaries with versioning
   - `comparison_id`: Groups comparison results
   - `is_active`: Marks current active version
   - `model_used`: Records which LLM generated this version
+- `RagChunk`: Vector embeddings for transcript chunks
+- `AsrQuota`: Monthly ASR usage quotas per provider
+- `LlmUsage`: LLM token usage tracking
+- `ServiceConfig`: Runtime service configuration
+- `ServiceConfigHistory`: Configuration change audit log
+- `Notification`: User notifications (task completion, errors)
 
 ### Task State Machine
 
@@ -360,6 +407,23 @@ Configuration:
 - `.github/workflows/ci.yml`: GitHub Actions
 - `pyproject.toml`: Tool settings (Black, isort, mypy, pytest)
 
+## API Endpoints Summary
+
+Key endpoint groups:
+- `/api/v1/auth` - Authentication (token refresh, logout)
+- `/api/v1/users` - User management and preferences
+- `/api/v1/upload` - Presigned URL generation
+- `/api/v1/tasks` - Task CRUD and listing
+- `/api/v1/transcripts` - Transcript retrieval and editing
+- `/api/v1/summaries` - Summary generation and comparison
+- `/api/v1/llm` - Available LLM models listing
+- `/api/v1/config-center` - Service configuration (admin)
+- `/api/v1/asr-quotas` - ASR quota management
+- `/api/v1/stats` - Usage statistics and analytics
+- `/api/v1/notifications` - User notifications
+- `/api/v1/ws` - WebSocket for real-time updates
+- `/api/v1/media` - Media file streaming
+
 ## Environment Configuration
 
 Key variables (see `.env.example`):
@@ -383,6 +447,8 @@ TENCENT_SECRET_ID=xxx
 TENCENT_SECRET_KEY=xxx
 ALIYUN_ACCESS_KEY_ID=xxx
 ALIYUN_ACCESS_KEY_SECRET=xxx
+VOLCENGINE_ACCESS_KEY_ID=xxx
+VOLCENGINE_SECRET_ACCESS_KEY=xxx
 
 # LLM (configure providers you want to use)
 DOUBAO_API_KEY=xxx
@@ -448,12 +514,31 @@ Complete one task at a time:
 [ ] All functions have type annotations
 [ ] Dependencies injected via Depends()
 [ ] External services accessed via SmartFactory
+[ ] Monitoring decorators applied (@monitor)
+[ ] Fault tolerance added (retry, circuit breaker)
 [ ] Appropriate logging added
 [ ] Schema objects defined and used
 [ ] Pre-commit passes (run locally before commit)
 [ ] API appears correctly in /docs
 [ ] Server starts without errors
 ```
+
+## Monitoring and Observability
+
+**Monitoring System** (`app/core/monitoring.py`):
+- Automatic metrics collection via `@monitor` decorator
+- Track latency, error rates, and throughput per service
+- Service health scores and availability tracking
+
+**Fault Tolerance** (`app/core/fault_tolerance.py`):
+- Circuit breaker pattern for failing services
+- Exponential backoff retry with jitter
+- Configurable failure thresholds and timeouts
+
+**Health Checks**:
+- Service-level health checks via `health_check()` method
+- Automatic service degradation on repeated failures
+- Health scores factor into SmartFactory selection
 
 ## Documentation References
 
