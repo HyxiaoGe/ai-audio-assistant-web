@@ -572,177 +572,180 @@ def _process_youtube(
             _update_task(session, task, "downloading", 15, "downloading", request_id)
             stage_manager.start_stage(session, StageType.DOWNLOAD)
 
-    try:
-        last_progress = 15
-        last_emit = 0.0
+        # ========== 阶段 2: 下载 YouTube 视频 ==========
+        try:
+            last_progress = 15
+            last_emit = 0.0
 
-        def _emit_progress(progress: int) -> None:
-            with get_sync_db_session() as session:
-                task = _get_task(session, task_id)
-                if task is None:
+            def _emit_progress(progress: int) -> None:
+                with get_sync_db_session() as session:
+                    task = _get_task(session, task_id)
+                    if task is None:
+                        return
+                    _update_task(session, task, "downloading", progress, "downloading", request_id)
+
+            def _progress_hook(payload: dict) -> None:
+                nonlocal last_progress, last_emit
+                if payload.get("status") != "downloading":
                     return
-                _update_task(session, task, "downloading", progress, "downloading", request_id)
-
-        def _progress_hook(payload: dict) -> None:
-            nonlocal last_progress, last_emit
-            if payload.get("status") != "downloading":
-                return
-            total = payload.get("total_bytes") or payload.get("total_bytes_estimate")
-            downloaded = payload.get("downloaded_bytes")
-            if not total or not downloaded:
-                return
-            ratio = min(max(downloaded / total, 0.0), 1.0)
-            mapped = 15 + int(ratio * 10)
-            if mapped <= last_progress:
-                return
-            now = time.monotonic()
-            if now - last_emit < 1.0:
-                return
-            last_progress = mapped
-            last_emit = now
-            # Call progress update directly (sync version)
-            _emit_progress(mapped)
-
-        original_filename = _download_youtube(task.source_url, progress_callback=_progress_hook)
-        if not original_filename:
-            raise BusinessError(
-                ErrorCode.FILE_PROCESSING_ERROR, reason="download produced empty file"
-            )
-    except Exception as exc:
-        logger.exception("youtube download failed: %s", exc)
-        if not direct_url:
-            if isinstance(exc, BusinessError):
-                error = exc
-            else:
-                error = BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason=str(exc))
-            with get_sync_db_session() as session:
-                task = _get_task(session, task_id)
-                if task is None:
+                total = payload.get("total_bytes") or payload.get("total_bytes_estimate")
+                downloaded = payload.get("downloaded_bytes")
+                if not total or not downloaded:
                     return
-                _mark_failed(session, task, error, request_id)
-            return
+                ratio = min(max(downloaded / total, 0.0), 1.0)
+                mapped = 15 + int(ratio * 10)
+                if mapped <= last_progress:
+                    return
+                now = time.monotonic()
+                if now - last_emit < 1.0:
+                    return
+                last_progress = mapped
+                last_emit = now
+                # Call progress update directly (sync version)
+                _emit_progress(mapped)
 
-    # 只有成功下载文件时才继续转码和上传
-    if original_filename:
-        with get_sync_db_session() as session:
-            task = _get_task(session, task_id)
-            if task is None:
+            original_filename = _download_youtube(task.source_url, progress_callback=_progress_hook)
+            if not original_filename:
+                raise BusinessError(
+                    ErrorCode.FILE_PROCESSING_ERROR, reason="download produced empty file"
+                )
+        except Exception as exc:
+            logger.exception("youtube download failed: %s", exc)
+            if not direct_url:
+                if isinstance(exc, BusinessError):
+                    error = exc
+                else:
+                    error = BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason=str(exc))
+                with get_sync_db_session() as session:
+                    task = _get_task(session, task_id)
+                    if task is None:
+                        return
+                    _mark_failed(session, task, error, request_id)
                 return
-            _update_task(session, task, "downloaded", 25, "downloaded", request_id)
 
-    try:
+        # 只有成功下载文件时才继续转码和上传
         if original_filename:
             with get_sync_db_session() as session:
                 task = _get_task(session, task_id)
                 if task is None:
                     return
-                _update_task(session, task, "transcoding", 27, "transcoding", request_id)
-            filename = _transcode_to_wav_16k(original_filename)
-        else:
-            # 下载失败，但有 direct_url，跳过转码和上传
-            filename = None
-    except Exception as exc:
-        logger.exception("youtube transcode failed: %s", exc)
-        with get_sync_db_session() as session:
-            task = _get_task(session, task_id)
-            if task is None:
-                return
-            if isinstance(exc, BusinessError):
-                error = exc
-            else:
-                error = BusinessError(ErrorCode.FILE_PROCESSING_ERROR, reason=str(exc))
-            _mark_failed(session, task, error, request_id)
-        return
+                _update_task(session, task, "downloaded", 25, "downloaded", request_id)
 
-    source_key = None
-    duration_seconds = None
-    if filename:
+        # ========== 阶段 3: 转码音频 ==========
         try:
+            if original_filename:
+                with get_sync_db_session() as session:
+                    task = _get_task(session, task_id)
+                    if task is None:
+                        return
+                    _update_task(session, task, "transcoding", 27, "transcoding", request_id)
+                filename = _transcode_to_wav_16k(original_filename)
+            else:
+                # 下载失败，但有 direct_url，跳过转码和上传
+                filename = None
+        except Exception as exc:
+            logger.exception("youtube transcode failed: %s", exc)
             with get_sync_db_session() as session:
                 task = _get_task(session, task_id)
                 if task is None:
                     return
-                user_id = str(task.user_id)
+                if isinstance(exc, BusinessError):
+                    error = exc
+                else:
+                    error = BusinessError(ErrorCode.FILE_PROCESSING_ERROR, reason=str(exc))
+                _mark_failed(session, task, error, request_id)
+            return
 
-            source_key = _build_file_key(filename, user_id)
+        # ========== 阶段 4: 上传到存储服务 ==========
+        source_key = None
+        duration_seconds = None
+        if filename:
+            try:
+                with get_sync_db_session() as session:
+                    task = _get_task(session, task_id)
+                    if task is None:
+                        return
+                    user_id = str(task.user_id)
 
-            # 获取音频时长（在删除文件前）
-            duration_seconds = _get_audio_duration(filename)
-            if duration_seconds:
-                logger.info(
-                    "Task %s: Audio duration detected: %d seconds",
-                    task_id,
-                    duration_seconds,
-                    extra={"task_id": task_id, "duration": duration_seconds},
+                source_key = _build_file_key(filename, user_id)
+
+                # 获取音频时长（在删除文件前）
+                duration_seconds = _get_audio_duration(filename)
+                if duration_seconds:
+                    logger.info(
+                        "Task %s: Audio duration detected: %d seconds",
+                        task_id,
+                        duration_seconds,
+                        extra={"task_id": task_id, "duration": duration_seconds},
+                    )
+
+                with get_sync_db_session() as session:
+                    task = _get_task(session, task_id)
+                    if task is None:
+                        return
+                    _update_task(session, task, "uploading", 30, "uploading", request_id)
+
+                # 双存储上传：同时上传到 COS 和 MinIO
+                # 使用 SmartFactory 获取 storage 服务
+                cos_storage = asyncio.run(
+                    SmartFactory.get_service("storage", provider="cos", user_id=str(task.user_id))
+                )
+                minio_storage = asyncio.run(
+                    SmartFactory.get_service("storage", provider="minio", user_id=str(task.user_id))
                 )
 
+                logger.info(
+                    "Task %s: Uploading to COS (for ASR access)",
+                    task_id,
+                    extra={"task_id": task_id, "source_key": source_key},
+                )
+                cos_storage.upload_file(source_key, filename)
+
+                logger.info(
+                    "Task %s: Uploading to MinIO (for frontend playback)",
+                    task_id,
+                    extra={"task_id": task_id, "source_key": source_key},
+                )
+                minio_storage.upload_file(source_key, filename)
+
+                logger.info(
+                    "Task %s: Dual storage upload completed",
+                    task_id,
+                    extra={"task_id": task_id},
+                )
+            except Exception as exc:
+                logger.exception("storage upload failed: %s", exc)
+                source_key = None
+            finally:
+                if original_filename:
+                    Path(original_filename).unlink(missing_ok=True)
+                Path(filename).unlink(missing_ok=True)
+
+        if source_key:
             with get_sync_db_session() as session:
                 task = _get_task(session, task_id)
                 if task is None:
                     return
-                _update_task(session, task, "uploading", 30, "uploading", request_id)
-
-            # 双存储上传：同时上传到 COS 和 MinIO
-            # 使用 SmartFactory 获取 storage 服务
-            cos_storage = asyncio.run(
-                SmartFactory.get_service("storage", provider="cos", user_id=str(task.user_id))
-            )
-            minio_storage = asyncio.run(
-                SmartFactory.get_service("storage", provider="minio", user_id=str(task.user_id))
-            )
-
-            logger.info(
-                "Task %s: Uploading to COS (for ASR access)",
-                task_id,
-                extra={"task_id": task_id, "source_key": source_key},
-            )
-            cos_storage.upload_file(source_key, filename)
-
-            logger.info(
-                "Task %s: Uploading to MinIO (for frontend playback)",
-                task_id,
-                extra={"task_id": task_id, "source_key": source_key},
-            )
-            minio_storage.upload_file(source_key, filename)
-
-            logger.info(
-                "Task %s: Dual storage upload completed",
-                task_id,
-                extra={"task_id": task_id},
-            )
-        except Exception as exc:
-            logger.exception("storage upload failed: %s", exc)
-            source_key = None
-        finally:
-            if original_filename:
-                Path(original_filename).unlink(missing_ok=True)
-            Path(filename).unlink(missing_ok=True)
-
-    if source_key:
-        with get_sync_db_session() as session:
-            task = _get_task(session, task_id)
-            if task is None:
-                return
-            _update_source_key(session, task, source_key, duration_seconds)
-            _update_task(session, task, "uploaded", 35, "uploaded", request_id)
-    elif not direct_url:
-        with get_sync_db_session() as session:
-            task = _get_task(session, task_id)
-            if task is None:
-                return
-            _mark_failed(
-                session,
-                task,
-                BusinessError(ErrorCode.FILE_UPLOAD_FAILED),
-                request_id,
-            )
-        return
-    else:
-        with get_sync_db_session() as session:
-            task = _get_task(session, task_id)
-            if task is None:
-                return
-            _update_task(session, task, "resolved", 35, "resolved", request_id)
+                _update_source_key(session, task, source_key, duration_seconds)
+                _update_task(session, task, "uploaded", 35, "uploaded", request_id)
+        elif not direct_url:
+            with get_sync_db_session() as session:
+                task = _get_task(session, task_id)
+                if task is None:
+                    return
+                _mark_failed(
+                    session,
+                    task,
+                    BusinessError(ErrorCode.FILE_UPLOAD_FAILED),
+                    request_id,
+                )
+            return
+        else:
+            with get_sync_db_session() as session:
+                task = _get_task(session, task_id)
+                if task is None:
+                    return
+                _update_task(session, task, "resolved", 35, "resolved", request_id)
 
     # ========== 检查是否可以跳过转写阶段 ==========
     skip_transcribe = False
