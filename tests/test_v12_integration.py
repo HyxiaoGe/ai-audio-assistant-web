@@ -17,14 +17,20 @@ async def test_imports():
     print("\n📦 测试模块导入...")
 
     try:
-        from app.utils.transcript_processor import TranscriptProcessor
+        from app.utils.transcript_processor import (  # noqa: F401
+            TranscriptProcessor,
+        )
+
         print("  ✅ TranscriptProcessor 导入成功")
     except Exception as e:
         print(f"  ❌ TranscriptProcessor 导入失败: {e}")
         return False
 
     try:
-        from worker.tasks.summary_generator import generate_summaries_with_quality_awareness
+        from worker.tasks.summary_generator import (  # noqa: F401
+            generate_summaries_with_quality_awareness,
+        )
+
         print("  ✅ generate_summaries_with_quality_awareness 导入成功")
     except Exception as e:
         print(f"  ❌ summary_generator 导入失败: {e}")
@@ -46,15 +52,15 @@ async def test_prompt_templates():
         for summary_type in ["overview", "key_points", "action_items"]:
             for style in ["meeting", "lecture", "podcast"]:
                 try:
-                    config = manager.get_prompt(
+                    _ = manager.get_prompt(
                         category="summary",
                         prompt_type=summary_type,
                         locale="zh-CN",
                         variables={
                             "transcript": "测试文本",
                             "content_style": style,
-                            "quality_notice": ""
-                        }
+                            "quality_notice": "",
+                        },
                     )
                     print(f"  ✅ {summary_type}/{style} 模板加载成功")
                 except Exception as e:
@@ -63,19 +69,20 @@ async def test_prompt_templates():
 
         # 测试章节划分模板
         try:
-            config = manager.get_prompt(
+            _ = manager.get_prompt(
                 category="segmentation",
                 prompt_type="segment",  # 正确的类型名称
                 locale="zh-CN",
                 variables={
                     "transcript": "测试文本",
-                    "content_style": "meeting"
-                }
+                    "content_style": "meeting",
+                },
             )
             print("  ✅ segmentation 模板加载成功")
         except Exception as e:
             print(f"  ❌ segmentation 模板加载失败: {e}")
             import traceback
+
             traceback.print_exc()
             # 不返回False，因为这可能是变量问题，不影响核心功能
             print("  ⚠️  跳过segmentation测试（可能需要更多变量）")
@@ -91,8 +98,8 @@ async def test_transcript_processor():
     print("\n🔧 测试转写处理器...")
 
     try:
-        from app.utils.transcript_processor import TranscriptProcessor
         from app.services.asr.base import TranscriptSegment
+        from app.utils.transcript_processor import TranscriptProcessor
 
         # 创建测试数据 - 使用TranscriptSegment对象
         test_segments = [
@@ -101,27 +108,28 @@ async def test_transcript_processor():
                 start_time=0.0,
                 end_time=3.0,
                 content="嗯，大家好，今天我们开会讨论项目进度。",
-                confidence=0.95
+                confidence=0.95,
             ),
             TranscriptSegment(
                 speaker_id="speaker_0",
                 start_time=3.0,
                 end_time=6.0,
                 content="啊，我觉得我们应该先完成前端开发。",
-                confidence=0.90
+                confidence=0.90,
             ),
             TranscriptSegment(
                 speaker_id="speaker_0",
                 start_time=6.0,
                 end_time=9.0,
                 content="然后再进行后端集成测试。",
-                confidence=0.92
-            )
+                confidence=0.92,
+            ),
         ]
 
         # 评估质量
         quality = TranscriptProcessor.assess_quality(test_segments)
-        print(f"  ✅ 质量评估: {quality.quality_score} (置信度: {quality.avg_confidence:.2f})")
+        confidence = quality.avg_confidence
+        print(f"  ✅ 质量评估: {quality.quality_score} " f"(置信度: {confidence:.2f})")
 
         # 预处理文本
         preprocessed = TranscriptProcessor.preprocess(test_segments)
@@ -132,6 +140,7 @@ async def test_transcript_processor():
     except Exception as e:
         print(f"  ❌ 转写处理器测试失败: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -143,10 +152,10 @@ async def test_llm_services():
     try:
         from app.services.llm import (
             DeepSeekLLMService,
-            QwenLLMService,
             DoubaoLLMService,
             MoonshotLLMService,
-            OpenRouterLLMService
+            OpenRouterLLMService,
+            QwenLLMService,
         )
 
         services = [
@@ -160,17 +169,18 @@ async def test_llm_services():
         for name, service_class in services:
             try:
                 # 检查是否有generate方法
-                if not hasattr(service_class, 'generate'):
+                if not hasattr(service_class, "generate"):
                     print(f"  ❌ {name} 缺少 generate() 方法")
                     return False
 
                 # 检查方法签名
                 import inspect
+
                 sig = inspect.signature(service_class.generate)
                 params = list(sig.parameters.keys())
 
                 # 至少应该有 self, prompt参数（system_message是可选的）
-                if 'prompt' not in params:
+                if "prompt" not in params:
                     print(f"  ❌ {name}.generate() 参数签名不正确（缺少prompt参数）")
                     return False
 
@@ -183,6 +193,7 @@ async def test_llm_services():
     except Exception as e:
         print(f"  ❌ LLM服务导入失败: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -196,20 +207,24 @@ async def test_service_registry():
 
         # 检查LLM服务
         llm_services = ServiceRegistry.list_services("llm")
-        print(f"  ✅ 已注册 {len(llm_services)} 个LLM服务: {', '.join(llm_services)}")
+        llm_list = ", ".join(llm_services)
+        print(f"  ✅ 已注册 {len(llm_services)} 个LLM服务: {llm_list}")
 
         # 检查ASR服务
         asr_services = ServiceRegistry.list_services("asr")
-        print(f"  ✅ 已注册 {len(asr_services)} 个ASR服务: {', '.join(asr_services)}")
+        asr_list = ", ".join(asr_services)
+        print(f"  ✅ 已注册 {len(asr_services)} 个ASR服务: {asr_list}")
 
         # 检查Storage服务
         storage_services = ServiceRegistry.list_services("storage")
-        print(f"  ✅ 已注册 {len(storage_services)} 个Storage服务: {', '.join(storage_services)}")
+        storage_list = ", ".join(storage_services)
+        print(f"  ✅ 已注册 {len(storage_services)} 个Storage服务: {storage_list}")
 
         return len(llm_services) > 0 and len(asr_services) > 0
     except Exception as e:
         print(f"  ❌ 服务注册检查失败: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 

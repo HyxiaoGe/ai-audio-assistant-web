@@ -127,7 +127,11 @@ class QwenLLMService(LLMService):
             category="summary",
             prompt_type=summary_type,
             locale="zh-CN",
-            variables={"transcript": text, "content_style": content_style, "quality_notice": ""}  # V1.2: 质量感知功能预留,
+            variables={
+                "transcript": text,
+                "content_style": content_style,
+                "quality_notice": "",
+            },  # V1.2: 质量感知功能预留,
         )
 
         payload = {
@@ -156,7 +160,11 @@ class QwenLLMService(LLMService):
             category="summary",
             prompt_type=summary_type,
             locale="zh-CN",
-            variables={"transcript": text, "content_style": content_style, "quality_notice": ""}  # V1.2: 质量感知功能预留,
+            variables={
+                "transcript": text,
+                "content_style": content_style,
+                "quality_notice": "",
+            },  # V1.2: 质量感知功能预留,
         )
 
         payload = {
