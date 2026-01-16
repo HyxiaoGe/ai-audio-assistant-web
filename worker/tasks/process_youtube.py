@@ -770,7 +770,7 @@ def _process_youtube(
                 .all()
             )
 
-            from app.schemas.asr import TranscriptSegment
+            from app.services.asr.base import TranscriptSegment
 
             segments = [
                 TranscriptSegment(
