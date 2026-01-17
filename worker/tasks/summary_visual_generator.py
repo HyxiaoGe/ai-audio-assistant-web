@@ -8,14 +8,13 @@
 支持后端渲染为 PNG/SVG 图片
 """
 
-import json
 import logging
 import re
-import subprocess
+import subprocess  # nosec B404: subprocess is safe for mmdc CLI execution
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -114,8 +113,8 @@ async def render_mermaid_to_image(
 
         logger.info(f"Running mmdc command: {' '.join(cmd)}")
 
-        # 执行渲染命令
-        result = subprocess.run(
+        # 执行渲染命令（使用受控的 mmdc CLI 参数）
+        result = subprocess.run(  # nosec B603
             cmd, capture_output=True, text=True, timeout=30, check=False
         )
 
@@ -165,9 +164,7 @@ async def upload_visual_image(
     storage = await SmartFactory.get_service("storage")
 
     # 写入临时文件
-    with tempfile.NamedTemporaryFile(
-        suffix=f".{image_format}", delete=False
-    ) as tmp_file:
+    with tempfile.NamedTemporaryFile(suffix=f".{image_format}", delete=False) as tmp_file:
         tmp_file.write(image_data)
         tmp_path = tmp_file.name
 
@@ -232,9 +229,7 @@ async def generate_visual_summary(
         segments, filter_filler_words=True, merge_same_speaker=True
     )
 
-    logger.info(
-        f"Task {task_id}: Preprocessed text length: {len(preprocessed_text)} chars"
-    )
+    logger.info(f"Task {task_id}: Preprocessed text length: {len(preprocessed_text)} chars")
 
     # ===== Step 3: 获取 LLM 服务 =====
     llm_service: LLMService = await SmartFactory.get_service(
@@ -270,8 +265,7 @@ async def generate_visual_summary(
         mermaid_code = validate_mermaid(raw_output)
     except ValueError as e:
         logger.error(
-            f"Task {task_id}: Mermaid validation failed: {e}\n"
-            f"Raw output: {raw_output[:500]}..."
+            f"Task {task_id}: Mermaid validation failed: {e}\n" f"Raw output: {raw_output[:500]}..."
         )
         raise
 
@@ -279,12 +273,8 @@ async def generate_visual_summary(
     image_key = None
     if generate_image:
         try:
-            logger.info(
-                f"Task {task_id}: Rendering Mermaid to {image_format.upper()} image"
-            )
-            image_data = await render_mermaid_to_image(
-                mermaid_code, output_format=image_format
-            )
+            logger.info(f"Task {task_id}: Rendering Mermaid to {image_format.upper()} image")
+            image_data = await render_mermaid_to_image(mermaid_code, output_format=image_format)
 
             # 上传到存储
             image_key = await upload_visual_image(

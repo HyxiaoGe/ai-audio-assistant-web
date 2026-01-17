@@ -103,9 +103,7 @@ class VisualSummaryRequest(BaseModel):
     model_id: Optional[str] = Field(
         default=None, description="模型 ID（如 deepseek-chat），用于支持多模型的服务"
     )
-    generate_image: bool = Field(
-        default=True, description="是否生成 PNG/SVG 图片（后端渲染）"
-    )
+    generate_image: bool = Field(default=True, description="是否生成 PNG/SVG 图片（后端渲染）")
     image_format: Literal["png", "svg"] = Field(
         default="png", description="图片格式（当 generate_image=True 时）"
     )

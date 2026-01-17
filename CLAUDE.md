@@ -684,4 +684,3 @@ alembic upgrade head
 ```
 
 Migration file: `alembic/versions/a1b2c3d4e5f6_add_visual_summary_fields.py`
-

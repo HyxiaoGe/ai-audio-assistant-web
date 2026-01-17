@@ -683,7 +683,9 @@ async def generate_visual_summary(
     has_transcripts = transcript_result.scalar_one_or_none() is not None
 
     if not has_transcripts:
-        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成可视化摘要")
+        raise BusinessError(
+            ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成可视化摘要"
+        )
 
     # Auto-detect content_style if not provided
     content_style = data.content_style or "general"
@@ -749,7 +751,7 @@ async def get_visual_summary(
 
     if not summary:
         raise BusinessError(
-            ErrorCode.RESOURCE_NOT_FOUND, reason=f"未找到 {visual_type} 类型的可视化摘要"
+            ErrorCode.SUMMARY_NOT_FOUND, reason=f"未找到 {visual_type} 类型的可视化摘要"
         )
 
     response = VisualSummaryResponse(
