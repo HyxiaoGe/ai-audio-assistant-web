@@ -60,14 +60,10 @@ def process_visual_summary(
                 transcripts = transcript_result.scalars().all()
 
                 if not transcripts:
-                    logger.error(
-                        f"[{request_id}] No transcripts found for task {task_id}"
-                    )
+                    logger.error(f"[{request_id}] No transcripts found for task {task_id}")
                     raise ValueError(f"Task {task_id} has no transcripts")
 
-                logger.info(
-                    f"[{request_id}] Found {len(transcripts)} transcript segments"
-                )
+                logger.info(f"[{request_id}] Found {len(transcripts)} transcript segments")
 
                 # 转换为 TranscriptSegment 对象
                 from app.services.asr.base import TranscriptSegment
@@ -84,9 +80,7 @@ def process_visual_summary(
                 ]
 
                 # ===== Step 2: 生成可视化摘要 =====
-                logger.info(
-                    f"[{request_id}] Generating {visual_type} visual summary"
-                )
+                logger.info(f"[{request_id}] Generating {visual_type} visual summary")
 
                 summary = await generate_visual_summary(
                     task_id=task_id,
@@ -128,9 +122,7 @@ def process_visual_summary(
 
     try:
         result = asyncio.run(_process())
-        logger.info(
-            f"[{request_id}] Visual summary task completed: {result['summary_id']}"
-        )
+        logger.info(f"[{request_id}] Visual summary task completed: {result['summary_id']}")
         return result
 
     except Exception as e:
