@@ -6,7 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        nodejs \
+        npm \
+    && npm install -g @mermaid-js/mermaid-cli \
+    && mmdc --version \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./

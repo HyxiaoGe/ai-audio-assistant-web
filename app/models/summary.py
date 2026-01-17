@@ -34,3 +34,9 @@ class Summary(BaseRecord):
     prompt_version: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     token_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     comparison_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Visual summary fields
+    visual_format: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    visual_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    image_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    image_format: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
