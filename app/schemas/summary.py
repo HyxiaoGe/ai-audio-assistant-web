@@ -16,6 +16,9 @@ class SummaryItem(BaseModel):
     prompt_version: Optional[str] = None
     token_count: Optional[int] = None
     created_at: datetime
+    # Visual summary fields
+    visual_format: Optional[str] = None
+    image_url: Optional[str] = None
 
 
 class SummaryListResponse(BaseModel):
@@ -79,3 +82,44 @@ class SummaryComparisonResponse(BaseModel):
     summary_type: str
     models: list[str]
     results: list[SummaryComparisonItem]
+
+
+# ===== Visual Summary Schemas =====
+
+
+class VisualSummaryRequest(BaseModel):
+    """可视化摘要生成请求"""
+
+    visual_type: Literal["mindmap", "timeline", "flowchart"] = Field(
+        description="可视化类型：mindmap(思维导图), timeline(时间轴), flowchart(流程图)"
+    )
+    content_style: Optional[str] = Field(
+        default=None,
+        description="内容风格 (meeting/lecture/podcast/video/general)，为 None 时自动检测",
+    )
+    provider: Optional[str] = Field(
+        default=None, description="LLM 服务提供商（如 doubao, deepseek），为 None 则自动选择"
+    )
+    model_id: Optional[str] = Field(
+        default=None, description="模型 ID（如 deepseek-chat），用于支持多模型的服务"
+    )
+    generate_image: bool = Field(
+        default=True, description="是否生成 PNG/SVG 图片（后端渲染）"
+    )
+    image_format: Literal["png", "svg"] = Field(
+        default="png", description="图片格式（当 generate_image=True 时）"
+    )
+
+
+class VisualSummaryResponse(BaseModel):
+    """可视化摘要响应"""
+
+    id: str
+    task_id: str
+    visual_type: str
+    format: str  # "mermaid"
+    content: str  # Mermaid 语法代码
+    image_url: Optional[str] = None  # 生成的图片 URL（如果有）
+    model_used: Optional[str] = None
+    token_count: Optional[int] = None
+    created_at: datetime

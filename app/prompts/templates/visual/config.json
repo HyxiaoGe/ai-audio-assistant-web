@@ -1,0 +1,38 @@
+{
+  "version": "1.3.0",
+  "category": "visual",
+  "supported_locales": ["zh-CN", "en-US"],
+  "supported_content_styles": ["meeting", "lecture", "podcast", "video", "general"],
+  "prompt_types": {
+    "mindmap": {
+      "description": "生成思维导图结构",
+      "output_format": "mermaid",
+      "model_params": {
+        "temperature": 0.4,
+        "max_tokens": 2000,
+        "top_p": 0.9
+      },
+      "recommended_for": ["lecture", "podcast", "video"]
+    },
+    "timeline": {
+      "description": "生成时间轴结构",
+      "output_format": "mermaid",
+      "model_params": {
+        "temperature": 0.3,
+        "max_tokens": 1500,
+        "top_p": 0.9
+      },
+      "recommended_for": ["meeting", "lecture", "podcast"]
+    },
+    "flowchart": {
+      "description": "生成流程图结构",
+      "output_format": "mermaid",
+      "model_params": {
+        "temperature": 0.3,
+        "max_tokens": 1500,
+        "top_p": 0.9
+      },
+      "recommended_for": ["meeting", "video", "general"]
+    }
+  }
+}

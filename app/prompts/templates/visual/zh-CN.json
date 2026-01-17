@@ -1,0 +1,98 @@
+{
+  "system": {
+    "meeting": {
+      "role": "你是一个专业的可视化内容生成助手，擅长将会议内容转化为清晰的可视化结构（思维导图、时间轴、流程图）。",
+      "style": "结构化、逻辑清晰、突出关键信息",
+      "tolerance": "能够处理语音识别错误，根据上下文理解真实含义",
+      "constraints": [
+        "严格按照 Mermaid 语法输出",
+        "不添加任何解释性文字",
+        "节点名称简洁明了",
+        "突出核心内容和关系"
+      ]
+    },
+    "lecture": {
+      "role": "你是一个专业的知识可视化助手，擅长将讲座/课程内容转化为层级化的可视化结构。",
+      "style": "教学向、层次分明、知识关联清晰",
+      "tolerance": "能够理解口语化表达和教学用语",
+      "constraints": [
+        "严格按照 Mermaid 语法输出",
+        "不添加任何解释性文字",
+        "突出知识点和概念关系",
+        "保持教学逻辑顺序"
+      ]
+    },
+    "podcast": {
+      "role": "你是一个专业的内容可视化助手，擅长将播客/访谈内容转化为易理解的可视化结构。",
+      "style": "轻松、对话化、突出观点",
+      "tolerance": "能够处理随意对话和非正式表达",
+      "constraints": [
+        "严格按照 Mermaid 语法输出",
+        "不添加任何解释性文字",
+        "突出核心观点和讨论流程",
+        "保持对话逻辑"
+      ]
+    },
+    "video": {
+      "role": "你是一个专业的视频内容可视化助手，擅长将视频内容转化为结构化的可视化呈现。",
+      "style": "简明、步骤清晰、突出操作流程",
+      "tolerance": "能够理解演示性内容和操作步骤",
+      "constraints": [
+        "严格按照 Mermaid 语法输出",
+        "不添加任何解释性文字",
+        "突出步骤顺序和决策点",
+        "保持操作逻辑"
+      ]
+    },
+    "general": {
+      "role": "你是一个专业的内容可视化助手，擅长将音频内容转化为清晰的可视化结构。",
+      "style": "简洁、专业、结构化",
+      "tolerance": "能够处理各类内容和表达方式",
+      "constraints": [
+        "严格按照 Mermaid 语法输出",
+        "不添加任何解释性文字",
+        "突出核心内容",
+        "保持逻辑清晰"
+      ]
+    }
+  },
+  "prompts": {
+    "mindmap": {
+      "name": "思维导图",
+      "description": "将内容转化为层级化的思维导图结构",
+      "templates": {
+        "lecture": "{quality_notice}\n\n请根据以下讲座转写文本生成思维导图（Mermaid mindmap格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式要求**：\n   - 必须输出纯 Mermaid mindmap 语法，不要添加任何说明文字\n   - 代码块格式：```mermaid\\nmindmap\\n  ...\\n```\n   - 语法正确，可直接渲染\n\n2. **结构要求**：\n   - 根节点：课程/讲座的主题（用双括号，如 `root((主题名))`）\n   - 第2层：主要章节或部分（3-6个）\n   - 第3层：每个章节下的核心概念（2-4个）\n   - 第4层（可选）：重要细节或子概念\n   - 层级不超过4层\n\n3. **内容要求**：\n   - 每个节点简洁明了（5-15个汉字）\n   - 突出核心知识点和关键概念\n   - 体现概念之间的层级关系\n   - 避免冗余和重复\n\n4. **示例格式**：\n```mermaid\nmindmap\n  root((深度学习基础))\n    神经网络\n      感知机\n      多层网络\n      激活函数\n    反向传播\n      梯度下降\n      链式法则\n    优化算法\n      SGD\n      Adam\n    应用场景\n      图像识别\n      自然语言处理\n```\n\n请严格按照上述格式生成思维导图。",
+
+        "podcast": "{quality_notice}\n\n请根据以下播客/访谈转写文本生成思维导图（Mermaid mindmap格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式要求**：\n   - 必须输出纯 Mermaid mindmap 语法\n   - 代码块格式：```mermaid\\nmindmap\\n  ...\\n```\n\n2. **结构要求**：\n   - 根节点：播客主题（用双括号）\n   - 第2层：主要讨论议题（3-5个）\n   - 第3层：每个议题下的核心观点\n   - 第4层（可选）：支撑论点或案例\n\n3. **内容要求**：\n   - 节点名称简洁有力（5-15字）\n   - 突出核心观点和见解\n   - 体现讨论的逻辑流程\n\n4. **示例格式**：\n```mermaid\nmindmap\n  root((创业成功之道))\n    产品思维\n      用户需求\n      MVP验证\n    团队建设\n      人才招募\n      文化塑造\n    融资策略\n      融资时机\n      投资人选择\n    市场推广\n      品牌定位\n      增长策略\n```\n\n请严格按照上述格式生成思维导图。",
+
+        "video": "{quality_notice}\n\n请根据以下视频转写文本生成思维导图（Mermaid mindmap格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式要求**：\n   - 必须输出纯 Mermaid mindmap 语法\n   - 代码块格式：```mermaid\\nmindmap\\n  ...\\n```\n\n2. **结构要求**：\n   - 根节点：视频主题\n   - 第2层：主要内容模块\n   - 第3层：具体知识点或步骤\n   - 第4层：细节或注意事项\n\n3. **内容要求**：\n   - 节点名称清晰（5-15字）\n   - 突出关键操作和要点\n   - 体现内容的组织结构\n\n请严格按照Mermaid mindmap语法生成。",
+
+        "general": "{quality_notice}\n\n请根据以下转写文本生成思维导图（Mermaid mindmap格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式**：纯 Mermaid mindmap 语法，代码块格式\n2. **结构**：根节点 + 2-3层子节点\n3. **内容**：节点简洁（5-15字），突出核心内容\n\n请严格按照Mermaid mindmap语法生成。"
+      }
+    },
+    "timeline": {
+      "name": "时间轴",
+      "description": "将内容转化为时间序列或进程结构",
+      "templates": {
+        "meeting": "{quality_notice}\n\n请根据以下会议转写文本生成时间轴（Mermaid timeline格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式要求**：\n   - 必须输出纯 Mermaid timeline 语法\n   - 代码块格式：```mermaid\\ntimeline\\n  title XXX\\n  ...\\n```\n   - 语法正确，可直接渲染\n\n2. **结构要求**：\n   - title：会议主题\n   - section：会议阶段（如：开场、主要讨论、决策、总结等，3-5个section）\n   - 每个section下：2-4个关键事件或议题\n   - 事件格式：`时间点或议题 : 简要描述`\n\n3. **内容要求**：\n   - 按时间或议程顺序组织\n   - 突出关键事件、决策点、讨论议题\n   - 每个时间点描述简洁（10-20字）\n   - 如果转写包含时间戳，优先使用实际时间\n\n4. **示例格式**：\n```mermaid\ntimeline\n    title 产品规划会议\n    section 开场\n      09:00 会议开始 : 介绍议程和参会人员\n      09:05 上周回顾 : 回顾上周行动项完成情况\n    section 主要讨论\n      09:15 需求评审 : 讨论Q2产品需求优先级\n      09:40 技术方案 : 评估新功能技术可行性\n      10:00 资源分配 : 确定开发资源和时间安排\n    section 决策与总结\n      10:20 决策确认 : 确定优先开发功能列表\n      10:30 行动项分配 : 明确责任人和截止时间\n      10:40 下次会议 : 安排下周进度评审\n```\n\n请严格按照上述格式生成时间轴。",
+
+        "lecture": "{quality_notice}\n\n请根据以下讲座转写文本生成时间轴（Mermaid timeline格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式要求**：\n   - 必须输出纯 Mermaid timeline 语法\n   - 代码块格式：```mermaid\\ntimeline\\n  title XXX\\n  ...\\n```\n\n2. **结构要求**：\n   - title：课程主题\n   - section：课程章节或阶段（3-5个）\n   - 每个section下：2-4个关键知识点或概念\n\n3. **内容要求**：\n   - 按教学顺序组织\n   - 突出知识点的递进关系\n   - 描述简洁清晰（10-20字）\n\n4. **示例格式**：\n```mermaid\ntimeline\n    title 机器学习入门\n    section 基础概念\n      什么是机器学习 : 定义和应用场景\n      监督学习 : 分类和回归问题\n      无监督学习 : 聚类和降维\n    section 算法原理\n      线性回归 : 最小二乘法\n      逻辑回归 : 分类问题建模\n      决策树 : 树形结构和分裂准则\n    section 实践应用\n      数据预处理 : 特征工程和标准化\n      模型训练 : 参数优化和验证\n      模型评估 : 准确率和过拟合\n```\n\n请严格按照上述格式生成时间轴。",
+
+        "podcast": "{quality_notice}\n\n请根据以下播客转写文本生成时间轴（Mermaid timeline格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式**：纯 Mermaid timeline 语法\n2. **结构**：title + 3-5个section，每个section下2-4个讨论点\n3. **内容**：按对话流程组织，突出观点演进\n\n请严格按照Mermaid timeline语法生成。",
+
+        "general": "{quality_notice}\n\n请根据以下转写文本生成时间轴（Mermaid timeline格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式**：纯 Mermaid timeline 语法\n2. **结构**：title + section + 事件描述\n3. **内容**：按时间或逻辑顺序，描述简洁\n\n请严格按照Mermaid timeline语法生成。"
+      }
+    },
+    "flowchart": {
+      "name": "流程图",
+      "description": "将内容转化为流程或决策结构",
+      "templates": {
+        "meeting": "{quality_notice}\n\n请根据以下会议转写文本生成流程图（Mermaid flowchart格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式要求**：\n   - 必须输出纯 Mermaid flowchart 语法\n   - 代码块格式：```mermaid\\nflowchart TD\\n  ...\\n```\n   - 使用 TD（从上到下）布局\n\n2. **结构要求**：\n   - 开始节点：圆角矩形 `Start([开始])`\n   - 步骤节点：矩形 `Step1[步骤描述]`\n   - 决策节点：菱形 `Decision{条件?}`\n   - 结束节点：圆角矩形 `End([结束])`\n   - 箭头连接：`-->` 或带标签 `-->|条件|`\n\n3. **内容要求**：\n   - 展示会议决策流程或行动方案\n   - 决策分支要标明条件（是/否、通过/不通过等）\n   - 节点描述简洁（8-15字）\n   - 流程完整，从开始到结束\n\n4. **示例格式**：\n```mermaid\nflowchart TD\n    Start([会议开始]) --> Agenda[审查议程]\n    Agenda --> Topic1[讨论产品需求]\n    Topic1 --> Decision1{需求合理?}\n    Decision1 -->|是| Approve1[需求通过]\n    Decision1 -->|否| Revise1[需求修订]\n    Revise1 --> Topic1\n    Approve1 --> Topic2[讨论技术方案]\n    Topic2 --> Decision2{方案可行?}\n    Decision2 -->|是| Approve2[方案确认]\n    Decision2 -->|否| Alternative[寻找替代方案]\n    Alternative --> Topic2\n    Approve2 --> Assign[分配任务和责任人]\n    Assign --> End([会议结束])\n```\n\n请严格按照上述格式生成流程图。",
+
+        "video": "{quality_notice}\n\n请根据以下视频转写文本生成流程图（Mermaid flowchart格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式要求**：\n   - 必须输出纯 Mermaid flowchart 语法\n   - 代码块格式：```mermaid\\nflowchart TD\\n  ...\\n```\n   - 使用 TD 布局\n\n2. **结构要求**：\n   - 开始：`Start([开始])`\n   - 操作步骤：`Step[操作描述]`\n   - 决策/判断：`Check{检查条件?}`\n   - 结束：`End([完成])`\n\n3. **内容要求**：\n   - 展示操作步骤、决策分支、流程走向\n   - 决策分支要标明条件\n   - 步骤描述清晰（8-15字）\n   - 流程要完整\n\n4. **示例格式**：\n```mermaid\nflowchart TD\n    Start([开始制作]) --> Prep[准备材料和工具]\n    Prep --> Check1{材料齐全?}\n    Check1 -->|否| Buy[购买缺失材料]\n    Buy --> Prep\n    Check1 -->|是| Step1[第一步：清洁表面]\n    Step1 --> Step2[第二步：涂底漆]\n    Step2 --> Dry1[等待干燥]\n    Dry1 --> Step3[第三步：上色]\n    Step3 --> Check2{颜色均匀?}\n    Check2 -->|否| Fix[补色处理]\n    Fix --> Step3\n    Check2 -->|是| Dry2[最终干燥]\n    Dry2 --> End([完成])\n```\n\n请严格按照上述格式生成流程图。",
+
+        "general": "{quality_notice}\n\n请根据以下转写文本生成流程图（Mermaid flowchart格式）。\n\n转写内容：\n{transcript}\n\n## 输出要求\n\n1. **格式**：纯 Mermaid flowchart TD 语法\n2. **结构**：开始 -> 步骤/决策 -> 结束\n3. **内容**：流程清晰，决策分支明确\n\n请严格按照Mermaid flowchart语法生成。"
+      }
+    }
+  }
+}

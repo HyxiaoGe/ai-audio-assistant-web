@@ -22,6 +22,8 @@ from app.schemas.summary import (
     SummaryItem,
     SummaryListResponse,
     SummaryRegenerateRequest,
+    VisualSummaryRequest,
+    VisualSummaryResponse,
 )
 
 router = APIRouter(prefix="/summaries")
@@ -63,6 +65,8 @@ async def get_summaries(
             prompt_version=s.prompt_version,
             token_count=s.token_count,
             created_at=s.created_at,
+            visual_format=s.visual_format,
+            image_url=f"/api/v1/media/{s.image_key}" if s.image_key else None,
         )
         for s in summaries
     ]
@@ -645,3 +649,119 @@ async def stream_comparison(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ===== Visual Summary Endpoints =====
+
+
+@router.post("/{task_id}/visual")
+async def generate_visual_summary(
+    request: Request,
+    task_id: str,
+    data: VisualSummaryRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> JSONResponse:
+    """生成可视化摘要（思维导图/时间轴/流程图）"""
+    from worker.celery_app import celery_app
+
+    # Verify task exists and belongs to user
+    task_stmt = select(Task).where(
+        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
+    )
+    task_result = await db.execute(task_stmt)
+    task = task_result.scalar_one_or_none()
+
+    if not task:
+        raise BusinessError(ErrorCode.TASK_NOT_FOUND)
+
+    # Check if task has transcripts
+    from app.models.transcript import Transcript
+
+    transcript_stmt = select(Transcript).where(Transcript.task_id == task_id).limit(1)
+    transcript_result = await db.execute(transcript_stmt)
+    has_transcripts = transcript_result.scalar_one_or_none() is not None
+
+    if not has_transcripts:
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成可视化摘要")
+
+    # Auto-detect content_style if not provided
+    content_style = data.content_style or "general"
+
+    # Submit visual summary generation task
+    trace_id = getattr(request.state, "trace_id", None)
+    celery_app.send_task(
+        "worker.tasks.process_visual_summary",
+        args=[task_id, data.visual_type, content_style],
+        kwargs={
+            "provider": data.provider,
+            "model_id": data.model_id,
+            "generate_image": data.generate_image,
+            "image_format": data.image_format,
+            "user_id": user.id,
+            "request_id": trace_id,
+        },
+    )
+
+    return success(
+        data={
+            "task_id": task_id,
+            "visual_type": data.visual_type,
+            "content_style": content_style,
+            "generate_image": data.generate_image,
+            "status": "queued",
+        }
+    )
+
+
+@router.get("/{task_id}/visual/{visual_type}")
+async def get_visual_summary(
+    task_id: str,
+    visual_type: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> JSONResponse:
+    """获取已生成的可视化摘要"""
+
+    # Verify task exists and belongs to user
+    task_stmt = select(Task).where(
+        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
+    )
+    task_result = await db.execute(task_stmt)
+    task = task_result.scalar_one_or_none()
+
+    if not task:
+        raise BusinessError(ErrorCode.TASK_NOT_FOUND)
+
+    # Query visual summary
+    summary_stmt = (
+        select(Summary)
+        .where(
+            Summary.task_id == task_id,
+            Summary.summary_type == f"visual_{visual_type}",
+            Summary.is_active.is_(True),
+        )
+        .order_by(Summary.version.desc())
+        .limit(1)
+    )
+    summary_result = await db.execute(summary_stmt)
+    summary = summary_result.scalar_one_or_none()
+
+    if not summary:
+        raise BusinessError(
+            ErrorCode.RESOURCE_NOT_FOUND, reason=f"未找到 {visual_type} 类型的可视化摘要"
+        )
+
+    response = VisualSummaryResponse(
+        id=str(summary.id),
+        task_id=task_id,
+        visual_type=visual_type,
+        format=summary.visual_format or "mermaid",
+        content=summary.visual_content or summary.content,
+        image_url=f"/api/v1/media/{summary.image_key}" if summary.image_key else None,
+        model_used=summary.model_used,
+        token_count=summary.token_count,
+        created_at=summary.created_at,
+    )
+
+    return success(data=jsonable_encoder(response))

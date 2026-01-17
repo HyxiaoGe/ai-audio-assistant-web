@@ -548,3 +548,140 @@ Complete one task at a time:
 - `docs/API.md`: API specifications (if exists)
 - `docs/ARCH.md`: Architecture details (if exists)
 - Interactive API docs: http://localhost:8000/docs
+
+---
+
+## Visual Summaries (v1.3+)
+
+**NEW**: Multi-modal visual summary generation using Mermaid diagrams.
+
+### Overview
+
+The system now generates visual representations of transcripts in addition to text summaries:
+- **Mindmap** (思维导图): Hierarchical concept maps for lectures, podcasts, and videos
+- **Timeline** (时间轴): Chronological event sequences for meetings and lectures
+- **Flowchart** (流程图): Process flows for meetings and tutorial videos
+
+### Architecture
+
+**Prompt Templates** (`app/prompts/templates/visual/`):
+- `config.json`: Model parameters and recommended use cases
+- `zh-CN.json`: Chinese prompt templates with Mermaid syntax examples
+- Supports 5 content styles: meeting, lecture, podcast, video, general
+
+**Core Components**:
+- `worker/tasks/summary_visual_generator.py`: Visual summary generation logic
+- `worker/tasks/process_visual_summary.py`: Celery task for async processing
+- `app/api/v1/summaries.py`: API endpoints (`POST /{task_id}/visual`, `GET /{task_id}/visual/{type}`)
+
+**Database Schema** (`app/models/summary.py`):
+```python
+visual_format: str       # "mermaid"
+visual_content: str      # Mermaid syntax code
+image_key: str          # Storage path to generated PNG/SVG
+image_format: str       # "png" or "svg"
+```
+
+### Image Rendering
+
+Uses **Mermaid CLI** (`mmdc`) to render diagrams to PNG/SVG:
+- Installed via npm in Docker: `npm install -g @mermaid-js/mermaid-cli`
+- Local dev (macOS): `brew install node && npm install -g @mermaid-js/mermaid-cli`
+- Renders in temp files, uploads to storage via SmartFactory
+
+### API Usage
+
+**Generate Visual Summary**:
+```bash
+POST /api/v1/summaries/{task_id}/visual
+{
+  "visual_type": "mindmap",          # or "timeline", "flowchart"
+  "content_style": "lecture",        # optional, auto-detect if null
+  "generate_image": true,            # render to PNG/SVG
+  "image_format": "png",             # or "svg"
+  "provider": "deepseek",            # optional LLM provider
+  "model_id": "deepseek-chat"        # optional model ID
+}
+```
+
+**Get Visual Summary**:
+```bash
+GET /api/v1/summaries/{task_id}/visual/{visual_type}
+Response:
+{
+  "code": 0,
+  "data": {
+    "id": "summary-uuid",
+    "task_id": "task-uuid",
+    "visual_type": "mindmap",
+    "format": "mermaid",
+    "content": "mindmap\n  root((主题))...",  # Mermaid syntax
+    "image_url": "/api/v1/media/visuals/...",  # PNG/SVG URL
+    "model_used": "deepseek-chat",
+    "created_at": "2026-01-17..."
+  }
+}
+```
+
+### Frontend Integration
+
+Two rendering options:
+1. **Client-side**: Use Mermaid.js to render `content` field directly
+2. **Server-side**: Display pre-rendered image via `image_url`
+
+Example (React with Mermaid.js):
+```javascript
+import mermaid from 'mermaid';
+
+useEffect(() => {
+  mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+  mermaid.contentLoaded();
+}, [visualSummary.content]);
+
+return <pre className="mermaid">{visualSummary.content}</pre>;
+```
+
+### Validation and Error Handling
+
+**Mermaid Validation**:
+- Extracts syntax from LLM output (with or without ```mermaid code blocks)
+- Validates diagram type (mindmap, timeline, flowchart)
+- Stores raw Mermaid even if image rendering fails
+
+**Error Handling**:
+- Image rendering failures don't block summary creation
+- Falls back to Mermaid syntax only if `mmdc` fails
+- Retry logic in Celery task (max 2 retries, 60s delay)
+
+### Performance
+
+**Latency**:
+- LLM generation: 3-8 seconds
+- Mermaid rendering: 1-3 seconds
+- Storage upload: 0.5-1 second
+- **Total**: 5-12 seconds per visual summary
+
+**Storage**:
+- PNG images: ~50-200KB
+- SVG images: ~10-50KB
+- Mermaid text: ~1-5KB
+
+### Dependencies
+
+**System** (added to Dockerfile):
+```dockerfile
+RUN apt-get install -y nodejs npm \
+    && npm install -g @mermaid-js/mermaid-cli
+```
+
+**Python**: No new packages (uses subprocess for mmdc)
+
+### Migration
+
+Run database migration to add visual fields:
+```bash
+alembic upgrade head
+```
+
+Migration file: `alembic/versions/a1b2c3d4e5f6_add_visual_summary_fields.py`
+
