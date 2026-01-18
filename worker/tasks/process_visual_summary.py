@@ -38,6 +38,12 @@ def process_visual_summary(
         f"[{request_id}] Starting visual summary generation - "
         f"task_id: {task_id}, type: {visual_type}, style: {content_style}"
     )
+    logger.info(
+        f"[{request_id}] Parameters: provider={provider} (type: {type(provider).__name__}), "
+        f"model_id={model_id} (type: {type(model_id).__name__}), "
+        f"generate_image={generate_image} (type: {type(generate_image).__name__}), "
+        f"image_format={image_format}"
+    )
 
     async def _process():
         from sqlalchemy import select

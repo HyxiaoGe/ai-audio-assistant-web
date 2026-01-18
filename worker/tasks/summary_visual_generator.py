@@ -232,6 +232,16 @@ async def generate_visual_summary(
     logger.info(f"Task {task_id}: Preprocessed text length: {len(preprocessed_text)} chars")
 
     # ===== Step 3: 获取 LLM 服务 =====
+    # Set default model_id if not provided
+    if not model_id and provider:
+        default_models = {
+            "deepseek": "deepseek-chat",
+            "qwen": "qwen-plus",
+            "doubao": "doubao-pro-4k",
+            "moonshot": "moonshot-v1-8k",
+        }
+        model_id = default_models.get(provider)
+
     llm_service: LLMService = await SmartFactory.get_service(
         "llm", provider=provider, model_id=model_id
     )
@@ -253,11 +263,16 @@ async def generate_visual_summary(
     # ===== Step 5: 调用 LLM 生成 Mermaid 语法 =====
     logger.info(f"Task {task_id}: Calling LLM to generate {visual_type} diagram")
 
+    # Get model params with defaults
+    model_params = prompt_config.get("model_params", {})
+    temperature = model_params.get("temperature", 0.4)
+    max_tokens = model_params.get("max_tokens", 2000)
+
     raw_output = await llm_service.generate(
         prompt=prompt_config["user_prompt"],
         system_message=prompt_config["system"],
-        temperature=prompt_config["model_params"].get("temperature", 0.4),
-        max_tokens=prompt_config["model_params"].get("max_tokens", 2000),
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
 
     # ===== Step 6: 验证并提取 Mermaid 代码 =====

@@ -115,7 +115,11 @@ class PromptManager:
             system_message += f"\n\n约束条件：\n{constraints}"
 
         # 获取model参数
-        model_params = config_data["model_params"].get(prompt_type, {})
+        # Try to get from prompt_types first (new structure), fall back to top-level (old structure)
+        if "prompt_types" in config_data and prompt_type in config_data["prompt_types"]:
+            model_params = config_data["prompt_types"][prompt_type].get("model_params", {})
+        else:
+            model_params = config_data.get("model_params", {}).get(prompt_type, {})
 
         return {
             "system": system_message,
