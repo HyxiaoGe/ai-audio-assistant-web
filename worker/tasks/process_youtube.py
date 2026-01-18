@@ -1142,6 +1142,42 @@ def _process_youtube(
         if not task.detected_language:
             task.detected_language = "zh"  # 中文
 
+        # ========== 自动生成可视化摘要（如果启用）==========
+        options = task.options or {}
+        if options.get("enable_visual_summary", False):
+            visual_types = options.get("visual_types", ["mindmap"])
+            content_style = options.get("summary_style", "meeting")
+            provider = options.get("provider") or options.get("llm_provider")
+            model_id = options.get("model_id") or options.get("llm_model_id")
+
+            logger.info(
+                "[%s] Auto-generating visual summaries: %s",
+                request_id,
+                visual_types,
+            )
+
+            # 异步触发可视化摘要生成任务
+            for visual_type in visual_types:
+                if visual_type in ("mindmap", "timeline", "flowchart"):
+                    celery_app.send_task(
+                        "worker.tasks.process_visual_summary",
+                        args=[task_id, visual_type, content_style],
+                        kwargs={
+                            "provider": provider,
+                            "model_id": model_id,
+                            "generate_image": False,  # 本地环境不生成图片
+                            "image_format": "png",
+                            "user_id": str(task.user_id),
+                            "request_id": request_id,
+                        },
+                    )
+                    logger.info(
+                        "[%s] Queued visual summary task: %s for task %s",
+                        request_id,
+                        visual_type,
+                        task_id,
+                    )
+
         task.error_code = None
         task.error_message = None
         _update_task(session, task, "completed", 100, "completed", request_id)

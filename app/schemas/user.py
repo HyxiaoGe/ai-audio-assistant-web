@@ -16,6 +16,8 @@ class TaskDefaultsPreferences(BaseModel):
     language: Optional[str] = Field(default=None)
     summary_style: Optional[str] = Field(default=None)
     enable_speaker_diarization: Optional[bool] = Field(default=None)
+    enable_visual_summary: Optional[bool] = Field(default=None)
+    visual_types: Optional[list[str]] = Field(default=None)
     asr_provider: Optional[str] = Field(default=None)
     asr_variant: Optional[str] = Field(default=None)
     llm_provider: Optional[str] = Field(default=None)

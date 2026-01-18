@@ -10,6 +10,14 @@ class TaskOptions(BaseModel):
     language: str = Field(default="auto")
     enable_speaker_diarization: bool = Field(default=True)
     summary_style: str = Field(default="meeting")
+    enable_visual_summary: bool = Field(
+        default=False,
+        description="是否自动生成可视化摘要（思维导图/时间轴/流程图）",
+    )
+    visual_types: list[str] = Field(
+        default_factory=lambda: ["mindmap"],
+        description="要生成的可视化类型列表：mindmap(思维导图), timeline(时间轴), flowchart(流程图)",
+    )
     provider: Optional[str] = Field(default=None)
     model_id: Optional[str] = Field(default=None)
     asr_provider: Optional[str] = Field(default=None)
