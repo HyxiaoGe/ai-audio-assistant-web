@@ -25,7 +25,7 @@ logger = logging.getLogger("app.services.asr.aliyun")
 
 _TOKEN_DOMAIN = "nls-meta.cn-shanghai.aliyuncs.com"  # nosec B105
 _TOKEN_VERSION = "2019-02-28"  # nosec B105
-_GATEWAY_URL = "https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/asr"
+_GATEWAY_URL = "https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/FlashRecognizer"
 _SUPPORTED_FORMATS = {"wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "amr"}
 _TIMESTAMP_PATTERN = re.compile(r"\[(\d+):(\d+(?:\.\d+)?),(\d+):(\d+(?:\.\d+)?),(\d+)\]\s*(.*)")
 
@@ -158,26 +158,24 @@ class AliyunASRService(ASRService):
         return token, expires_at
 
     async def _submit_task(self, audio_url: str, token: str) -> dict:
-        payload = {
+        # Parameters should be in query string, not JSON body
+        params = {
             "appkey": self._app_key,
-            "token": token,
             "format": self._guess_format(audio_url),
             "sample_rate": 16000,
-            "enable_itn": True,
             "enable_punctuation_prediction": True,
             "enable_inverse_text_normalization": True,
-            "speech_file_url": audio_url,
+            "audio_address": audio_url,  # Use audio_address instead of speech_file_url
         }
 
         logger.info("Aliyun NLS ASR submitting: url=%s", audio_url)
 
         try:
             headers = {
-                "Authorization": f"Bearer {token}",
                 "X-NLS-Token": token,
             }
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(_GATEWAY_URL, json=payload, headers=headers)
+                response = await client.post(_GATEWAY_URL, params=params, headers=headers)
             if response.status_code >= 400:
                 reason = self._extract_http_error(response)
                 raise BusinessError(
