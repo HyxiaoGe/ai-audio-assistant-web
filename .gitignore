@@ -55,7 +55,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-docs/
+docs/*
+!docs/API_VISUAL_SUMMARY.md
 
 # Translations
 *.mo
