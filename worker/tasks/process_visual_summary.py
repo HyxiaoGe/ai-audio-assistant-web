@@ -73,7 +73,7 @@ def process_visual_summary(
                         start_time=t.start_time,
                         end_time=t.end_time,
                         content=t.content,
-                        speaker=t.speaker,
+                        speaker_id=t.speaker_id,
                         confidence=t.confidence,
                     )
                     for t in transcripts
