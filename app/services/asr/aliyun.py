@@ -97,10 +97,16 @@ class AliyunASRService(ASRService):
         token = await self._get_token()
         response = await self._submit_task(audio_url, token)
 
-        if status_callback:
-            await status_callback("asr_polling")
-
-        if response.get("task_id") and not response.get("result"):
+        # FlashRecognizer returns results in flash_result field (synchronous)
+        # Other APIs may use result field and require polling
+        if response.get("flash_result"):
+            # FlashRecognizer synchronous response - use directly
+            logger.info("Aliyun NLS task completed synchronously (FlashRecognizer)")
+        elif response.get("task_id") and not response.get("result"):
+            # Async API - need to poll for results
+            if status_callback:
+                await status_callback("asr_polling")
+            logger.info(f"Aliyun NLS task {response.get('task_id')} submitted, polling for results")
             response = await self._poll_task(response["task_id"], token)
 
         return await self._parse_result(response)
@@ -240,13 +246,11 @@ class AliyunASRService(ASRService):
     async def _query_task(self, task_id: str, token: str) -> dict:
         params = {
             "appkey": self._app_key,
-            "token": token,
             "task_id": task_id,
         }
 
         try:
             headers = {
-                "Authorization": f"Bearer {token}",
                 "X-NLS-Token": token,
             }
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -265,6 +269,28 @@ class AliyunASRService(ASRService):
         return data
 
     async def _parse_result(self, result: dict) -> list[TranscriptSegment]:
+        # Handle FlashRecognizer response format
+        if "flash_result" in result:
+            flash_result = result["flash_result"]
+            if isinstance(flash_result, dict) and "sentences" in flash_result:
+                sentences = flash_result["sentences"]
+                if not sentences:
+                    raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="Empty sentences in flash_result")
+
+                segments = []
+                for sentence in sentences:
+                    segments.append(
+                        TranscriptSegment(
+                            speaker_id=None,
+                            start_time=sentence.get("begin_time", 0) / 1000.0,  # Convert ms to seconds
+                            end_time=sentence.get("end_time", 0) / 1000.0,
+                            content=sentence.get("text", "").strip(),
+                            confidence=None,
+                        )
+                    )
+                return segments
+
+        # Handle standard result format (legacy/other APIs)
         text = result.get("result") if isinstance(result, dict) else None
         if isinstance(text, dict):
             text = text.get("text") or text.get("result")
