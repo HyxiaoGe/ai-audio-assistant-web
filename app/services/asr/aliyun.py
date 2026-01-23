@@ -39,7 +39,7 @@ _TIMESTAMP_PATTERN = re.compile(r"\[(\d+):(\d+(?:\.\d+)?),(\d+):(\d+(?:\.\d+)?),
         priority=15,
         description="阿里云 ASR 服务（智能语音交互 NLS 录音文件识别）",
         display_name="阿里云语音识别",
-        cost_per_million_tokens=1.0,  # 约 1.0 元/小时
+        cost_per_million_tokens=2.5,  # 标准版 ¥2.5/小时，极速版 ¥3.3/小时
         rate_limit=100,
     ),
 )
@@ -275,14 +275,17 @@ class AliyunASRService(ASRService):
             if isinstance(flash_result, dict) and "sentences" in flash_result:
                 sentences = flash_result["sentences"]
                 if not sentences:
-                    raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="Empty sentences in flash_result")
+                    raise BusinessError(
+                        ErrorCode.ASR_SERVICE_FAILED, reason="Empty sentences in flash_result"
+                    )
 
                 segments = []
                 for sentence in sentences:
                     segments.append(
                         TranscriptSegment(
                             speaker_id=None,
-                            start_time=sentence.get("begin_time", 0) / 1000.0,  # Convert ms to seconds
+                            start_time=sentence.get("begin_time", 0)
+                            / 1000.0,  # Convert ms to seconds
                             end_time=sentence.get("end_time", 0) / 1000.0,
                             content=sentence.get("text", "").strip(),
                             confidence=None,
@@ -390,7 +393,25 @@ class AliyunASRService(ASRService):
         except Exception:
             return False
 
-    def estimate_cost(self, duration_seconds: int) -> float:
-        price_per_hour = 1.0
+    def estimate_cost(self, duration_seconds: int, variant: str = "file") -> float:
+        """估算成本（人民币元）
+
+        阿里云智能语音交互定价（2025 年参考）：
+        - 录音文件识别（标准版）: ¥2.5/小时
+        - 录音文件识别（极速版）: ¥3.3/小时
+
+        Args:
+            duration_seconds: 音频时长（秒）
+            variant: 服务变体 (file=标准版, file_fast=极速版)
+
+        Returns:
+            估算成本（人民币元）
+        """
+        # 根据变体选择价格
+        if variant == "file_fast":
+            price_per_hour = 3.3  # 极速版
+        else:
+            price_per_hour = 2.5  # 标准版
+
         duration_hours = duration_seconds / 3600.0
         return duration_hours * price_per_hour

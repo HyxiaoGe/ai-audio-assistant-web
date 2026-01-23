@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.config import settings
 from app.core.config_manager import ConfigManager
@@ -26,6 +27,16 @@ celery_app.conf.task_serializer = "json"
 celery_app.conf.result_serializer = "json"
 celery_app.conf.accept_content = ["json"]
 celery_app.conf.timezone = "UTC"
+
+# Celery Beat 定时任务配置
+celery_app.conf.beat_schedule = {
+    # ASR 配额预警检查 - 每小时执行一次
+    "check-asr-quota-alerts": {
+        "task": "worker.tasks.quota_alert.check_asr_quota_alerts",
+        "schedule": crontab(minute=0),  # 每小时整点执行
+        "options": {"queue": "default"},
+    },
+}
 
 ConfigManager.configure_db(
     async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL
@@ -56,4 +67,5 @@ from worker.tasks import download_youtube  # noqa: F401, E402
 from worker.tasks import process_audio  # noqa: F401, E402
 from worker.tasks import process_visual_summary  # noqa: F401, E402
 from worker.tasks import process_youtube  # noqa: F401, E402
+from worker.tasks import quota_alert  # noqa: F401, E402
 from worker.tasks import regenerate_summary  # noqa: F401, E402

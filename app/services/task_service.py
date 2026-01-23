@@ -13,10 +13,12 @@ from yt_dlp import YoutubeDL
 
 from app.config import settings
 from app.core.exceptions import BusinessError
+from app.core.registry import ServiceRegistry
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
 from app.models.user import User
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem
+from app.services.asr_quota_service import check_any_provider_available
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +186,67 @@ class TaskService:
             )
 
     @staticmethod
+    async def _check_asr_quota_precheck(
+        db: AsyncSession, user: User, data: TaskCreateRequest
+    ) -> None:
+        """ASR 配额预检
+
+        在任务创建前检查是否有可用的 ASR 配额，避免创建注定失败的任务。
+
+        策略：
+        1. 如果用户指定了 asr_provider，检查该提供商配额
+        2. 否则检查是否有任意可用提供商
+        3. 配额耗尽时返回友好的错误信息
+        """
+        # 获取用户指定的 ASR 配置
+        options = data.options.model_dump() if data.options else {}
+        asr_provider = options.get("asr_provider")
+        asr_variant = options.get("asr_variant", "file")
+
+        all_providers = ServiceRegistry.list_services("asr")
+        if not all_providers:
+            # 没有配置任何 ASR 提供商，跳过检查
+            logger.warning("No ASR providers registered, skipping quota precheck")
+            return
+
+        if asr_provider:
+            # 用户指定了特定提供商，检查该提供商
+            if asr_provider not in all_providers:
+                raise BusinessError(
+                    ErrorCode.ASR_PROVIDER_NOT_AVAILABLE,
+                    provider=asr_provider,
+                )
+
+            # 检查指定提供商的配额
+            has_quota, _ = await check_any_provider_available(db, str(user.id), variant=asr_variant)
+            if not has_quota:
+                # 检查指定的提供商是否在可用列表中
+                from app.services.asr_quota_service import select_available_provider
+
+                available = await select_available_provider(
+                    db, [asr_provider], str(user.id), variant=asr_variant
+                )
+                if not available:
+                    raise BusinessError(
+                        ErrorCode.ASR_QUOTA_EXCEEDED,
+                        provider=asr_provider,
+                    )
+        else:
+            # 没有指定提供商，检查是否有任意可用提供商
+            has_quota, available_providers = await check_any_provider_available(
+                db, str(user.id), variant=asr_variant
+            )
+            if not has_quota:
+                raise BusinessError(
+                    ErrorCode.ALL_ASR_QUOTAS_EXCEEDED,
+                )
+
+            logger.debug(
+                "ASR quota precheck passed, available providers: %s",
+                available_providers,
+            )
+
+    @staticmethod
     async def create_task(
         db: AsyncSession, user: User, data: TaskCreateRequest, trace_id: Optional[str]
     ) -> Task:
@@ -263,6 +326,9 @@ class TaskService:
 
                 # 失败的任务，允许创建新任务（或者可以提示用户是否重试旧任务）
                 # 这里暂时允许创建，后续可以优化为提示用户
+
+        # ASR 配额预检：确保有可用的 ASR 提供商
+        await TaskService._check_asr_quota_precheck(db, user, data)
 
         task = Task(
             user_id=user.id,
