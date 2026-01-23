@@ -6,7 +6,7 @@
 3. 成本（单价）
 4. 配额余量（用户预算限制）
 
-Author: AI Audio Assistant Team
+注意：定价配置从数据库 asr_pricing_configs 表读取，不再硬编码。
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from typing import Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.core.asr_free_quota import FREE_QUOTA_CONFIGS
 from app.core.registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
@@ -51,24 +50,6 @@ class ASRScheduler:
         "health": 0.25,
         "cost": 0.20,
         "quota": 0.15,  # 用户预算限制
-    }
-
-    # 各提供商每小时成本（元）- 标准版
-    # 2025 年参考价格：
-    # - 腾讯云：标准版 ¥1.25/小时，极速版 ¥3.10/小时
-    # - 阿里云：标准版 ¥2.5/小时，极速版 ¥3.3/小时
-    # - 火山引擎：标准版 ¥0.8/小时，流式 ¥1.2/小时
-    COST_PER_HOUR = {
-        "tencent": 1.25,
-        "aliyun": 2.5,
-        "volcengine": 0.8,
-    }
-
-    # 极速版成本
-    COST_PER_HOUR_FAST = {
-        "tencent": 3.10,
-        "aliyun": 3.3,
-        "volcengine": 1.2,
     }
 
     # 最高成本上限（用于归一化）
@@ -152,13 +133,13 @@ class ASRScheduler:
             if health_score <= 0:
                 continue  # 跳过不健康的服务
 
-            # 免费额度得分（新增）
+            # 免费额度得分（从数据库读取）
             free_quota_score, remaining_free = await cls._get_free_quota_score(
                 session, provider, variant, user_id
             )
 
-            # 成本得分
-            cost_score = cls._get_cost_score(provider, variant)
+            # 成本得分（从数据库读取）
+            cost_score = await cls._get_cost_score(session, provider, variant)
 
             # 用户配额得分
             quota_score = await cls._get_quota_score(session, provider, user_id, variant)
@@ -234,7 +215,7 @@ class ASRScheduler:
             free_quota_score, remaining_free = await cls._get_free_quota_score(
                 session, provider, variant, user_id
             )
-            cost_score = cls._get_cost_score(provider, variant)
+            cost_score = await cls._get_cost_score(session, provider, variant)
             quota_score = await cls._get_quota_score(session, provider, user_id, variant)
 
             total_score = (
@@ -282,10 +263,11 @@ class ASRScheduler:
             score: 0-1，有免费额度返回 1.0，无则返回 0.0
         """
         from app.services.asr_free_quota_service import AsrFreeQuotaService
+        from app.services.asr_pricing_service import get_pricing_config
 
-        # 获取免费额度配置
-        config = FREE_QUOTA_CONFIGS.get((provider, variant))
-        if not config or config.free_seconds <= 0:
+        # 从数据库获取定价配置
+        config = await get_pricing_config(session, provider, variant)
+        if not config or config.free_quota_seconds <= 0:
             return 0.0, 0.0
 
         # 获取剩余免费额度
@@ -295,7 +277,7 @@ class ASRScheduler:
             )
             if remaining > 0:
                 # 有剩余免费额度，得分 = 剩余比例
-                score = remaining / config.free_seconds
+                score = remaining / config.free_quota_seconds
                 return score, remaining
             return 0.0, 0.0
         except Exception as e:
@@ -339,7 +321,7 @@ class ASRScheduler:
         """
         from sqlalchemy import or_, select
 
-        from app.models.asr_quota import AsrQuota
+        from app.models.asr_user_quota import AsrUserQuota
         from app.services.asr_quota_service import (
             _active_window_clause,
             _effective_quotas,
@@ -351,11 +333,13 @@ class ASRScheduler:
 
         result = await _execute(
             session,
-            select(AsrQuota)
-            .where(AsrQuota.provider == provider)
-            .where(AsrQuota.variant == variant)
+            select(AsrUserQuota)
+            .where(AsrUserQuota.provider == provider)
+            .where(AsrUserQuota.variant == variant)
             .where(_active_window_clause(now))
-            .where(or_(AsrQuota.owner_user_id.is_(None), AsrQuota.owner_user_id == user_id)),
+            .where(
+                or_(AsrUserQuota.owner_user_id.is_(None), AsrUserQuota.owner_user_id == user_id)
+            ),
         )
         rows = _extract_scalars(result)
 
@@ -380,19 +364,30 @@ class ASRScheduler:
         return remaining_ratio
 
     @classmethod
-    def _get_cost_score(cls, provider: str, variant: str = "file") -> float:
+    async def _get_cost_score(
+        cls,
+        session: Session | AsyncSession,
+        provider: str,
+        variant: str = "file",
+    ) -> float:
         """获取成本得分
 
         返回 0-1，成本越低得分越高
 
         Args:
+            session: 数据库会话
             provider: 提供商名称
             variant: 服务变体 (file=标准版, file_fast=极速版)
         """
-        if variant == "file_fast":
-            cost_per_hour = cls.COST_PER_HOUR_FAST.get(provider, 2.0)
+        from app.services.asr_pricing_service import get_pricing_config
+
+        # 从数据库获取定价配置
+        config = await get_pricing_config(session, provider, variant)
+        if not config:
+            # 未配置的提供商，使用默认成本
+            cost_per_hour = 2.0
         else:
-            cost_per_hour = cls.COST_PER_HOUR.get(provider, 1.0)
+            cost_per_hour = config.cost_per_hour
 
         # 归一化：成本越低得分越高
         score = max(0, 1.0 - (cost_per_hour / cls.MAX_COST_PER_HOUR))

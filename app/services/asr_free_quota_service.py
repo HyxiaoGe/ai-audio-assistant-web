@@ -4,6 +4,8 @@
 1. 查询剩余免费额度
 2. 消耗配额（自动区分免费/付费）
 3. 自动处理周期刷新
+
+注意：定价配置从数据库 asr_pricing_configs 表读取，不再硬编码。
 """
 
 from __future__ import annotations
@@ -17,13 +19,15 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.asr_free_quota import (
-    FREE_QUOTA_CONFIGS,
-    FreeQuotaConfig,
     get_current_period_bounds,
-    get_free_quota_config,
     get_period_type,
 )
+from app.models.asr_pricing_config import AsrPricingConfig
 from app.models.asr_usage_period import AsrUsagePeriod
+from app.services.asr_pricing_service import (
+    get_pricing_config,
+    get_pricing_configs_with_free_quota,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,17 +61,23 @@ class AsrFreeQuotaService:
     """ASR 免费额度服务"""
 
     @classmethod
-    def get_free_quota_config(cls, provider: str, variant: str) -> Optional[FreeQuotaConfig]:
-        """获取免费额度配置
+    async def get_pricing_config(
+        cls,
+        db: AsyncSession,
+        provider: str,
+        variant: str,
+    ) -> Optional[AsrPricingConfig]:
+        """获取定价配置
 
         Args:
+            db: 数据库会话
             provider: 服务商
             variant: 服务变体
 
         Returns:
-            免费额度配置，未找到返回 None
+            定价配置，未找到返回 None
         """
-        return get_free_quota_config(provider, variant)
+        return await get_pricing_config(db, provider, variant)
 
     @classmethod
     async def get_or_create_period(
@@ -93,7 +103,7 @@ class AsrFreeQuotaService:
             用量周期记录
         """
         now = now or datetime.now(timezone.utc)
-        config = get_free_quota_config(provider, variant)
+        config = await get_pricing_config(db, provider, variant)
 
         if not config:
             raise ValueError(f"Unknown provider/variant: {provider}/{variant}")
@@ -170,13 +180,13 @@ class AsrFreeQuotaService:
         Returns:
             剩余免费额度（秒），无免费额度则返回 0
         """
-        config = get_free_quota_config(provider, variant)
+        config = await get_pricing_config(db, provider, variant)
 
-        if not config or config.free_seconds <= 0:
+        if not config or config.free_quota_seconds <= 0:
             return 0
 
         period = await cls.get_or_create_period(db, provider, variant, user_id, now)
-        remaining = max(0, config.free_seconds - period.free_quota_used)
+        remaining = max(0, config.free_quota_seconds - period.free_quota_used)
 
         return remaining
 
@@ -201,21 +211,21 @@ class AsrFreeQuotaService:
         Returns:
             免费额度状态，无免费额度的服务返回 None
         """
-        config = get_free_quota_config(provider, variant)
+        config = await get_pricing_config(db, provider, variant)
 
-        if not config or config.free_seconds <= 0:
+        if not config or config.free_quota_seconds <= 0:
             return None
 
         period = await cls.get_or_create_period(db, provider, variant, user_id, now)
-        remaining = max(0, config.free_seconds - period.free_quota_used)
+        remaining = max(0, config.free_quota_seconds - period.free_quota_used)
 
         return FreeQuotaStatus(
             provider=provider,
             variant=variant,
-            free_quota_seconds=config.free_seconds,
+            free_quota_seconds=config.free_quota_seconds,
             used_seconds=period.free_quota_used,
             remaining_seconds=remaining,
-            reset_period=config.reset_period.value,
+            reset_period=config.reset_period,
             period_start=period.period_start,
             period_end=period.period_end,
             cost_per_hour=config.cost_per_hour,
@@ -240,11 +250,13 @@ class AsrFreeQuotaService:
         """
         statuses = []
 
-        for (provider, variant), config in FREE_QUOTA_CONFIGS.items():
-            if config.free_seconds > 0:
-                status = await cls.get_free_quota_status(db, provider, variant, user_id, now)
-                if status:
-                    statuses.append(status)
+        configs = await get_pricing_configs_with_free_quota(db)
+        for config in configs:
+            status = await cls.get_free_quota_status(
+                db, config.provider, config.variant, user_id, now
+            )
+            if status:
+                statuses.append(status)
 
         return statuses
 
@@ -277,7 +289,7 @@ class AsrFreeQuotaService:
             配额消耗结果
         """
         now = now or datetime.now(timezone.utc)
-        config = get_free_quota_config(provider, variant)
+        config = await get_pricing_config(db, provider, variant)
 
         if not config:
             raise ValueError(f"Unknown provider/variant: {provider}/{variant}")
@@ -285,7 +297,7 @@ class AsrFreeQuotaService:
         period = await cls.get_or_create_period(db, provider, variant, user_id, now)
 
         # 计算免费额度剩余量
-        remaining_free = max(0, config.free_seconds - period.free_quota_used)
+        remaining_free = max(0, config.free_quota_seconds - period.free_quota_used)
 
         # 分拆免费和付费
         free_consumed = min(duration_seconds, remaining_free)
@@ -341,7 +353,7 @@ class AsrFreeQuotaService:
         Returns:
             成本估算结果
         """
-        config = get_free_quota_config(provider, variant)
+        config = await get_pricing_config(db, provider, variant)
 
         if not config:
             return {

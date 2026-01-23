@@ -16,7 +16,7 @@ from typing import Optional
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.asr_quota import AsrQuota
+from app.models.asr_user_quota import AsrUserQuota
 from app.models.notification import Notification
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ class QuotaAlertInfo:
 
 
 def _active_window_clause(now: datetime) -> object:
-    return and_(AsrQuota.window_start <= now, AsrQuota.window_end >= now)
+    return and_(AsrUserQuota.window_start <= now, AsrUserQuota.window_end >= now)
 
 
 async def check_quota_alerts(
@@ -60,7 +60,7 @@ async def check_quota_alerts(
 
     # 查询所有活跃的配额
     result = await db.execute(
-        select(AsrQuota).where(_active_window_clause(now)).where(AsrQuota.quota_seconds > 0)
+        select(AsrUserQuota).where(_active_window_clause(now)).where(AsrUserQuota.quota_seconds > 0)
     )
     quotas = result.scalars().all()
 
