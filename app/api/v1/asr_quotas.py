@@ -88,6 +88,7 @@ async def refresh_asr_quota(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> JSONResponse:
+    _ensure_admin(user)
     quota_seconds = _resolve_quota_seconds(payload)
     row = await upsert_quota(
         db,
