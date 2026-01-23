@@ -45,6 +45,4 @@ class AsrPricingConfig(BaseRecord):
     )  # none, monthly, yearly
 
     # 状态
-    is_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("true")
-    )
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))

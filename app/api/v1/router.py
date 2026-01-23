@@ -1,8 +1,6 @@
-﻿from fastapi import APIRouter
+from fastapi import APIRouter
 
 from app.api.v1 import (
-    asr_free_quota,
-    asr_pricing,
     asr_quotas,
     asr_usage,
     auth,
@@ -22,8 +20,6 @@ from app.api.v1 import (
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
-api_router.include_router(asr_free_quota.router)
-api_router.include_router(asr_pricing.router)
 api_router.include_router(asr_quotas.router)
 api_router.include_router(asr_usage.router)
 api_router.include_router(config_center.router)
