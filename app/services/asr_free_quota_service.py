@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.asr_free_quota import (
     FREE_QUOTA_CONFIGS,
     FreeQuotaConfig,
+    QuotaResetPeriod,
     get_current_period_bounds,
     get_free_quota_config,
     get_period_type,
