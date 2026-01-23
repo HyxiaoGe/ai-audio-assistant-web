@@ -1,4 +1,6 @@
 from app.models.asr_quota import AsrQuota
+from app.models.asr_usage import ASRUsage
+from app.models.asr_usage_period import AsrUsagePeriod
 from app.models.llm_usage import LLMUsage
 from app.models.notification import Notification
 from app.models.rag_chunk import RagChunk  # noqa: F401
@@ -17,6 +19,8 @@ __all__ = [
     "Transcript",
     "Summary",
     "LLMUsage",
+    "ASRUsage",
+    "AsrUsagePeriod",
     "Notification",
     "AsrQuota",
     "ServiceConfig",

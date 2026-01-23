@@ -338,6 +338,55 @@ async def list_global_quotas(
     return result.scalars().all()
 
 
+async def check_any_provider_available(
+    session: Session | AsyncSession,
+    owner_user_id: Optional[str] = None,
+    variant: str = "file",
+    now: Optional[datetime] = None,
+) -> tuple[bool, list[str]]:
+    """检查是否有任意可用的 ASR 提供商
+
+    用于任务创建时的预检机制。
+
+    Args:
+        session: 数据库会话
+        owner_user_id: 用户 ID（可选）
+        variant: ASR 变体 (file, file_fast)
+        now: 当前时间
+
+    Returns:
+        (是否有可用提供商, 可用提供商列表)
+    """
+    from app.core.registry import ServiceRegistry
+
+    all_providers = ServiceRegistry.list_services("asr")
+    if not all_providers:
+        return False, []
+
+    available = await select_available_provider(
+        session, all_providers, owner_user_id, variant=variant, now=now
+    )
+
+    # 如果没有配额记录，则所有提供商都可用（无配额限制）
+    quota_providers = await get_quota_providers(
+        session, all_providers, owner_user_id, variant=variant, now=now
+    )
+
+    if not quota_providers:
+        # 没有配额记录，所有提供商都可用
+        return True, all_providers
+
+    if available:
+        return True, available
+
+    # 检查是否有未配置配额的提供商（这些提供商无限制）
+    unlimited_providers = [p for p in all_providers if p not in quota_providers]
+    if unlimited_providers:
+        return True, unlimited_providers
+
+    return False, []
+
+
 async def upsert_quota(
     db: AsyncSession,
     provider: str,

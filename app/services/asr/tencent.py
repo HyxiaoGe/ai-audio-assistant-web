@@ -38,6 +38,9 @@ logger = logging.getLogger("app.services.asr.tencent")
         service_type="asr",
         priority=10,
         description="腾讯云 ASR 服务",
+        display_name="腾讯云语音识别",
+        cost_per_million_tokens=1.25,  # 标准版 ¥1.25/小时，极速版 ¥3.10/小时
+        rate_limit=100,
     ),
 )
 class TencentASRService(ASRService):
@@ -706,26 +709,31 @@ class TencentASRService(ASRService):
         except Exception:
             return False
 
-    def estimate_cost(self, duration_seconds: int) -> float:
+    def estimate_cost(self, duration_seconds: int, variant: str = "file") -> float:
         """估算成本（人民币元）
 
-        腾讯云录音文件识别定价（2024 年参考）：
-        - 免费额度: 每月 30 小时
-        - 收费标准: ¥1.2/小时
+        腾讯云录音文件识别定价（2025 年参考）：
+        - 录音文件识别（标准版）: ¥1.25/小时
+        - 录音文件识别（极速版）: ¥3.10/小时
+
+        免费资源包（每月自动发放，当月有效）：
+        - 录音文件识别极速版: 5 小时/月
+        - 实时语音识别: 5 小时/月
+
+        注意：免费额度需通过配额管理系统单独配置，此处仅计算按量付费成本。
 
         Args:
             duration_seconds: 音频时长（秒）
+            variant: 服务变体 (file=标准版, file_fast=极速版)
 
         Returns:
             估算成本（人民币元）
         """
-        # 价格（元/小时）
-        price_per_hour = 1.2
+        # 根据变体选择价格
+        if variant == "file_fast":
+            price_per_hour = 3.10  # 极速版
+        else:
+            price_per_hour = 1.25  # 标准版
 
-        # 转换为小时
         duration_hours = duration_seconds / 3600.0
-
-        # 简化估算，不考虑免费额度
-        cost = duration_hours * price_per_hour
-
-        return cost
+        return duration_hours * price_per_hour

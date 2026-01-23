@@ -33,7 +33,7 @@ _SUPPORTED_FORMATS = {"raw", "wav", "mp3", "ogg"}
         priority=20,
         description="火山引擎 ASR 服务（豆包语音）",
         display_name="火山引擎语音识别",
-        cost_per_million_tokens=1.0,  # 估算值，后续可按官方定价调整
+        cost_per_million_tokens=0.8,  # 录音文件识别 ¥0.8/小时，流式识别 ¥1.2/小时
         rate_limit=100,
     ),
 )
@@ -292,7 +292,31 @@ class VolcengineASRService(ASRService):
         except Exception:
             return False
 
-    def estimate_cost(self, duration_seconds: int) -> float:
-        # 估算为 1 元/小时，后续可按官方定价调整
-        price_per_hour = 1.0
-        return (duration_seconds / 3600.0) * price_per_hour
+    def estimate_cost(self, duration_seconds: int, variant: str = "file") -> float:
+        """估算成本（人民币元）
+
+        火山引擎语音识别定价（2025 年参考）：
+        - 录音文件识别（标准版）: ¥0.8/小时
+        - 流式语音识别: ¥1.2/小时
+
+        试用额度（每年）：
+        - 录音文件识别标准版: 20 小时
+        - 流式语音识别: 20000 分钟
+
+        注意：免费额度需通过配额管理系统单独配置，此处仅计算按量付费成本。
+
+        Args:
+            duration_seconds: 音频时长（秒）
+            variant: 服务变体 (file=录音文件识别, file_fast=流式识别)
+
+        Returns:
+            估算成本（人民币元）
+        """
+        # 根据变体选择价格
+        if variant == "file_fast":
+            price_per_hour = 1.2  # 流式识别
+        else:
+            price_per_hour = 0.8  # 录音文件识别标准版
+
+        duration_hours = duration_seconds / 3600.0
+        return duration_hours * price_per_hour

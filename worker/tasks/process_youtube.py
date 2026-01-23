@@ -25,6 +25,7 @@ from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
 from app.core.task_stages import StageType
 from app.i18n.codes import ErrorCode
+from app.models.asr_usage import ASRUsage
 from app.models.llm_usage import LLMUsage
 from app.models.summary import Summary
 from app.models.task import Task
@@ -869,6 +870,8 @@ def _process_youtube(
                 )
                 last_error: Optional[BusinessError] = None
                 segments = []
+                asr_start_time = time.time()
+                successful_audio_url: Optional[str] = None
 
                 async def _asr_status(stage: str) -> None:
                     # ASR status callback (currently not used for progress updates)
@@ -899,6 +902,7 @@ def _process_youtube(
                             extra={"task_id": task_id, "segment_count": len(segments)},
                         )
                         last_error = None
+                        successful_audio_url = audio_url
                         break
                     except BusinessError as exc:
                         last_error = exc
@@ -956,6 +960,97 @@ def _process_youtube(
                     str(task.user_id),
                     variant=asr_variant,
                 )
+
+                # Record ASRUsage for detailed tracking with free quota split
+                asr_processing_time_ms = int((time.time() - asr_start_time) * 1000)
+
+                # 使用免费额度服务计算免费/付费分拆
+                free_quota_consumed = 0.0
+                paid_duration_seconds = float(duration_seconds)
+                actual_paid_cost = 0.0
+                estimated_cost = 0.0
+                provider_name = asr_service.provider or "unknown"
+
+                if provider_name and duration_seconds:
+                    try:
+                        from app.services.asr_free_quota_service import AsrFreeQuotaService
+
+                        # 消耗配额并获取分拆结果（同步包装）
+                        consumption = asyncio.run(
+                            AsrFreeQuotaService.consume_quota(
+                                session,
+                                provider_name,
+                                asr_variant,
+                                float(duration_seconds),
+                                user_id=None,  # 全局配额
+                            )
+                        )
+                        free_quota_consumed = consumption.free_consumed
+                        paid_duration_seconds = consumption.paid_consumed
+                        actual_paid_cost = consumption.cost
+
+                        # 估算成本（全价）
+                        if hasattr(asr_service, "estimate_cost"):
+                            estimated_cost = asr_service.estimate_cost(duration_seconds)
+
+                        logger.info(
+                            "Task %s: Free quota consumed: %.1fs, paid: %.1fs, cost: %.4f",
+                            task_id,
+                            free_quota_consumed,
+                            paid_duration_seconds,
+                            actual_paid_cost,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Task %s: Failed to consume free quota, using full cost: %s",
+                            task_id,
+                            e,
+                        )
+                        if hasattr(asr_service, "estimate_cost"):
+                            estimated_cost = asr_service.estimate_cost(duration_seconds)
+                        actual_paid_cost = estimated_cost
+
+                asr_usage = ASRUsage(
+                    user_id=str(task.user_id),
+                    task_id=str(task.id),
+                    provider=provider_name,
+                    variant=asr_variant,
+                    duration_seconds=float(duration_seconds),
+                    estimated_cost=estimated_cost,
+                    audio_url=successful_audio_url[:1000] if successful_audio_url else None,
+                    status="success",
+                    processing_time_ms=asr_processing_time_ms,
+                    request_params={
+                        "enable_speaker_diarization": diarization,
+                        "asr_variant": asr_variant,
+                    },
+                    # 免费额度分拆字段
+                    free_quota_consumed=free_quota_consumed,
+                    paid_duration_seconds=paid_duration_seconds,
+                    actual_paid_cost=actual_paid_cost,
+                )
+                session.add(asr_usage)
+                session.commit()
+                logger.info(
+                    "Task %s: ASRUsage recorded - provider=%s, duration=%ds, "
+                    "free=%.1fs, paid=%.1fs, cost=%.4f, time=%dms",
+                    task_id,
+                    provider_name,
+                    duration_seconds,
+                    free_quota_consumed,
+                    paid_duration_seconds,
+                    actual_paid_cost,
+                    asr_processing_time_ms,
+                    extra={
+                        "task_id": task_id,
+                        "asr_usage_id": str(asr_usage.id),
+                        "provider": provider_name,
+                        "duration_seconds": duration_seconds,
+                        "free_quota_consumed": free_quota_consumed,
+                        "paid_duration_seconds": paid_duration_seconds,
+                    },
+                )
+
                 try:
                     ingest_task_chunks_sync(session, task, transcripts, str(task.user_id))
                 except Exception as exc:

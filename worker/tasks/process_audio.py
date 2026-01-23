@@ -8,6 +8,7 @@ import random
 import re
 import subprocess  # nosec B404
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -25,6 +26,7 @@ from app.core.exceptions import BusinessError
 from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
+from app.models.asr_usage import ASRUsage
 from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp
@@ -600,6 +602,8 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             )
             last_error: Optional[BusinessError] = None
             segments: list[TranscriptSegment] = []
+            asr_start_time = time.time()
+            successful_audio_url: Optional[str] = None
 
             async def _asr_status(stage: str) -> None:
                 # This callback is called from within async context
@@ -636,6 +640,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                         extra={"task_id": task_id, "segment_count": len(segments)},
                     )
                     last_error = None
+                    successful_audio_url = audio_url
                     break
                 except BusinessError as exc:
                     last_error = exc
@@ -705,6 +710,93 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     str(task.user_id),
                     variant=asr_variant,
                 )
+
+            # Record ASRUsage for detailed tracking with free quota split
+            asr_processing_time_ms = int((time.time() - asr_start_time) * 1000)
+
+            # 使用免费额度服务计算免费/付费分拆
+            free_quota_consumed = 0.0
+            paid_duration_seconds = float(duration_seconds)
+            actual_paid_cost = 0.0
+            estimated_cost = 0.0
+
+            if provider_name and duration_seconds:
+                try:
+                    from app.services.asr_free_quota_service import AsrFreeQuotaService
+
+                    # 消耗配额并获取分拆结果
+                    consumption = await AsrFreeQuotaService.consume_quota(
+                        session,
+                        provider_name,
+                        asr_variant,
+                        float(duration_seconds),
+                        user_id=None,  # 全局配额
+                    )
+                    free_quota_consumed = consumption.free_consumed
+                    paid_duration_seconds = consumption.paid_consumed
+                    actual_paid_cost = consumption.cost
+
+                    # 估算成本（全价）
+                    if hasattr(asr_service, "estimate_cost"):
+                        estimated_cost = asr_service.estimate_cost(duration_seconds)
+
+                    logger.info(
+                        "Task %s: Free quota consumed: %.1fs, paid: %.1fs, cost: %.4f",
+                        task_id,
+                        free_quota_consumed,
+                        paid_duration_seconds,
+                        actual_paid_cost,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Task %s: Failed to consume free quota, using full cost: %s",
+                        task_id,
+                        e,
+                    )
+                    if hasattr(asr_service, "estimate_cost"):
+                        estimated_cost = asr_service.estimate_cost(duration_seconds)
+                    actual_paid_cost = estimated_cost
+
+            asr_usage = ASRUsage(
+                user_id=str(task.user_id),
+                task_id=str(task.id),
+                provider=provider_name or "unknown",
+                variant=asr_variant,
+                duration_seconds=float(duration_seconds),
+                estimated_cost=estimated_cost,
+                audio_url=successful_audio_url[:1000] if successful_audio_url else None,
+                status="success",
+                processing_time_ms=asr_processing_time_ms,
+                request_params={
+                    "enable_speaker_diarization": diarization,
+                    "asr_variant": asr_variant,
+                },
+                # 免费额度分拆字段
+                free_quota_consumed=free_quota_consumed,
+                paid_duration_seconds=paid_duration_seconds,
+                actual_paid_cost=actual_paid_cost,
+            )
+            _add_record(session, asr_usage)
+            await _commit(session)
+            logger.info(
+                "Task %s: ASRUsage recorded - provider=%s, duration=%ds, "
+                "free=%.1fs, paid=%.1fs, cost=%.4f, time=%dms",
+                task_id,
+                provider_name,
+                duration_seconds,
+                free_quota_consumed,
+                paid_duration_seconds,
+                actual_paid_cost,
+                asr_processing_time_ms,
+                extra={
+                    "task_id": task_id,
+                    "asr_usage_id": str(asr_usage.id),
+                    "provider": provider_name,
+                    "duration_seconds": duration_seconds,
+                    "free_quota_consumed": free_quota_consumed,
+                    "paid_duration_seconds": paid_duration_seconds,
+                },
+            )
 
             try:
                 await ingest_task_chunks_async(session, task, transcripts, str(task.user_id))
