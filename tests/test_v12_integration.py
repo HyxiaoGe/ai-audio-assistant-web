@@ -3,6 +3,7 @@
 V1.2版本集成测试
 验证质量感知摘要生成功能
 """
+
 import asyncio
 import sys
 from pathlib import Path
