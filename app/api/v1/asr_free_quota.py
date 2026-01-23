@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
-from app.core.asr_free_quota import FREE_QUOTA_CONFIGS
 from app.core.asr_scheduler import ASRScheduler
 from app.core.response import success
 from app.schemas.asr_free_quota import (
@@ -22,6 +21,7 @@ from app.schemas.asr_free_quota import (
     ProviderScoresResponse,
 )
 from app.services.asr_free_quota_service import AsrFreeQuotaService
+from app.services.asr_pricing_service import get_all_pricing_configs
 
 router = APIRouter(prefix="/asr/free-quota", tags=["ASR Free Quota"])
 
@@ -95,18 +95,21 @@ async def estimate_cost(
     best_cost = float("inf")
     best_has_free = False
 
-    for (provider, variant), config in FREE_QUOTA_CONFIGS.items():
-        if variant != request.variant:
+    # 从数据库获取所有定价配置
+    configs = await get_all_pricing_configs(db, enabled_only=True)
+
+    for config in configs:
+        if config.variant != request.variant:
             continue
 
         estimate = await AsrFreeQuotaService.estimate_cost(
-            db, provider, variant, request.duration_seconds
+            db, config.provider, config.variant, request.duration_seconds
         )
 
         estimates.append(
             ProviderCostEstimate(
-                provider=provider,
-                variant=variant,
+                provider=config.provider,
+                variant=config.variant,
                 total_duration=estimate["total_duration"],
                 free_consumed=estimate["free_consumed"],
                 paid_duration=estimate["paid_duration"],
@@ -123,12 +126,12 @@ async def estimate_cost(
 
         if has_free and not best_has_free:
             # 有免费额度的优先
-            best_provider = provider
+            best_provider = config.provider
             best_cost = estimated_cost
             best_has_free = True
         elif has_free == best_has_free and estimated_cost < best_cost:
             # 相同情况下选成本低的
-            best_provider = provider
+            best_provider = config.provider
             best_cost = estimated_cost
             best_has_free = has_free
 
