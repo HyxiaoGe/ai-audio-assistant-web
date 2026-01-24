@@ -147,25 +147,30 @@ class ASRScheduler:
         else:
             providers = all_providers
 
-        # 1. 获取有配额的提供商（用户预算限制）
+        # 1. 获取有用户配额的提供商（用户预算限制）
         available = await select_available_provider(session, providers, user_id, variant=variant)
-
-        # 如果没有配额记录，所有提供商都可用
         quota_providers = await get_quota_providers(session, providers, user_id, variant=variant)
 
+        # 2. 检查哪些提供商有平台免费额度剩余
+        #    平台免费额度不受用户配额限制，应该优先使用
+        providers_with_free_quota: List[str] = []
+        for provider in providers:
+            _, remaining_free = await cls._get_free_quota_score(session, provider, variant, user_id)
+            if remaining_free > 0:
+                providers_with_free_quota.append(provider)
+
+        # 3. 合并可用列表：有用户配额的 + 有平台免费额度的
         if not quota_providers:
             # 没有配额限制，所有提供商都可用
             available = providers
-        elif not available:
-            # 有配额限制但都用完了，检查是否有未配置配额的提供商
+        else:
+            # 有配额限制，合并：有剩余配额的 + 有平台免费额度的 + 未配置配额的
             unlimited = [p for p in providers if p not in quota_providers]
-            if unlimited:
-                available = unlimited
-            else:
-                logger.warning("No ASR providers available due to quota exhaustion")
-                return None
+            available_set = set(available or []) | set(providers_with_free_quota) | set(unlimited)
+            available = list(available_set)
 
         if not available:
+            logger.warning("No ASR providers available")
             return None
 
         # 2. 计算每个提供商的得分
