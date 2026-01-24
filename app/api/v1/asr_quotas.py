@@ -172,13 +172,13 @@ async def get_admin_overview(
             display_name=p.display_name,
             free_quota_hours=round(p.free_quota_seconds / 3600, 2),
             used_hours=round(p.used_seconds / 3600, 2),
-            remaining_hours=round(
-                max(0, p.free_quota_seconds - p.used_seconds) / 3600, 2
-            ),
+            remaining_hours=round(max(0, p.free_quota_seconds - p.used_seconds) / 3600, 2),
             usage_percent=round(
-                min(100, p.used_seconds / p.free_quota_seconds * 100)
-                if p.free_quota_seconds > 0
-                else 0,
+                (
+                    min(100, p.used_seconds / p.free_quota_seconds * 100)
+                    if p.free_quota_seconds > 0
+                    else 0
+                ),
                 1,
             ),
             reset_period=p.reset_period,

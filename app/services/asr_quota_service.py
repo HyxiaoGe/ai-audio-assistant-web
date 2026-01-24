@@ -641,16 +641,12 @@ async def get_admin_asr_overview(
 
     # 1. 获取所有定价配置
     result = await db.execute(
-        select(AsrPricingConfig).order_by(
-            AsrPricingConfig.provider, AsrPricingConfig.variant
-        )
+        select(AsrPricingConfig).order_by(AsrPricingConfig.provider, AsrPricingConfig.variant)
     )
     configs = result.scalars().all()
 
     # 2. 获取全局用量周期数据（owner_user_id IS NULL）
-    result = await db.execute(
-        select(AsrUsagePeriod).where(AsrUsagePeriod.owner_user_id.is_(None))
-    )
+    result = await db.execute(select(AsrUsagePeriod).where(AsrUsagePeriod.owner_user_id.is_(None)))
     periods = result.scalars().all()
 
     # 按 (provider, variant) 索引，取最新的周期
@@ -687,17 +683,13 @@ async def get_admin_asr_overview(
 
         # 判断是否有免费额度配置
         has_free_quota = (
-            config.free_quota_seconds > 0
-            and config.reset_period
-            and config.reset_period != "none"
+            config.free_quota_seconds > 0 and config.reset_period and config.reset_period != "none"
         )
 
         # 免费额度状态（只有配置了免费额度的才显示）
         if has_free_quota:
             try:
-                period_start, period_end = get_current_period_bounds(
-                    config.reset_period, now
-                )
+                period_start, period_end = get_current_period_bounds(config.reset_period, now)
             except Exception:
                 period_start = now
                 period_end = now

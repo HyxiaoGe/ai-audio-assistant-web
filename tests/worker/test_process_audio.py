@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import pytest
-
-from dataclasses import dataclass
-from typing import Any
 
 from app.config import settings
 from app.core.exceptions import BusinessError
