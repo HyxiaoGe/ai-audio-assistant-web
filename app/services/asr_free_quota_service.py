@@ -10,13 +10,15 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Awaitable, Optional, Union
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.core.asr_free_quota import (
     get_current_period_bounds,
@@ -30,6 +32,13 @@ from app.services.asr_pricing_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _maybe_await(result: Union[Awaitable[Any], Any]) -> Any:
+    """兼容同步和异步操作的辅助函数"""
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 @dataclass
@@ -82,7 +91,7 @@ class AsrFreeQuotaService:
     @classmethod
     async def get_or_create_period(
         cls,
-        db: AsyncSession,
+        db: Union[AsyncSession, Session],
         provider: str,
         variant: str,
         user_id: Optional[str] = None,
@@ -91,9 +100,10 @@ class AsrFreeQuotaService:
         """获取或创建当前周期的用量记录
 
         如果当前周期不存在记录，会自动创建一条新记录。
+        支持同步和异步 session，以便在 worker 中使用。
 
         Args:
-            db: 数据库会话
+            db: 数据库会话（同步或异步）
             provider: 服务商
             variant: 服务变体
             user_id: 用户ID（NULL 表示全局）
@@ -112,14 +122,16 @@ class AsrFreeQuotaService:
         period_start, period_end = get_current_period_bounds(config.reset_period, now)
 
         # 查询是否存在当前周期的记录
-        result = await db.execute(
-            select(AsrUsagePeriod).where(
-                and_(
-                    AsrUsagePeriod.owner_user_id == user_id,
-                    AsrUsagePeriod.provider == provider,
-                    AsrUsagePeriod.variant == variant,
-                    AsrUsagePeriod.period_type == period_type,
-                    AsrUsagePeriod.period_start == period_start,
+        result = await _maybe_await(
+            db.execute(
+                select(AsrUsagePeriod).where(
+                    and_(
+                        AsrUsagePeriod.owner_user_id == user_id,
+                        AsrUsagePeriod.provider == provider,
+                        AsrUsagePeriod.variant == variant,
+                        AsrUsagePeriod.period_type == period_type,
+                        AsrUsagePeriod.period_start == period_start,
+                    )
                 )
             )
         )
@@ -142,7 +154,7 @@ class AsrFreeQuotaService:
             total_cost=0,
         )
         db.add(period)
-        await db.flush()
+        await _maybe_await(db.flush())
 
         logger.info(
             "Created new usage period: provider=%s, variant=%s, period=%s, start=%s",
@@ -263,7 +275,7 @@ class AsrFreeQuotaService:
     @classmethod
     async def consume_quota(
         cls,
-        db: AsyncSession,
+        db: Union[AsyncSession, Session],
         provider: str,
         variant: str,
         duration_seconds: float,
@@ -277,8 +289,10 @@ class AsrFreeQuotaService:
         2. 免费额度用完后计入付费用量
         3. 更新周期统计
 
+        支持同步和异步 session，以便在 worker 中使用。
+
         Args:
-            db: 数据库会话
+            db: 数据库会话（同步或异步）
             provider: 服务商
             variant: 服务变体
             duration_seconds: 消耗时长（秒）
@@ -310,7 +324,7 @@ class AsrFreeQuotaService:
         period.paid_seconds += paid_consumed
         period.total_cost += cost
 
-        await db.flush()
+        await _maybe_await(db.flush())
 
         logger.info(
             "Quota consumed: provider=%s, variant=%s, duration=%.1fs, "

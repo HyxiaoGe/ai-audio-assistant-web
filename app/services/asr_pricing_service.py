@@ -7,36 +7,49 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
-from typing import Optional
+from typing import Any, Awaitable, Optional, Union
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.models.asr_pricing_config import AsrPricingConfig
 
 logger = logging.getLogger(__name__)
 
 
+async def _maybe_await(result: Union[Awaitable[Any], Any]) -> Any:
+    """兼容同步和异步操作的辅助函数"""
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
 async def get_pricing_config(
-    db: AsyncSession,
+    db: Union[AsyncSession, Session],
     provider: str,
     variant: str,
 ) -> Optional[AsrPricingConfig]:
     """获取指定平台和变体的定价配置
 
+    支持同步和异步 session，以便在 worker 中使用。
+
     Args:
-        db: 数据库会话
+        db: 数据库会话（同步或异步）
         provider: 服务商 (tencent, aliyun, volcengine)
         variant: 服务变体 (file, file_fast)
 
     Returns:
         定价配置，未找到返回 None
     """
-    result = await db.execute(
-        select(AsrPricingConfig)
-        .where(AsrPricingConfig.provider == provider)
-        .where(AsrPricingConfig.variant == variant)
+    result = await _maybe_await(
+        db.execute(
+            select(AsrPricingConfig)
+            .where(AsrPricingConfig.provider == provider)
+            .where(AsrPricingConfig.variant == variant)
+        )
     )
     return result.scalar_one_or_none()
 
