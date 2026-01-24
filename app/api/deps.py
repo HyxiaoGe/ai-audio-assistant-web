@@ -41,6 +41,12 @@ def _get_admin_emails() -> set[str]:
     return emails
 
 
+def is_admin_user(user: User) -> bool:
+    """检查用户是否为管理员"""
+    admins = _get_admin_emails()
+    return user.email.lower() in admins if admins else False
+
+
 async def get_admin_user(user: User = Depends(get_current_user)) -> User:
     admins = _get_admin_emails()
     if not admins:

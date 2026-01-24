@@ -7,7 +7,10 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context  # type: ignore[attr-defined]
 from app.config import settings
-from app.models import asr_quota as _asr_quota  # noqa: F401
+from app.models import asr_pricing_config as _asr_pricing_config  # noqa: F401
+from app.models import asr_usage as _asr_usage  # noqa: F401
+from app.models import asr_usage_period as _asr_usage_period  # noqa: F401
+from app.models import asr_user_quota as _asr_user_quota  # noqa: F401
 from app.models import service_config as _service_config  # noqa: F401
 from app.models import service_config_history as _service_config_history  # noqa: F401
 from app.models import summary as _summary  # noqa: F401

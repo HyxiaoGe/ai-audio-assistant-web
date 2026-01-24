@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from yt_dlp import YoutubeDL
 
+from app.api.deps import is_admin_user
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.registry import ServiceRegistry
@@ -194,10 +195,16 @@ class TaskService:
         在任务创建前检查是否有可用的 ASR 配额，避免创建注定失败的任务。
 
         策略：
-        1. 如果用户指定了 asr_provider，检查该提供商配额
-        2. 否则检查是否有任意可用提供商
-        3. 配额耗尽时返回友好的错误信息
+        1. 管理员用户跳过配额检查
+        2. 如果用户指定了 asr_provider，检查该提供商配额
+        3. 否则检查是否有任意可用提供商
+        4. 配额耗尽时返回友好的错误信息
         """
+        # 管理员不受配额限制
+        if is_admin_user(user):
+            logger.debug("Admin user %s skipping ASR quota precheck", user.email)
+            return
+
         # 获取用户指定的 ASR 配置
         options = data.options.model_dump() if data.options else {}
         asr_provider = options.get("asr_provider")

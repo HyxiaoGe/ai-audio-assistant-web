@@ -21,6 +21,18 @@ class AsrQuotaListResponse(BaseModel):
     items: list[AsrQuotaItem] = Field(default_factory=list)
 
 
+class AsrUserFreeQuotaResponse(BaseModel):
+    """用户免费额度响应"""
+
+    free_quota_seconds: float      # 总免费额度（秒），-1 表示无限制
+    free_quota_hours: float        # 总免费额度（小时），-1 表示无限制
+    used_seconds: float            # 已消耗（秒）
+    used_hours: float              # 已消耗（小时）
+    remaining_seconds: float       # 剩余免费额度（秒），-1 表示无限制
+    remaining_hours: float         # 剩余免费额度（小时），-1 表示无限制
+    is_unlimited: bool = False     # 是否不受配额限制（管理员）
+
+
 class AsrQuotaUpsertRequest(BaseModel):
     provider: str = Field(min_length=1)
     variant: str = Field(default="file", min_length=1)
@@ -50,3 +62,49 @@ class AsrQuotaUpsertRequest(BaseModel):
 
 class AsrQuotaUpsertResponse(BaseModel):
     item: AsrQuotaItem | None
+
+
+# ============ 管理员概览 ============
+
+class AsrFreeQuotaStatus(BaseModel):
+    """免费额度状态（只关心免费额度本身）"""
+
+    provider: str
+    variant: str
+    display_name: str                 # 显示名称，如"腾讯云 录音文件"
+    free_quota_hours: float           # 免费额度（小时）
+    used_hours: float                 # 已使用（小时）
+    remaining_hours: float            # 剩余（小时）
+    usage_percent: float              # 使用百分比 0-100
+    reset_period: str                 # monthly/yearly
+    period_start: datetime            # 当前周期开始
+    period_end: datetime              # 当前周期结束
+
+
+class AsrProviderUsage(BaseModel):
+    """提供商付费使用统计（所有提供商）"""
+
+    provider: str
+    variant: str
+    display_name: str                 # 显示名称
+    cost_per_hour: float              # 单价（元/小时）
+    paid_hours: float                 # 付费时长（小时）
+    paid_cost: float                  # 付费金额（元）
+    is_enabled: bool                  # 是否启用
+
+
+class AsrUsageSummary(BaseModel):
+    """ASR 使用量汇总"""
+
+    total_used_hours: float           # 总使用量（小时）
+    total_free_hours: float           # 免费额度消耗（小时）
+    total_paid_hours: float           # 付费时长（小时）
+    total_cost: float                 # 总成本（元）
+
+
+class AsrAdminOverviewResponse(BaseModel):
+    """管理员 ASR 概览响应"""
+
+    summary: AsrUsageSummary
+    free_quota_status: list[AsrFreeQuotaStatus]   # 免费额度状态
+    providers_usage: list[AsrProviderUsage]       # 所有提供商的付费使用统计

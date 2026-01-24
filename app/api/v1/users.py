@@ -21,6 +21,13 @@ from app.services.user_preferences import get_user_preferences, update_user_pref
 router = APIRouter(prefix="/users")
 
 
+def _check_is_admin(email: str) -> bool:
+    """Check if the email is in the admin list."""
+    raw = settings.ADMIN_EMAILS or ""
+    admin_emails = {item.strip().lower() for item in raw.split(",") if item.strip()}
+    return email.lower() in admin_emails
+
+
 @router.get("/me")
 async def get_me(user=Depends(get_current_user)) -> JSONResponse:
     response = UserProfileResponse(
@@ -28,6 +35,7 @@ async def get_me(user=Depends(get_current_user)) -> JSONResponse:
         email=user.email,
         name=user.name,
         avatar_url="/api/v1/users/me/avatar",
+        is_admin=_check_is_admin(user.email),
     )
     return success(data=response.model_dump())
 

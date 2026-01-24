@@ -4,6 +4,9 @@ from typing import Optional
 
 import pytest
 
+from dataclasses import dataclass
+from typing import Any
+
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
@@ -12,6 +15,26 @@ from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import TranscriptSegment
 from worker.tasks import process_audio
+
+
+@dataclass
+class _FakeQuotaConsumptionResult:
+    """Fake quota consumption result"""
+
+    free_consumed: float = 0.0
+    paid_consumed: float = 0.0
+    cost: float = 0.0
+    remaining_free: float = 0.0
+
+
+async def _fake_consume_quota(*args: Any, **kwargs: Any) -> _FakeQuotaConsumptionResult:
+    """Fake consume_quota that returns a valid result"""
+    return _FakeQuotaConsumptionResult()
+
+
+async def _fake_ingest_task_chunks(*args: Any, **kwargs: Any) -> None:
+    """Fake RAG ingest that does nothing"""
+    return None
 
 
 class _FakeResult:
@@ -35,12 +58,18 @@ class _FakeSession:
     async def execute(self, query: object) -> _FakeResult:
         return _FakeResult(self.task)
 
+    def add(self, item: object) -> None:
+        if isinstance(item, Transcript):
+            self.transcripts.append(item)
+        elif isinstance(item, Summary):
+            self.summaries.append(item)
+
     def add_all(self, items: list[object]) -> None:
         for item in items:
-            if isinstance(item, Transcript):
-                self.transcripts.append(item)
-            elif isinstance(item, Summary):
-                self.summaries.append(item)
+            self.add(item)
+
+    async def flush(self) -> None:
+        return None
 
     async def commit(self) -> None:
         return None
@@ -109,6 +138,46 @@ def _build_task(source_type: str, source_url: Optional[str], source_key: Optiona
     )
 
 
+async def _fake_generate_summaries(
+    task_id: str,
+    segments: list[TranscriptSegment],
+    content_style: str,
+    session: Any,
+    user_id: str,
+    provider: str | None = None,
+    model_id: str | None = None,
+) -> tuple[list[Summary], dict[str, Any]]:
+    """Fake summary generator"""
+    summaries = [
+        Summary(
+            task_id=task_id,
+            summary_type="overview",
+            content="overview summary",
+            model_used="test-model",
+        ),
+        Summary(
+            task_id=task_id,
+            summary_type="keypoints",
+            content="keypoints summary",
+            model_used="test-model",
+        ),
+        Summary(
+            task_id=task_id,
+            summary_type="action_items",
+            content="action items summary",
+            model_used="test-model",
+        ),
+    ]
+    metadata = {
+        "quality_score": "high",
+        "avg_confidence": 0.95,
+        "llm_provider": "test-provider",
+        "llm_model": "test-model",
+        "summaries_generated": 3,
+    }
+    return summaries, metadata
+
+
 @pytest.mark.asyncio
 async def test_process_audio_success_upload(monkeypatch: pytest.MonkeyPatch) -> None:
     settings.UPLOAD_PRESIGN_EXPIRES = 60
@@ -135,13 +204,28 @@ async def test_process_audio_success_upload(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(
+        process_audio,
+        "generate_summaries_with_quality_awareness",
+        _fake_generate_summaries,
+    )
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+
+    # Mock AsrFreeQuotaService.consume_quota
+    from app.services import asr_free_quota_service
+
+    monkeypatch.setattr(
+        asr_free_quota_service.AsrFreeQuotaService,
+        "consume_quota",
+        _fake_consume_quota,
+    )
 
     await process_audio._process_task(task.id, "req-1")
 
     assert task.status == "completed"
     assert len(session.transcripts) == 1
     assert len(session.summaries) == 3
-    assert session.summaries[0].model_used == llm.model_name
+    assert session.summaries[0].model_used == "test-model"
     assert storage.calls == [("audio/test.wav", 60)]
 
 
@@ -170,6 +254,21 @@ async def test_process_audio_success_youtube(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(
+        process_audio,
+        "generate_summaries_with_quality_awareness",
+        _fake_generate_summaries,
+    )
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+
+    # Mock AsrFreeQuotaService.consume_quota
+    from app.services import asr_free_quota_service
+
+    monkeypatch.setattr(
+        asr_free_quota_service.AsrFreeQuotaService,
+        "consume_quota",
+        _fake_consume_quota,
+    )
 
     await process_audio._process_task(task.id, None)
 
@@ -201,6 +300,11 @@ async def test_process_audio_asr_failed(monkeypatch: pytest.MonkeyPatch) -> None
     assert task.error_code == ErrorCode.ASR_SERVICE_FAILED.value
 
 
+async def _fake_generate_summaries_error(*args: Any, **kwargs: Any) -> None:
+    """Fake summary generator that raises an error"""
+    raise BusinessError(ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE)
+
+
 @pytest.mark.asyncio
 async def test_process_audio_llm_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     task = _build_task("upload", None, "audio/test.wav")
@@ -216,8 +320,7 @@ async def test_process_audio_llm_failed(monkeypatch: pytest.MonkeyPatch) -> None
             )
         ]
     )
-    error = BusinessError(ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE)
-    llm = _FakeLLMService(error=error)
+    llm = _FakeLLMService()
     storage = _FakeStorageService()
     settings.UPLOAD_PRESIGN_EXPIRES = 60
 
@@ -228,11 +331,27 @@ async def test_process_audio_llm_failed(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(
+        process_audio,
+        "generate_summaries_with_quality_awareness",
+        _fake_generate_summaries_error,
+    )
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+
+    # Mock AsrFreeQuotaService.consume_quota
+    from app.services import asr_free_quota_service
+
+    monkeypatch.setattr(
+        asr_free_quota_service.AsrFreeQuotaService,
+        "consume_quota",
+        _fake_consume_quota,
+    )
 
     await process_audio._process_task(task.id, None)
 
     assert task.status == "failed"
-    assert task.error_code == ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE.value
+    # process_audio wraps summary errors as AI_SUMMARY_GENERATION_FAILED
+    assert task.error_code == ErrorCode.AI_SUMMARY_GENERATION_FAILED.value
     assert len(session.transcripts) == 1
 
 

@@ -5,10 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from app.models.asr_pricing_config import AsrPricingConfig
+from app.models.asr_usage import ASRUsage
+from app.models.asr_usage_period import AsrUsagePeriod
 from app.models.asr_user_quota import AsrUserQuota
 
 
@@ -478,3 +481,262 @@ async def upsert_quota(
     await db.commit()
     await db.refresh(new_row)
     return new_row
+
+
+@dataclass
+class UsageSummaryByVariant:
+    """按 variant 汇总的使用量"""
+
+    variant: str
+    used_seconds: float
+    estimated_cost: float
+
+
+# 已知的 ASR variant 类型
+KNOWN_VARIANTS = ["file", "file_fast"]
+
+
+async def get_user_usage_summary(
+    db: AsyncSession,
+    user_id: str,
+) -> list[UsageSummaryByVariant]:
+    """获取用户的 ASR 使用量汇总（按 variant 聚合所有平台）
+
+    Args:
+        db: 数据库会话
+        user_id: 用户 ID
+
+    Returns:
+        按 variant 汇总的使用量列表，包含所有已知 variant（即使消耗为 0）
+    """
+    result = await db.execute(
+        select(
+            ASRUsage.variant,
+            func.sum(ASRUsage.duration_seconds).label("total_seconds"),
+            func.sum(ASRUsage.estimated_cost).label("total_cost"),
+        )
+        .where(ASRUsage.user_id == user_id)
+        .where(ASRUsage.status == "success")
+        .group_by(ASRUsage.variant)
+    )
+
+    rows = result.all()
+    usage_map = {
+        row.variant: UsageSummaryByVariant(
+            variant=row.variant,
+            used_seconds=float(row.total_seconds or 0),
+            estimated_cost=float(row.total_cost or 0),
+        )
+        for row in rows
+    }
+
+    # 返回所有已知 variant，未使用的显示为 0
+    return [
+        usage_map.get(
+            variant,
+            UsageSummaryByVariant(variant=variant, used_seconds=0, estimated_cost=0),
+        )
+        for variant in KNOWN_VARIANTS
+    ]
+
+
+async def get_user_total_usage(
+    db: AsyncSession,
+    user_id: str,
+) -> float:
+    """获取用户的 ASR 总消耗（所有 variant 合计）
+
+    Args:
+        db: 数据库会话
+        user_id: 用户 ID
+
+    Returns:
+        总消耗秒数
+    """
+    result = await db.execute(
+        select(func.sum(ASRUsage.duration_seconds).label("total_seconds"))
+        .where(ASRUsage.user_id == user_id)
+        .where(ASRUsage.status == "success")
+    )
+    row = result.one_or_none()
+    return float(row.total_seconds or 0) if row else 0
+
+
+# 提供商显示名称映射
+PROVIDER_DISPLAY_NAMES = {
+    "tencent": "腾讯云",
+    "aliyun": "阿里云",
+    "volcengine": "火山引擎",
+}
+
+VARIANT_DISPLAY_NAMES = {
+    "file": "录音文件",
+    "file_fast": "录音文件(极速)",
+}
+
+
+def _get_display_name(provider: str, variant: str) -> str:
+    """生成提供商显示名称"""
+    provider_name = PROVIDER_DISPLAY_NAMES.get(provider, provider)
+    variant_name = VARIANT_DISPLAY_NAMES.get(variant, variant)
+    return f"{provider_name} {variant_name}"
+
+
+@dataclass
+class FreeQuotaStatusData:
+    """免费额度状态数据"""
+
+    provider: str
+    variant: str
+    display_name: str
+    free_quota_seconds: float
+    used_seconds: float
+    reset_period: str
+    period_start: datetime
+    period_end: datetime
+
+
+@dataclass
+class ProviderUsageData:
+    """提供商付费使用数据"""
+
+    provider: str
+    variant: str
+    display_name: str
+    cost_per_hour: float
+    paid_seconds: float
+    paid_cost: float
+    is_enabled: bool
+
+
+@dataclass
+class AdminOverviewResult:
+    """管理员概览结果"""
+
+    free_quota_status: list[FreeQuotaStatusData]
+    providers_usage: list[ProviderUsageData]
+    summary: dict
+
+
+async def get_admin_asr_overview(
+    db: AsyncSession,
+    now: Optional[datetime] = None,
+) -> AdminOverviewResult:
+    """获取管理员 ASR 概览数据
+
+    分离两个关注点：
+    1. free_quota_status - 免费额度状态（只关心有免费额度的提供商的额度使用情况）
+    2. providers_usage - 所有提供商的付费使用统计
+
+    Args:
+        db: 数据库会话
+        now: 当前时间
+
+    Returns:
+        AdminOverviewResult
+    """
+    from app.core.asr_free_quota import get_current_period_bounds
+
+    now = now or datetime.now(timezone.utc)
+
+    # 1. 获取所有定价配置
+    result = await db.execute(
+        select(AsrPricingConfig).order_by(
+            AsrPricingConfig.provider, AsrPricingConfig.variant
+        )
+    )
+    configs = result.scalars().all()
+
+    # 2. 获取全局用量周期数据（owner_user_id IS NULL）
+    result = await db.execute(
+        select(AsrUsagePeriod).where(AsrUsagePeriod.owner_user_id.is_(None))
+    )
+    periods = result.scalars().all()
+
+    # 按 (provider, variant) 索引，取最新的周期
+    period_map: dict[tuple[str, str], AsrUsagePeriod] = {}
+    for period in periods:
+        key = (period.provider, period.variant)
+        if key not in period_map or period.period_start > period_map[key].period_start:
+            period_map[key] = period
+
+    # 3. 构建数据
+    free_quota_status: list[FreeQuotaStatusData] = []
+    providers_usage: list[ProviderUsageData] = []
+
+    total_used = 0.0
+    total_free = 0.0
+    total_paid = 0.0
+    total_cost = 0.0
+
+    for config in configs:
+        key = (config.provider, config.variant)
+        period = period_map.get(key)
+        display_name = _get_display_name(config.provider, config.variant)
+
+        free_quota_used = period.free_quota_used if period else 0.0
+        used_seconds = period.used_seconds if period else 0.0
+        paid_seconds = period.paid_seconds if period else 0.0
+        cost = period.total_cost if period else 0.0
+
+        # 累计汇总
+        total_used += used_seconds
+        total_free += free_quota_used
+        total_paid += paid_seconds
+        total_cost += cost
+
+        # 判断是否有免费额度配置
+        has_free_quota = (
+            config.free_quota_seconds > 0
+            and config.reset_period
+            and config.reset_period != "none"
+        )
+
+        # 免费额度状态（只有配置了免费额度的才显示）
+        if has_free_quota:
+            try:
+                period_start, period_end = get_current_period_bounds(
+                    config.reset_period, now
+                )
+            except Exception:
+                period_start = now
+                period_end = now
+
+            free_quota_status.append(
+                FreeQuotaStatusData(
+                    provider=config.provider,
+                    variant=config.variant,
+                    display_name=display_name,
+                    free_quota_seconds=config.free_quota_seconds,
+                    used_seconds=free_quota_used,
+                    reset_period=config.reset_period,
+                    period_start=period_start,
+                    period_end=period_end,
+                )
+            )
+
+        # 所有提供商的付费使用统计
+        providers_usage.append(
+            ProviderUsageData(
+                provider=config.provider,
+                variant=config.variant,
+                display_name=display_name,
+                cost_per_hour=config.cost_per_hour,
+                paid_seconds=paid_seconds,
+                paid_cost=cost,
+                is_enabled=config.is_enabled,
+            )
+        )
+
+    summary = {
+        "total_used_hours": round(total_used / 3600, 2),
+        "total_free_hours": round(total_free / 3600, 2),
+        "total_paid_hours": round(total_paid / 3600, 2),
+        "total_cost": round(total_cost, 4),
+    }
+
+    return AdminOverviewResult(
+        free_quota_status=free_quota_status,
+        providers_usage=providers_usage,
+        summary=summary,
+    )

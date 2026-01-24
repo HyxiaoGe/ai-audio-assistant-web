@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     CONFIG_CENTER_CACHE_TTL: int = Field(default=60)
     ADMIN_EMAILS: Optional[str] = Field(default=None)
 
+    # 用户默认免费 ASR 额度（秒），1小时 = 3600秒
+    DEFAULT_USER_FREE_QUOTA_SECONDS: int = Field(default=3600)
+
     MINIO_ENDPOINT: Optional[str] = Field(default=None)
     MINIO_ACCESS_KEY: Optional[str] = Field(default=None)
     MINIO_SECRET_KEY: Optional[str] = Field(default=None)

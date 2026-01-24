@@ -10,6 +10,7 @@ class UserProfileResponse(BaseModel):
     email: str
     name: str | None = None
     avatar_url: str
+    is_admin: bool = False
 
 
 class TaskDefaultsPreferences(BaseModel):
