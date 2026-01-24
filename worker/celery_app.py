@@ -69,3 +69,4 @@ from worker.tasks import process_visual_summary  # noqa: F401, E402
 from worker.tasks import process_youtube  # noqa: F401, E402
 from worker.tasks import quota_alert  # noqa: F401, E402
 from worker.tasks import regenerate_summary  # noqa: F401, E402
+from worker.tasks import sync_youtube_subscriptions  # noqa: F401, E402

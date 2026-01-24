@@ -125,6 +125,12 @@ class Settings(BaseSettings):
     YOUTUBE_OUTPUT_TEMPLATE: Optional[str] = Field(default=None)
     YOUTUBE_DOWNLOAD_FORMAT: Optional[str] = Field(default=None)
 
+    # Google OAuth for YouTube API
+    GOOGLE_CLIENT_ID: Optional[str] = Field(default=None)
+    GOOGLE_CLIENT_SECRET: Optional[str] = Field(default=None)
+    YOUTUBE_OAUTH_REDIRECT_URI: Optional[str] = Field(default=None)
+    FRONTEND_URL: str = Field(default="http://localhost:3000")
+
     STATS_CURRENCY: str = Field(default="CNY")
 
     TASK_CLEANUP_DELAY_SECONDS: int = Field(default=300)

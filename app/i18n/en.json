@@ -38,5 +38,10 @@
   "40404": "Notification not found or has been deleted",
   "51201": "File upload failed",
   "51300": "YouTube video download failed: {reason}",
-  "51301": "YouTube video unavailable or deleted"
+  "51301": "YouTube video unavailable or deleted",
+  "51900": "YouTube account not connected, please authorize first",
+  "51901": "YouTube authorization failed: {reason}",
+  "51902": "YouTube authorization expired, please re-authorize",
+  "51903": "YouTube API error: {reason}",
+  "51904": "Invalid YouTube authorization state, please try again"
 }

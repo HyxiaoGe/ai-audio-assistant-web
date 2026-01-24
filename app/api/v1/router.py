@@ -16,6 +16,7 @@ from app.api.v1 import (
     upload,
     users,
     ws,
+    youtube,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -34,3 +35,4 @@ api_router.include_router(notifications.router)
 api_router.include_router(stats.router)
 api_router.include_router(ws.router)
 api_router.include_router(media.router, prefix="/media", tags=["media"])
+api_router.include_router(youtube.router)
