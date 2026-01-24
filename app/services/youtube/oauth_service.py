@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
+
+# Allow scope changes (Google may return additional scopes like openid, profile, email)
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -156,13 +160,22 @@ class YouTubeOAuthService:
         Returns:
             Google Credentials object
         """
+        # Google auth library expects naive datetime (no timezone)
+        expiry = None
+        if expires_at:
+            if expires_at.tzinfo is not None:
+                # Convert to UTC and remove timezone info
+                expiry = expires_at.astimezone(timezone.utc).replace(tzinfo=None)
+            else:
+                expiry = expires_at
+
         return Credentials(
             token=access_token,
             refresh_token=refresh_token,
             token_uri="https://oauth2.googleapis.com/token",
             client_id=self._client_id,
             client_secret=self._client_secret,
-            expiry=expires_at,
+            expiry=expiry,
         )
 
     def is_token_expired(

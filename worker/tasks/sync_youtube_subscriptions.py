@@ -143,13 +143,18 @@ def sync_youtube_subscriptions(
 
 def _build_credentials(account: Account) -> Credentials:
     """Build Google Credentials from account."""
+    # Google auth library expects naive datetime (no timezone)
+    expiry = account.token_expires_at
+    if expiry and expiry.tzinfo is not None:
+        expiry = expiry.astimezone(timezone.utc).replace(tzinfo=None)
+
     return Credentials(
         token=account.access_token,
         refresh_token=account.refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=settings.GOOGLE_CLIENT_ID,
         client_secret=settings.GOOGLE_CLIENT_SECRET,
-        expiry=account.token_expires_at,
+        expiry=expiry,
     )
 
 

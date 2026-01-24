@@ -68,7 +68,7 @@ class YouTubeSubscriptionService:
         self,
         db: AsyncSession,
         user_id: str,
-        channel_id: str,
+        channel_id: Optional[str],
         access_token: str,
         refresh_token: str,
         expires_at: datetime,
@@ -78,7 +78,7 @@ class YouTubeSubscriptionService:
         Args:
             db: Database session
             user_id: User ID
-            channel_id: YouTube channel ID
+            channel_id: YouTube channel ID (optional, user may not have a channel)
             access_token: OAuth access token
             refresh_token: OAuth refresh token
             expires_at: Token expiration time

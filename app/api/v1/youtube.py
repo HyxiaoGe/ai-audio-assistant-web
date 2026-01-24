@@ -106,26 +106,36 @@ async def oauth_callback(
         # Exchange code for tokens
         access_token, refresh_token, expires_at = oauth_service.exchange_code(code)
 
-        # Build credentials and get channel info
+        # Build credentials and try to get channel info (optional)
         credentials = oauth_service.build_credentials(
             access_token=access_token,
             refresh_token=refresh_token,
             expires_at=expires_at,
         )
         data_service = YouTubeDataService(credentials)
-        channel_info = data_service.get_my_channel()
+
+        # Channel is optional - user may have subscriptions without a channel
+        channel_id = None
+        try:
+            channel_info = data_service.get_my_channel()
+            channel_id = channel_info["id"]
+        except BusinessError as e:
+            if e.code == ErrorCode.YOUTUBE_API_ERROR:
+                logger.info(f"User {user_id} has no YouTube channel, continuing anyway")
+            else:
+                raise
 
         # Save account
         await subscription_service.save_youtube_account(
             db=db,
             user_id=user_id,
-            channel_id=channel_info["id"],
+            channel_id=channel_id,
             access_token=access_token,
             refresh_token=refresh_token,
             expires_at=expires_at,
         )
 
-        logger.info(f"YouTube connected for user {user_id}, channel {channel_info['id']}")
+        logger.info(f"YouTube connected for user {user_id}, channel {channel_id}")
 
         # Trigger background sync (import here to avoid circular import)
         from worker.tasks.sync_youtube_subscriptions import sync_youtube_subscriptions
