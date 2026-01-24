@@ -36,15 +36,22 @@ async def _fake_ingest_task_chunks(*args: Any, **kwargs: Any) -> None:
 
 
 class _FakeResult:
-    def __init__(self, task: Optional[Task]) -> None:
-        self._task = task
+    def __init__(self, data: Any = None) -> None:
+        self._data = data
 
-    def scalar_one_or_none(self) -> Optional[Task]:
-        if self._task is None:
-            return None
-        if self._task.deleted_at is not None:
-            return None
-        return self._task
+    def scalar_one_or_none(self) -> Any:
+        return self._data
+
+    def scalars(self) -> "_FakeScalars":
+        return _FakeScalars(self._data if isinstance(self._data, list) else [])
+
+
+class _FakeScalars:
+    def __init__(self, items: list[Any]) -> None:
+        self._items = items
+
+    def all(self) -> list[Any]:
+        return self._items
 
 
 class _FakeSession:
@@ -54,7 +61,14 @@ class _FakeSession:
         self.summaries: list[Summary] = []
 
     async def execute(self, query: object) -> _FakeResult:
-        return _FakeResult(self.task)
+        # Check if query is for Task model (by checking the query string)
+        query_str = str(query)
+        if "tasks" in query_str.lower():
+            if self.task is None or self.task.deleted_at is not None:
+                return _FakeResult(None)
+            return _FakeResult(self.task)
+        # For non-Task queries (like AsrPricingConfig, AsrUserQuota), return None
+        return _FakeResult(None)
 
     def add(self, item: object) -> None:
         if isinstance(item, Transcript):

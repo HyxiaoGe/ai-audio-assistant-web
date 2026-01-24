@@ -4,7 +4,6 @@ import asyncio
 import inspect
 import json
 import logging
-import random
 import re
 import subprocess  # nosec B404
 import tempfile
@@ -20,6 +19,7 @@ from sqlalchemy.engine import Result
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.asr_scheduler import ASRScheduler, TaskFeatures
 from app.core.config_manager import ConfigManager
 from app.core.cost_optimizer import cost_tracker
 from app.core.exceptions import BusinessError
@@ -30,11 +30,7 @@ from app.models.asr_usage import ASRUsage
 from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp
-from app.services.asr_quota_service import (
-    get_quota_providers,
-    record_usage,
-    select_available_provider,
-)
+from app.services.asr_quota_service import record_usage
 from app.services.llm.base import LLMService
 from app.services.rag import ingest_task_chunks_async
 from app.services.storage.base import StorageService
@@ -174,33 +170,6 @@ def _resolve_asr_variant(task: Task) -> str:
     options = task.options or {}
     raw_variant = options.get("asr_variant")
     return raw_variant if isinstance(raw_variant, str) and raw_variant else "file"
-
-
-async def _select_asr_provider_by_quota(
-    session: Session,
-    owner_user_id: Optional[str],
-    variants: list[str],
-    providers: Optional[list[str]] = None,
-) -> tuple[Optional[str], str]:
-    providers = providers or ServiceRegistry.list_services("asr")
-    for variant in variants:
-        quota_providers = await get_quota_providers(
-            session, providers, owner_user_id, variant=variant
-        )
-        available = await select_available_provider(
-            session, providers, owner_user_id, variant=variant
-        )
-        if available:
-            return random.choice(available), variant  # nosec B311
-        if quota_providers:
-            fallback = [provider for provider in providers if provider not in quota_providers]
-            if fallback:
-                return random.choice(fallback), variant  # nosec B311
-    return None, variants[-1] if variants else "file"
-
-
-def _preferred_asr_providers_for_diarization() -> list[str]:
-    return ["tencent"]
 
 
 def _resolve_tencent_app_id(user_id: Optional[str]) -> Optional[str]:
@@ -544,6 +513,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             if isinstance(task.options, dict):
                 diarization = task.options.get("enable_speaker_diarization")
             if not asr_provider:
+                # 确定可用的 variant 列表
                 if asr_variant != "file":
                     variants = [asr_variant]
                 else:
@@ -552,46 +522,34 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     variants = [variant for variant in variants if variant != "file_fast"]
                     if not variants:
                         variants = ["file"]
-                if diarization is True:
-                    preferred = [
-                        provider
-                        for provider in _preferred_asr_providers_for_diarization()
-                        if provider in ServiceRegistry.list_services("asr")
-                    ]
-                    if preferred:
-                        asr_provider, asr_variant = await _select_asr_provider_by_quota(
-                            session,
-                            str(task.user_id),
-                            variants,
-                            providers=preferred,
-                        )
-                        if not asr_provider:
-                            asr_provider = preferred[0]
-                    else:
-                        asr_provider, asr_variant = await _select_asr_provider_by_quota(
-                            session,
-                            str(task.user_id),
-                            variants,
-                        )
-                else:
+
+                # 使用 ASRScheduler 智能调度（综合考虑免费额度、成本、质量、特性等）
+                task_features = TaskFeatures(
+                    diarization=diarization is True,
+                    word_level=False,  # 暂不支持词级时间戳需求
+                )
+
+                # 优先尝试第一个 variant
+                for variant in variants:
+                    asr_provider = await ASRScheduler.select_best_provider(
+                        session=session,
+                        user_id=str(task.user_id),
+                        variant=variant,
+                        task_features=task_features,
+                    )
+                    if asr_provider:
+                        asr_variant = variant
+                        break
+
+                # 如果没有可用的提供商，使用第一个注册的提供商作为降级
+                if not asr_provider:
                     all_providers = ServiceRegistry.list_services("asr")
-                    preferred = [provider for provider in all_providers if provider != "tencent"]
-                    if preferred:
-                        asr_provider, asr_variant = await _select_asr_provider_by_quota(
-                            session,
-                            str(task.user_id),
-                            variants,
-                            providers=preferred,
+                    if all_providers:
+                        asr_provider = all_providers[0]
+                        logger.warning(
+                            "No ASR provider selected by scheduler, falling back to: %s",
+                            asr_provider,
                         )
-                    if not asr_provider:
-                        asr_provider, asr_variant = await _select_asr_provider_by_quota(
-                            session,
-                            str(task.user_id),
-                            variants,
-                            providers=all_providers,
-                        )
-                    if not asr_provider and "tencent" in all_providers:
-                        asr_provider = "tencent"
             if asr_provider:
                 task.asr_provider = asr_provider
                 if isinstance(task.options, dict):

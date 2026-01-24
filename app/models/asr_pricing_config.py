@@ -46,3 +46,14 @@ class AsrPricingConfig(BaseRecord):
 
     # 状态
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+    # 提供商能力（用于智能调度）
+    quality_score: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0.8")
+    )  # 识别质量评分 0-1
+    supports_diarization: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )  # 支持说话人分离
+    supports_word_level: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )  # 支持词级时间戳（秒级输出）
