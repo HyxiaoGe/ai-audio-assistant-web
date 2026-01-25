@@ -342,6 +342,63 @@ class YouTubeDataService:
                 reason=str(e),
             )
 
+    def get_video_full_info(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch complete video info including snippet, details, and statistics.
+
+        Args:
+            video_id: YouTube video ID
+
+        Returns:
+            Dict with video info or None if not found
+        """
+        if not video_id:
+            return None
+
+        try:
+            request = self._youtube.videos().list(
+                part="snippet,contentDetails,statistics",
+                id=video_id,
+            )
+            response = request.execute()
+
+            items = response.get("items", [])
+            if not items:
+                return None
+
+            item = items[0]
+            snippet = item.get("snippet", {})
+            content_details = item.get("contentDetails", {})
+            statistics = item.get("statistics", {})
+
+            # Get best thumbnail
+            thumbnails = snippet.get("thumbnails", {})
+            thumbnail_url = None
+            for quality in ["maxres", "standard", "high", "medium", "default"]:
+                if quality in thumbnails:
+                    thumbnail_url = thumbnails[quality].get("url")
+                    break
+
+            return {
+                "video_id": video_id,
+                "channel_id": snippet.get("channelId"),
+                "channel_title": snippet.get("channelTitle"),
+                "title": snippet.get("title"),
+                "description": snippet.get("description"),
+                "thumbnail_url": thumbnail_url,
+                "published_at": self._parse_datetime(snippet.get("publishedAt")),
+                "duration_seconds": self._parse_duration(content_details.get("duration")),
+                "view_count": self._parse_int(statistics.get("viewCount")),
+                "like_count": self._parse_int(statistics.get("likeCount")),
+                "comment_count": self._parse_int(statistics.get("commentCount")),
+            }
+
+        except HttpError as e:
+            logger.warning(f"YouTube API error getting video info: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Unexpected error getting video info: {e}")
+            return None
+
     def _parse_datetime(self, dt_str: Optional[str]) -> Optional[datetime]:
         """Parse ISO datetime string from YouTube API.
 

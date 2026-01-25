@@ -512,31 +512,19 @@ class TaskService:
     ) -> Optional["YouTubeVideoInfo"]:
         """获取 YouTube 视频信息.
 
-        从 source_url 提取 video_id，查询 YouTubeVideo 和 YouTubeSubscription 获取元数据。
+        优先从本地缓存获取，缓存未命中时尝试从 YouTube API 获取。
         """
-        import re
-
+        from app.models.account import Account
         from app.models.youtube_subscription import YouTubeSubscription
         from app.models.youtube_video import YouTubeVideo
         from app.schemas.task import YouTubeVideoInfo
 
         # 从 URL 提取 video_id
-        video_id = None
-        patterns = [
-            r"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})",
-            r"youtube\.com/embed/([a-zA-Z0-9_-]{11})",
-            r"youtube\.com/v/([a-zA-Z0-9_-]{11})",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, source_url)
-            if match:
-                video_id = match.group(1)
-                break
-
+        video_id = TaskService._extract_youtube_video_id(source_url)
         if not video_id:
             return None
 
-        # 查询视频信息
+        # 1. 先查询本地缓存
         result = await db.execute(
             select(YouTubeVideo).where(
                 YouTubeVideo.user_id == user_id,
@@ -545,41 +533,85 @@ class TaskService:
         )
         video = result.scalar_one_or_none()
 
-        if not video:
-            # 如果缓存中没有视频信息，返回基本信息
+        if video:
+            # 缓存命中，查询频道信息
+            channel_title = None
+            channel_thumbnail = None
+            sub_result = await db.execute(
+                select(YouTubeSubscription).where(
+                    YouTubeSubscription.user_id == user_id,
+                    YouTubeSubscription.channel_id == video.channel_id,
+                )
+            )
+            subscription = sub_result.scalar_one_or_none()
+            if subscription:
+                channel_title = subscription.channel_title
+                channel_thumbnail = subscription.channel_thumbnail
+
             return YouTubeVideoInfo(
-                video_id=video_id,
-                channel_id="",
-                title="",
+                video_id=video.video_id,
+                channel_id=video.channel_id,
+                channel_title=channel_title,
+                channel_thumbnail=channel_thumbnail,
+                title=video.title,
+                description=video.description,
+                thumbnail_url=video.thumbnail_url,
+                published_at=video.published_at,
+                duration_seconds=video.duration_seconds,
+                view_count=video.view_count,
+                like_count=video.like_count,
+                comment_count=video.comment_count,
             )
 
-        # 查询频道信息
-        channel_title = None
-        channel_thumbnail = None
-        sub_result = await db.execute(
-            select(YouTubeSubscription).where(
-                YouTubeSubscription.user_id == user_id,
-                YouTubeSubscription.channel_id == video.channel_id,
+        # 2. 缓存未命中，尝试从 YouTube API 获取
+        account_result = await db.execute(
+            select(Account).where(
+                Account.user_id == user_id,
+                Account.provider == "youtube",
             )
         )
-        subscription = sub_result.scalar_one_or_none()
-        if subscription:
-            channel_title = subscription.channel_title
-            channel_thumbnail = subscription.channel_thumbnail
+        account = account_result.scalar_one_or_none()
 
+        if account and account.access_token:
+            try:
+                from google.oauth2.credentials import Credentials
+
+                from app.services.youtube.data_service import YouTubeDataService
+
+                credentials = Credentials(  # nosec B106 - token_uri is not a password
+                    token=account.access_token,
+                    refresh_token=account.refresh_token,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=settings.GOOGLE_CLIENT_ID,
+                    client_secret=settings.GOOGLE_CLIENT_SECRET,
+                )
+
+                data_service = YouTubeDataService(credentials)
+                video_info = data_service.get_video_full_info(video_id)
+
+                if video_info:
+                    return YouTubeVideoInfo(
+                        video_id=video_info["video_id"],
+                        channel_id=video_info.get("channel_id") or "",
+                        channel_title=video_info.get("channel_title"),
+                        channel_thumbnail=None,  # API 不返回频道缩略图
+                        title=video_info.get("title") or "",
+                        description=video_info.get("description"),
+                        thumbnail_url=video_info.get("thumbnail_url"),
+                        published_at=video_info.get("published_at"),
+                        duration_seconds=video_info.get("duration_seconds"),
+                        view_count=video_info.get("view_count"),
+                        like_count=video_info.get("like_count"),
+                        comment_count=video_info.get("comment_count"),
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to fetch video info from YouTube API: {e}")
+
+        # 3. 无法获取详细信息，返回基本信息
         return YouTubeVideoInfo(
-            video_id=video.video_id,
-            channel_id=video.channel_id,
-            channel_title=channel_title,
-            channel_thumbnail=channel_thumbnail,
-            title=video.title,
-            description=video.description,
-            thumbnail_url=video.thumbnail_url,
-            published_at=video.published_at,
-            duration_seconds=video.duration_seconds,
-            view_count=video.view_count,
-            like_count=video.like_count,
-            comment_count=video.comment_count,
+            video_id=video_id,
+            channel_id="",
+            title="",
         )
 
     @staticmethod
