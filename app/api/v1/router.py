@@ -11,6 +11,7 @@ from app.api.v1 import (
     notifications,
     stats,
     summaries,
+    summary_styles,
     tasks,
     transcripts,
     upload,
@@ -30,6 +31,7 @@ api_router.include_router(upload.router)
 api_router.include_router(tasks.router)
 api_router.include_router(transcripts.router)
 api_router.include_router(summaries.router)
+api_router.include_router(summary_styles.router)
 api_router.include_router(users.router)
 api_router.include_router(notifications.router)
 api_router.include_router(stats.router)

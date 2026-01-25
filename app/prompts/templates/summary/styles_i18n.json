@@ -1,0 +1,181 @@
+{
+  "version": "1.0.0",
+  "styles": {
+    "meeting": {
+      "icon": "users",
+      "recommended_visual_types": ["timeline", "flowchart"],
+      "i18n": {
+        "zh": {
+          "name": "会议",
+          "description": "会议、讨论、头脑风暴",
+          "focus": "议题、决议、行动项、参会者观点"
+        },
+        "en": {
+          "name": "Meeting",
+          "description": "Meetings, discussions, brainstorming",
+          "focus": "Agenda, decisions, action items, participant viewpoints"
+        }
+      }
+    },
+    "lecture": {
+      "icon": "book-open",
+      "recommended_visual_types": ["mindmap", "timeline"],
+      "i18n": {
+        "zh": {
+          "name": "讲座/课程",
+          "description": "讲座、课程、培训内容",
+          "focus": "知识点、核心概念、学习要点"
+        },
+        "en": {
+          "name": "Lecture",
+          "description": "Lectures, courses, training sessions",
+          "focus": "Key knowledge, core concepts, learning points"
+        }
+      }
+    },
+    "podcast": {
+      "icon": "mic",
+      "recommended_visual_types": ["mindmap"],
+      "i18n": {
+        "zh": {
+          "name": "播客",
+          "description": "播客节目、对话内容",
+          "focus": "核心观点、精彩片段、讨论亮点"
+        },
+        "en": {
+          "name": "Podcast",
+          "description": "Podcast episodes, conversations",
+          "focus": "Core opinions, highlights, discussion points"
+        }
+      }
+    },
+    "interview": {
+      "icon": "message-circle",
+      "recommended_visual_types": ["mindmap", "timeline"],
+      "i18n": {
+        "zh": {
+          "name": "访谈",
+          "description": "采访、访谈、对话节目",
+          "focus": "嘉宾观点、问答精华、关键洞见"
+        },
+        "en": {
+          "name": "Interview",
+          "description": "Interviews, conversations, talk shows",
+          "focus": "Guest insights, Q&A highlights, key takeaways"
+        }
+      }
+    },
+    "tutorial": {
+      "icon": "play-circle",
+      "recommended_visual_types": ["flowchart", "timeline"],
+      "i18n": {
+        "zh": {
+          "name": "教程",
+          "description": "操作教程、使用指南、How-to视频",
+          "focus": "操作步骤、注意事项、技巧要点"
+        },
+        "en": {
+          "name": "Tutorial",
+          "description": "How-to guides, tutorials, instructional videos",
+          "focus": "Step-by-step instructions, tips, key techniques"
+        }
+      }
+    },
+    "review": {
+      "icon": "star",
+      "recommended_visual_types": ["mindmap"],
+      "i18n": {
+        "zh": {
+          "name": "评测",
+          "description": "产品评测、体验分享、对比测评",
+          "focus": "优缺点、性能数据、推荐结论"
+        },
+        "en": {
+          "name": "Review",
+          "description": "Product reviews, comparisons, experiences",
+          "focus": "Pros & cons, performance metrics, recommendations"
+        }
+      }
+    },
+    "news": {
+      "icon": "newspaper",
+      "recommended_visual_types": ["timeline"],
+      "i18n": {
+        "zh": {
+          "name": "新闻/时事",
+          "description": "新闻报道、时事评论、资讯播报",
+          "focus": "核心事件、关键数据、各方观点"
+        },
+        "en": {
+          "name": "News",
+          "description": "News reports, current affairs, commentary",
+          "focus": "Key events, critical data, multiple perspectives"
+        }
+      }
+    },
+    "explainer": {
+      "icon": "lightbulb",
+      "recommended_visual_types": ["mindmap", "flowchart"],
+      "i18n": {
+        "zh": {
+          "name": "知识科普",
+          "description": "科普视频、知识解读、概念讲解",
+          "focus": "核心概念、原理说明、实际应用"
+        },
+        "en": {
+          "name": "Explainer",
+          "description": "Educational videos, knowledge explanations",
+          "focus": "Core concepts, principles, real-world applications"
+        }
+      }
+    },
+    "documentary": {
+      "icon": "film",
+      "recommended_visual_types": ["timeline", "mindmap"],
+      "i18n": {
+        "zh": {
+          "name": "纪录片",
+          "description": "纪录片、专题片、深度报道",
+          "focus": "主题背景、关键事件、人物故事"
+        },
+        "en": {
+          "name": "Documentary",
+          "description": "Documentaries, feature films, in-depth reports",
+          "focus": "Context, key events, character stories"
+        }
+      }
+    },
+    "video": {
+      "icon": "video",
+      "recommended_visual_types": ["mindmap", "timeline"],
+      "i18n": {
+        "zh": {
+          "name": "视频",
+          "description": "视频教程、解说视频",
+          "focus": "主题亮点、关键信息"
+        },
+        "en": {
+          "name": "Video",
+          "description": "Video tutorials, commentary videos",
+          "focus": "Key highlights, main information"
+        }
+      }
+    },
+    "general": {
+      "icon": "file-text",
+      "recommended_visual_types": ["mindmap"],
+      "i18n": {
+        "zh": {
+          "name": "通用",
+          "description": "通用内容、其他类型",
+          "focus": "核心信息、关键要点"
+        },
+        "en": {
+          "name": "General",
+          "description": "General content, other types",
+          "focus": "Core information, key points"
+        }
+      }
+    }
+  }
+}

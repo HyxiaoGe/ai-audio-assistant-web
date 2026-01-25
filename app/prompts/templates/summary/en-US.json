@@ -2,45 +2,117 @@
   "system": {
     "meeting": {
       "role": "You are a professional meeting notes assistant, skilled at extracting core information, decision points, and action items from meeting transcripts.",
-      "style": "Concise, professional, structured"
+      "style": "Concise, professional, structured",
+      "tolerance": "Able to handle speech recognition errors and understand true meaning from context"
     },
     "lecture": {
       "role": "You are a professional lecture notes assistant, skilled at extracting knowledge points and core concepts from lecture/course transcripts.",
-      "style": "Educational, structured, easy to understand"
+      "style": "Educational, structured, easy to understand",
+      "tolerance": "Able to understand colloquial expressions and teaching language"
     },
     "podcast": {
-      "role": "You are a professional podcast/interview content analyst, skilled at extracting core insights and highlights from conversations.",
-      "style": "Casual, conversational, insight-focused"
+      "role": "You are a professional podcast content analyst, skilled at extracting core insights and highlights from conversations.",
+      "style": "Casual, conversational, insight-focused",
+      "tolerance": "Able to handle casual dialogue and informal expressions"
     },
     "video": {
       "role": "You are a professional video content analyst, skilled at extracting themes, highlights, and key information from video transcripts.",
-      "style": "Concise, engaging, highlight-focused"
+      "style": "Concise, engaging, highlight-focused",
+      "tolerance": "Able to understand demonstrative content and operational steps"
+    },
+    "interview": {
+      "role": "You are a professional interview content analyst, skilled at extracting guest insights, Q&A highlights, and key takeaways from interviews.",
+      "style": "Clear, insight-focused, guest-centric",
+      "tolerance": "Able to handle conversational format and informal expressions"
+    },
+    "tutorial": {
+      "role": "You are a professional tutorial content analyst, skilled at extracting steps, tips, and important notes from tutorials.",
+      "style": "Step-by-step, practical, easy to follow",
+      "tolerance": "Able to understand demonstrative content and operational descriptions"
+    },
+    "review": {
+      "role": "You are a professional review content analyst, skilled at extracting pros, cons, performance data, and recommendations from product reviews.",
+      "style": "Objective, data-driven, conclusion-focused",
+      "tolerance": "Able to understand subjective evaluations and technical descriptions"
+    },
+    "news": {
+      "role": "You are a professional news content analyst, skilled at extracting core events, key data, and multiple perspectives from news reports.",
+      "style": "Objective, fact-based, multi-perspective",
+      "tolerance": "Able to handle news narratives and quoted content"
+    },
+    "explainer": {
+      "role": "You are a professional educational content analyst, skilled at extracting core concepts, principles, and applications from explanatory content.",
+      "style": "Clear, logical, knowledge-oriented",
+      "tolerance": "Able to understand technical terms and analogies"
+    },
+    "documentary": {
+      "role": "You are a professional documentary content analyst, skilled at extracting themes, key events, and character stories from documentaries.",
+      "style": "Narrative, contextual, theme-focused",
+      "tolerance": "Able to understand narrative structures and historical contexts"
     },
     "general": {
       "role": "You are a professional content analyst, skilled at extracting core information from audio transcripts.",
-      "style": "Concise, professional, structured"
+      "style": "Concise, professional, structured",
+      "tolerance": "Able to handle various content types and expressions"
     },
     "constraints": [
       "Respond in English",
       "Maintain objectivity",
-      "Highlight key information"
+      "Highlight key information",
+      "Understand context and ignore obvious recognition errors"
     ]
   },
   "prompts": {
     "overview": {
       "name": "Content Overview",
-      "description": "Generate a concise content summary",
-      "template": "Please generate a concise overview (within 200 words) for the following transcript:\n\n{transcript}\n\nRequirements:\n1. Summarize core content in 1-2 paragraphs\n2. Highlight main topics and key information\n3. Use clear and fluent language\n4. If it's a meeting, mention discussion topics; if it's a tutorial, mention core knowledge points"
+      "description": "Generate a structured content summary",
+      "templates": {
+        "meeting": "{quality_notice}\n\nPlease generate a structured meeting summary for the following transcript.\n\n{transcript}\n\nOutput format:\n\n# Meeting Summary\n\n## Quick Overview\n[2-3 sentences summarizing the core topics and main outcomes]\n\n## Discussion Topics\n1. **Topic A**: Brief description and conclusion\n2. **Topic B**: Brief description and conclusion\n\n## Key Decisions\n- ✓ Decision 1: Specific details\n- ✓ Decision 2: Agreed consensus\n\n## Summary Table\n\n| Category | Content |\n|----------|--------|\n| Topics Discussed | X |\n| Decisions Made | Y |\n| Action Items | Z |\n\nFormat requirements:\n1. Follow the Markdown format strictly\n2. Keep it concise and professional\n3. Skip sections with no relevant content",
+
+        "lecture": "{quality_notice}\n\nPlease generate structured lecture notes for the following transcript.\n\n{transcript}\n\nOutput format:\n\n# Lecture Summary\n\n## Core Content\n[2-3 sentences explaining what this lecture covers and learning objectives]\n\n## Content Outline\n1. **Part 1: [Topic]**\n   - Key points\n2. **Part 2: [Topic]**\n   - Key points\n\n## Key Concepts\n- **Concept A**: Clear definition\n- **Concept B**: Clear definition\n\n## Learning Points\n\n| Topic | Importance | Brief Description |\n|-------|-----------|------------------|\n| Point 1 | High | One sentence |\n| Point 2 | Medium | One sentence |\n\nFormat requirements:\n1. Follow the Markdown format strictly\n2. Highlight teaching structure and knowledge system\n3. Provide clear definitions for concepts",
+
+        "podcast": "{quality_notice}\n\nPlease generate a structured summary for the following podcast content.\n\n{transcript}\n\nOutput format:\n\n# Content Summary\n\n## Core Theme\n[One paragraph explaining the central idea and main value]\n\n## Content Structure\n1. **Opening**: Brief description\n2. **Main Part 1**: Brief description\n3. **Main Part 2**: Brief description\n4. **Conclusion**: Brief description\n\n## Key Insights\n- **Insight 1**: Elaboration (1-2 sentences)\n- **Insight 2**: Elaboration (1-2 sentences)\n\n## Notable Quotes\n> \"Thought-provoking quote or brilliant expression\"\n\n## Key Takeaways\n\n| Dimension | Takeaway |\n|-----------|----------|\n| Mindset | ... |\n| Practical Advice | ... |\n\nFormat requirements:\n1. Follow the Markdown format strictly\n2. Keep insights concise and impactful\n3. Select the most valuable original expressions",
+
+        "interview": "{quality_notice}\n\nPlease generate a structured interview summary for the following transcript.\n\n{transcript}\n\nOutput format:\n\n# Interview Summary\n\n## Overview\n[2-3 sentences on interview topic, guest background, and core value]\n\n## Guest Profile\n- **Guest**: Name/Identity\n- **Background**: Relevant experience or expertise\n\n## Key Q&A\n\n### Q1: [Question Summary]\n**A**: Guest's key points (2-3 sentences)\n\n### Q2: [Question Summary]\n**A**: Guest's key points (2-3 sentences)\n\n## Notable Quotes\n> \"Guest's insightful expression\"\n\n## Core Viewpoints\n- **Viewpoint 1**: Guest's main stance\n- **Viewpoint 2**: Unique insight or advice\n\nFormat requirements:\n1. Follow the Markdown format strictly\n2. Highlight guest perspective\n3. Keep Q&A concise",
+
+        "tutorial": "{quality_notice}\n\nPlease generate a structured tutorial summary for the following transcript.\n\n{transcript}\n\nOutput format:\n\n# Tutorial Summary\n\n## Goal\n[One sentence explaining what this tutorial teaches]\n\n## Prerequisites\n- Required tools/software\n- Required knowledge\n- Other preparations\n\n## Steps\n\n### Step 1: [Step Name]\n- Specific instructions\n- Notes (if any)\n\n### Step 2: [Step Name]\n- Specific instructions\n- Notes (if any)\n\n## Common Issues\n- **Issue 1**: Solution\n- **Issue 2**: Solution\n\n## Tips\n- Efficiency tips\n- Advanced usage suggestions\n\nFormat requirements:\n1. Follow the Markdown format strictly\n2. Steps should be clear and actionable\n3. Highlight important notes",
+
+        "review": "{quality_notice}\n\nPlease generate a structured review summary for the following transcript.\n\n{transcript}\n\nOutput format:\n\n# Review Summary\n\n## Product Overview\n- **Name**: Product being reviewed\n- **Category**: Product type\n- **Price**: Price info (if mentioned)\n\n## Pros\n- Pro 1: Specific details\n- Pro 2: Specific details\n\n## Cons\n- Con 1: Specific details\n- Con 2: Specific details\n\n## Performance\n\n| Aspect | Rating | Notes |\n|--------|--------|-------|\n| Aspect 1 | ⭐⭐⭐⭐ | Brief note |\n| Aspect 2 | ⭐⭐⭐ | Brief note |\n\n## Who It's For\n- Suitable for: XX users\n- Not suitable for: XX users\n\n## Verdict\n[One paragraph with final conclusion and recommendation]\n\nFormat requirements:\n1. Follow the Markdown format strictly\n2. Pros/cons should be specific\n3. Provide clear recommendations",
+
+        "news": "{quality_notice}\n\nPlease generate a structured news summary for the following transcript.\n\n{transcript}\n\nOutput format:\n\n# News Summary\n\n## Core Story\n[One paragraph covering: who, what, when, where, why, how]\n\n## Key Facts\n- **When**: Time of event\n- **Where**: Location\n- **Who**: Involved parties\n- **Key Data**: Important numbers or statistics\n\n## Event Timeline\n1. **Cause**: Background and trigger\n2. **Development**: How events unfolded\n3. **Current Status**: Present situation\n\n## Perspectives\n- **View A** (Source): Main stance\n- **View B** (Source): Different perspective\n\n## Impact Analysis\n- **Short-term**: Immediate consequences\n- **Long-term**: Potential implications\n\nFormat requirements:\n1. Follow the Markdown format strictly\n2. Stay objective and neutral\n3. Distinguish facts from opinions",
+
+        "explainer": "{quality_notice}\n\nPlease generate a structured knowledge summary for the following transcript.\n\n{transcript}\n\nOutput format:\n\n# Knowledge Summary\n\n## Topic Introduction\n[One paragraph explaining the topic and its importance]\n\n## Core Concepts\n\n### Concept 1: [Name]\n- **Definition**: Easy-to-understand explanation\n- **Example**: Concrete example\n\n### Concept 2: [Name]\n- **Definition**: Easy-to-understand explanation\n- **Example**: Concrete example\n\n## How It Works\n- **Basic Principle**: Core mechanism\n- **Process**: How it operates\n\n## Real-World Applications\n- Application 1: Specific scenario\n- Application 2: Specific scenario\n\n## Common Misconceptions\n- **Misconception 1**: Correct understanding\n- **Misconception 2**: Correct understanding\n\nFormat requirements:\n1. Follow the Markdown format strictly\n2. Keep explanations accessible\n3. Use examples to aid understanding",
+
+        "documentary": "{quality_notice}\n\nPlease generate a structured documentary summary for the following transcript.\n\n{transcript}\n\nOutput format:\n\n# Documentary Summary\n\n## Theme Overview\n[One paragraph on the documentary's theme, context, and core value]\n\n## Background\n- **Historical Context**: Period or social background\n- **Setting**: Relevant locations\n- **Key Figures**: Main characters/subjects\n\n## Content Structure\n\n### Part 1: [Section Theme]\n- Main content\n- Key events/people\n\n### Part 2: [Section Theme]\n- Main content\n- Key events/people\n\n## Key Figures\n- **Person 1**: Identity and significance\n- **Person 2**: Identity and main contribution\n\n## Central Message\n- Main point conveyed by the documentary\n- Reflections and thoughts provoked\n\n## Memorable Moments\n> \"Description of impactful scene or quote\"\n\nFormat requirements:\n1. Follow the Markdown format strictly\n2. Maintain narrative flow\n3. Provide context for people and events"
+      }
     },
     "key_points": {
       "name": "Key Points",
       "description": "Extract core insights and important information",
-      "template": "Please extract 5-10 key points from the following transcript:\n\n{transcript}\n\nRequirements:\n1. Each point should be one sentence, focusing on core insights and factual information\n2. Sort by importance (high to low)\n3. Use Markdown list format starting with \"- \"\n4. Extract \"information points\" and \"insights\", not action items\n5. Avoid repetition and redundancy\n6. If it's a multi-person conversation, you can note the speaker\n\nExample format:\n- Core insight 1\n- Important information 2\n- Key data point 3"
+      "templates": {
+        "meeting": "{quality_notice}\n\nPlease extract key points from the following meeting transcript.\n\n{transcript}\n\nOutput format:\n\n# Meeting Key Points\n\n## Decisions & Consensus\n- ✓ Decision 1: Specific details\n- ✓ Decision 2: Agreed consensus\n\n## Important Information\n- 📊 Info 1: Factual data or key metrics\n- 📊 Info 2: Important statistics\n\n## Core Viewpoints\n- 💡 Viewpoint 1: Important perspective raised\n- 💡 Viewpoint 2: Valuable suggestion\n\n## Issues & Challenges\n- ⚠️ Issue 1: Current difficulty\n- ⚠️ Challenge 2: Potential risk\n\nFormat requirements:\n1. One sentence per point\n2. Sort by importance within each category\n3. Skip categories with no relevant content",
+
+        "lecture": "{quality_notice}\n\nPlease extract key knowledge points from the following lecture transcript.\n\n{transcript}\n\nOutput format:\n\n# Lecture Key Points\n\n## Core Concepts\n- 🔑 Concept 1: Definition and understanding\n- 🔑 Concept 2: Definition and understanding\n\n## Important Principles\n- 📐 Principle 1: Explanation and application\n- 📐 Principle 2: Explanation and application\n\n## Practical Points\n- 🛠️ Point 1: Method or technique\n- 🛠️ Point 2: Note or common mistake\n\n## Extended Knowledge\n- 📚 Extension 1: Related topics\n- 📚 Extension 2: Further learning direction\n\nFormat requirements:\n1. Provide clear definitions for concepts\n2. Explain application scenarios for principles\n3. Skip categories with no relevant content",
+
+        "podcast": "{quality_notice}\n\nPlease extract key points from the following podcast content.\n\n{transcript}\n\nOutput format:\n\n# Content Key Points\n\n## Core Arguments\n- 🎯 Argument 1: Main point with supporting evidence\n- 🎯 Argument 2: Main point with supporting evidence\n\n## Brilliant Insights\n- 💎 Insight 1: Unique perspective\n- 💎 Insight 2: Thought-provoking angle\n\n## Practical Advice\n- ✅ Advice 1: Actionable suggestion\n- ✅ Advice 2: Valuable guidance\n\n## Worth Thinking About\n- 🤔 Question 1: For deeper reflection\n- 🤔 Question 2: For further discussion\n\nFormat requirements:\n1. Arguments should be clear with support\n2. Insights should offer unique value\n3. Advice should be actionable",
+
+        "interview": "{quality_notice}\n\nPlease extract key points from the following interview.\n\n{transcript}\n\nOutput format:\n\n# Interview Key Points\n\n## Guest's Core Views\n- 🎤 View 1: Main stance and reasoning\n- 🎤 View 2: Unique insight\n\n## Key Q&A\n- ❓ Question 1 → 💬 Answer highlight\n- ❓ Question 2 → 💬 Answer highlight\n\n## Experience Shared\n- 💡 Experience 1: Practical experience\n- 💡 Experience 2: Applicable advice\n\n## Notable Quotes\n- ✨ \"Brilliant original expression\"\n- ✨ \"Deep insight\"\n\nFormat requirements:\n1. Highlight guest perspective\n2. Keep Q&A concise\n3. Preserve original wording for quotes",
+
+        "tutorial": "{quality_notice}\n\nPlease extract key points from the following tutorial.\n\n{transcript}\n\nOutput format:\n\n# Tutorial Key Points\n\n## Key Steps\n- 📌 Step 1: Action point\n- 📌 Step 2: Action point\n- 📌 Step 3: Action point\n\n## Important Commands/Code\n- 💻 `command or code`: Purpose\n- 💻 `command or code`: Purpose\n\n## Cautions\n- ⚠️ Caution 1: Common mistake area\n- ⚠️ Caution 2: Important note\n\n## Tips\n- 💡 Tip 1: Efficiency improvement\n- 💡 Tip 2: Advanced usage\n\nFormat requirements:\n1. Steps should be clear and concise\n2. Commands/code should be accurate\n3. Highlight cautions prominently",
+
+        "review": "{quality_notice}\n\nPlease extract key points from the following review.\n\n{transcript}\n\nOutput format:\n\n# Review Key Points\n\n## Main Pros\n- ✅ Pro 1: Specific detail\n- ✅ Pro 2: Specific detail\n\n## Main Cons\n- ❌ Con 1: Specific detail\n- ❌ Con 2: Specific detail\n\n## Key Data\n- 📊 Data 1: Performance/spec info\n- 📊 Data 2: Comparison/test result\n\n## User Experience\n- 💭 Experience 1: Actual usage feeling\n- 💭 Experience 2: Long-term feedback\n\n## Purchase Advice\n- 🎯 Suitable for: XX\n- 🚫 Not suitable for: XX\n- 💰 Value assessment: XX\n\nFormat requirements:\n1. Pros/cons should have evidence\n2. Data should be accurate\n3. Provide clear recommendations",
+
+        "news": "{quality_notice}\n\nPlease extract key points from the following news content.\n\n{transcript}\n\nOutput format:\n\n# News Key Points\n\n## Core Facts\n- 📰 Fact 1: Key information (5W1H)\n- 📰 Fact 2: Important detail\n\n## Key Data\n- 📊 Data 1: Important figures\n- 📊 Data 2: Key metrics\n\n## Different Perspectives\n- 🔵 Perspective A (Source): Main stance\n- 🔴 Perspective B (Source): Different view\n\n## Impact Analysis\n- 📈 Impact 1: Direct consequence\n- 📉 Impact 2: Potential effect\n\n## Background Info\n- 📚 Context: Relevant historical/social background\n\nFormat requirements:\n1. Separate facts from opinions\n2. Stay objective and neutral\n3. Note information sources",
+
+        "explainer": "{quality_notice}\n\nPlease extract key points from the following educational content.\n\n{transcript}\n\nOutput format:\n\n# Knowledge Key Points\n\n## Core Concepts\n- 🔑 Concept 1: Definition and plain explanation\n- 🔑 Concept 2: Definition and plain explanation\n\n## Basic Principles\n- 🔬 Principle 1: Mechanism explanation\n- 🔬 Principle 2: Cause-effect explanation\n\n## Key Examples\n- 📝 Example 1: Illustrative instance\n- 📝 Example 2: Analogy or metaphor\n\n## Real Applications\n- 🛠️ Application 1: Daily use case\n- 🛠️ Application 2: Professional application\n\n## Common Misconceptions\n- ❌ Misconception 1 → ✅ Correct understanding\n- ❌ Misconception 2 → ✅ Correct understanding\n\nFormat requirements:\n1. Keep explanations accessible\n2. Use examples to aid understanding\n3. Correct common misunderstandings",
+
+        "documentary": "{quality_notice}\n\nPlease extract key points from the following documentary.\n\n{transcript}\n\nOutput format:\n\n# Documentary Key Points\n\n## Central Theme\n- 🎬 Theme: Core topic explored\n- 🎯 Message: Central idea conveyed\n\n## Key Events\n- 📅 Event 1: Important historical/event milestone\n- 📅 Event 2: Turning point\n\n## Important Figures\n- 👤 Person 1: Identity and key contribution\n- 👤 Person 2: Identity and main achievement\n\n## Core Messages\n- 💭 Message 1: Documentary's stance\n- 💭 Message 2: Reflection provoked\n\n## Historical Context\n- 📚 Background: Necessary historical/social context\n\nFormat requirements:\n1. Maintain narrative coherence\n2. Provide context for people and events\n3. Support viewpoints with evidence"
+      }
     },
     "action_items": {
       "name": "Action Items",
       "description": "Extract specific action items and tasks",
-      "template": "Please extract all action items and tasks from the following transcript:\n\n{transcript}\n\nRequirements:\n1. Only extract clear, actionable items (something specific that needs to be done)\n2. Include assignee (if mentioned in the text)\n3. Include deadline (if mentioned in the text)\n4. Use \"- [ ] \" format (task list)\n5. Format: - [ ] Task description @Assignee (Deadline)\n6. Distinguish \"information\" from \"action\": \"Market share decreased\" is information, \"Analyze reasons for market share decrease\" is an action item\n7. If there are no clear action items in the text, return: \"No explicit action items found\"\n\nExample format:\n- [ ] Complete market research report @John (by Friday)\n- [ ] Contact supplier for quote confirmation\n- [ ] Prepare agenda for next meeting"
+      "template": "{quality_notice}\n\nPlease extract all action items and tasks from the following transcript:\n\n{transcript}\n\nOutput format:\n\n# Action Items & Plans\n\n## To-Do Items\n\n### High Priority (Urgent & Important)\n- [ ] Task 1 @Assignee (Deadline)\n- [ ] Task 2 @Assignee (Deadline)\n\n### Normal Priority\n- [ ] Task 3 @Assignee (Deadline)\n- [ ] Task 4 @Assignee\n\n### Low Priority (Optional)\n- [ ] Task 5\n\n## Unresolved Issues\n⚠️ **Issue 1**: Problem description\n- Follow-up: @Person\n- Suggested action: What to do next\n\n## Next Steps\n- 📅 Follow-up meetings or checkpoints\n- 🎯 Next phase goals\n\nExtraction rules:\n1. Only extract clear, actionable items\n2. Priority criteria:\n   - High: Explicitly urgent/important, or near deadline\n   - Normal: Regular work tasks\n   - Low: \"Nice to have\" items\n3. Format: - [ ] Task @Assignee (Deadline)\n4. Distinguish information from action\n5. If speaker info available, extract as assignee\n6. If a section has no content, write \"None\"\n\nFormat requirements:\n- Use Markdown task list format\n- Categorize by priority\n- Note follow-up person for issues\n- Include clear timeline for next steps"
     }
   }
 }
