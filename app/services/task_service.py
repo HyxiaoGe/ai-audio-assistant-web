@@ -5,7 +5,10 @@ import hashlib
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from app.schemas.task import YouTubeVideoInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -479,11 +482,17 @@ class TaskService:
                 if stage.is_active  # 只返回活跃的阶段
             ]
 
+        # 获取 YouTube 视频信息（如果是 YouTube 来源）
+        youtube_info = None
+        if task.source_type == "youtube" and task.source_url:
+            youtube_info = await TaskService._get_youtube_video_info(db, user.id, task.source_url)
+
         return TaskDetailResponse(
             id=task.id,
             title=task.title,
             source_type=task.source_type,
             source_key=task.source_key,
+            source_url=task.source_url,
             audio_url=audio_url,
             status=task.status,
             progress=task.progress,
@@ -494,6 +503,83 @@ class TaskService:
             updated_at=task.updated_at,
             error_message=task.error_message,
             stages=stages,
+            youtube_info=youtube_info,
+        )
+
+    @staticmethod
+    async def _get_youtube_video_info(
+        db: AsyncSession, user_id: str, source_url: str
+    ) -> Optional["YouTubeVideoInfo"]:
+        """获取 YouTube 视频信息.
+
+        从 source_url 提取 video_id，查询 YouTubeVideo 和 YouTubeSubscription 获取元数据。
+        """
+        import re
+
+        from app.models.youtube_subscription import YouTubeSubscription
+        from app.models.youtube_video import YouTubeVideo
+        from app.schemas.task import YouTubeVideoInfo
+
+        # 从 URL 提取 video_id
+        video_id = None
+        patterns = [
+            r"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})",
+            r"youtube\.com/embed/([a-zA-Z0-9_-]{11})",
+            r"youtube\.com/v/([a-zA-Z0-9_-]{11})",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, source_url)
+            if match:
+                video_id = match.group(1)
+                break
+
+        if not video_id:
+            return None
+
+        # 查询视频信息
+        result = await db.execute(
+            select(YouTubeVideo).where(
+                YouTubeVideo.user_id == user_id,
+                YouTubeVideo.video_id == video_id,
+            )
+        )
+        video = result.scalar_one_or_none()
+
+        if not video:
+            # 如果缓存中没有视频信息，返回基本信息
+            return YouTubeVideoInfo(
+                video_id=video_id,
+                channel_id="",
+                title="",
+            )
+
+        # 查询频道信息
+        channel_title = None
+        channel_thumbnail = None
+        sub_result = await db.execute(
+            select(YouTubeSubscription).where(
+                YouTubeSubscription.user_id == user_id,
+                YouTubeSubscription.channel_id == video.channel_id,
+            )
+        )
+        subscription = sub_result.scalar_one_or_none()
+        if subscription:
+            channel_title = subscription.channel_title
+            channel_thumbnail = subscription.channel_thumbnail
+
+        return YouTubeVideoInfo(
+            video_id=video.video_id,
+            channel_id=video.channel_id,
+            channel_title=channel_title,
+            channel_thumbnail=channel_thumbnail,
+            title=video.title,
+            description=video.description,
+            thumbnail_url=video.thumbnail_url,
+            published_at=video.published_at,
+            duration_seconds=video.duration_seconds,
+            view_count=video.view_count,
+            like_count=video.like_count,
+            comment_count=video.comment_count,
         )
 
     @staticmethod

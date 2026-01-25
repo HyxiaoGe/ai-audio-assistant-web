@@ -63,11 +63,29 @@ class TaskStageResponse(BaseModel):
     attempt: int
 
 
+class YouTubeVideoInfo(BaseModel):
+    """YouTube 视频信息（用于任务详情展示）"""
+
+    video_id: str
+    channel_id: str
+    channel_title: Optional[str] = None
+    channel_thumbnail: Optional[str] = None
+    title: str
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    published_at: Optional[datetime] = None
+    duration_seconds: Optional[int] = None
+    view_count: Optional[int] = None
+    like_count: Optional[int] = None
+    comment_count: Optional[int] = None
+
+
 class TaskDetailResponse(BaseModel):
     id: str
     title: Optional[str]
     source_type: str
     source_key: Optional[str]
+    source_url: Optional[str] = None  # YouTube URL
     audio_url: Optional[str]  # 添加音频播放 URL
     status: str
     progress: int
@@ -78,6 +96,7 @@ class TaskDetailResponse(BaseModel):
     updated_at: datetime
     error_message: Optional[str]
     stages: list[TaskStageResponse] = Field(default_factory=list)  # 阶段信息
+    youtube_info: Optional[YouTubeVideoInfo] = None  # YouTube 视频元数据
 
 
 class TaskBatchDeleteRequest(BaseModel):
