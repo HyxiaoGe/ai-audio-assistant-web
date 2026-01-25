@@ -4,6 +4,7 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     env_file: .env
     environment:
+      TZ: UTC
       DATABASE_URL: postgresql+asyncpg://user:pass@db:5432/audio_assistant
       REDIS_URL: redis://redis:6379/0
       MINIO_ENDPOINT: minio:9000
@@ -23,6 +24,7 @@ services:
     command: celery -A worker.celery_app worker --loglevel=info
     env_file: .env
     environment:
+      TZ: UTC
       DATABASE_URL: postgresql+asyncpg://user:pass@db:5432/audio_assistant
       REDIS_URL: redis://redis:6379/0
       MINIO_ENDPOINT: minio:9000
@@ -85,6 +87,7 @@ services:
     command: alembic upgrade head
     env_file: .env
     environment:
+      TZ: UTC
       DATABASE_URL: postgresql+asyncpg://user:pass@db:5432/audio_assistant
     volumes:
       - .:/app

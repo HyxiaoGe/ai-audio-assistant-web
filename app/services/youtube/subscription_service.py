@@ -253,6 +253,8 @@ class YouTubeSubscriptionService:
         user_id: str,
         page: int = 1,
         page_size: int = 50,
+        show_hidden: bool = False,
+        starred_only: bool = False,
     ) -> Tuple[List[YouTubeSubscription], int]:
         """Get cached subscriptions from database.
 
@@ -261,13 +263,24 @@ class YouTubeSubscriptionService:
             user_id: User ID
             page: Page number (1-indexed)
             page_size: Items per page
+            show_hidden: Include hidden channels
+            starred_only: Only return starred channels
 
         Returns:
             Tuple of (subscriptions list, total count)
         """
+        # Build base query conditions
+        conditions = [YouTubeSubscription.user_id == user_id]
+
+        if not show_hidden:
+            conditions.append(YouTubeSubscription.is_hidden == False)  # noqa: E712
+
+        if starred_only:
+            conditions.append(YouTubeSubscription.is_starred == True)  # noqa: E712
+
         # Get total count
         count_result = await db.execute(
-            select(func.count(YouTubeSubscription.id)).where(YouTubeSubscription.user_id == user_id)
+            select(func.count(YouTubeSubscription.id)).where(*conditions)
         )
         total = count_result.scalar() or 0
 
@@ -275,7 +288,7 @@ class YouTubeSubscriptionService:
         offset = (page - 1) * page_size
         result = await db.execute(
             select(YouTubeSubscription)
-            .where(YouTubeSubscription.user_id == user_id)
+            .where(*conditions)
             .order_by(YouTubeSubscription.channel_title)
             .offset(offset)
             .limit(page_size)
@@ -283,6 +296,131 @@ class YouTubeSubscriptionService:
         subscriptions = list(result.scalars().all())
 
         return subscriptions, total
+
+    async def get_subscription_by_channel(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        channel_id: str,
+    ) -> Optional[YouTubeSubscription]:
+        """Get subscription by channel ID.
+
+        Args:
+            db: Database session
+            user_id: User ID
+            channel_id: YouTube channel ID
+
+        Returns:
+            YouTubeSubscription or None
+        """
+        result = await db.execute(
+            select(YouTubeSubscription).where(
+                YouTubeSubscription.user_id == user_id,
+                YouTubeSubscription.channel_id == channel_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_starred_count(
+        self,
+        db: AsyncSession,
+        user_id: str,
+    ) -> int:
+        """Get count of starred subscriptions.
+
+        Args:
+            db: Database session
+            user_id: User ID
+
+        Returns:
+            Number of starred subscriptions
+        """
+        result = await db.execute(
+            select(func.count(YouTubeSubscription.id)).where(
+                YouTubeSubscription.user_id == user_id,
+                YouTubeSubscription.is_starred == True,  # noqa: E712
+            )
+        )
+        return result.scalar() or 0
+
+    async def batch_update_starred(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        channel_ids: List[str],
+        is_starred: bool,
+    ) -> int:
+        """Batch update starred status for multiple channels.
+
+        Args:
+            db: Database session
+            user_id: User ID
+            channel_ids: List of channel IDs
+            is_starred: New starred status
+
+        Returns:
+            Number of updated subscriptions
+        """
+        from sqlalchemy import update
+
+        result = await db.execute(
+            update(YouTubeSubscription)
+            .where(
+                YouTubeSubscription.user_id == user_id,
+                YouTubeSubscription.channel_id.in_(channel_ids),
+            )
+            .values(is_starred=is_starred, updated_at=datetime.now(timezone.utc))
+        )
+
+        await db.commit()
+        return result.rowcount
+
+    async def batch_update_auto_transcribe(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        channel_ids: List[str],
+        auto_transcribe: bool,
+        max_duration: Optional[int] = None,
+        language: Optional[str] = None,
+    ) -> int:
+        """Batch update auto-transcribe settings for multiple channels.
+
+        Args:
+            db: Database session
+            user_id: User ID
+            channel_ids: List of channel IDs
+            auto_transcribe: Enable/disable auto-transcribe
+            max_duration: Max video duration (optional)
+            language: Transcription language (optional)
+
+        Returns:
+            Number of updated subscriptions
+        """
+        from sqlalchemy import update
+
+        values: Dict[str, Any] = {
+            "auto_transcribe": auto_transcribe,
+            "updated_at": datetime.now(timezone.utc),
+        }
+
+        if max_duration is not None:
+            values["auto_transcribe_max_duration"] = max_duration
+
+        if language is not None:
+            values["auto_transcribe_language"] = language
+
+        result = await db.execute(
+            update(YouTubeSubscription)
+            .where(
+                YouTubeSubscription.user_id == user_id,
+                YouTubeSubscription.channel_id.in_(channel_ids),
+            )
+            .values(**values)
+        )
+
+        await db.commit()
+        return result.rowcount
 
     async def get_connection_status(
         self,

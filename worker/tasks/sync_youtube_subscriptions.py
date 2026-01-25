@@ -20,6 +20,7 @@ from app.config import settings
 from app.models.account import Account
 from app.models.youtube_subscription import YouTubeSubscription
 from worker.db import get_sync_db_session
+from worker.redis_client import publish_user_notification_sync
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,37 @@ def sync_youtube_subscriptions(
 
             logger.info(f"Synced {synced_count} subscriptions for user {user_id}")
 
+            # Trigger video sync for all subscribed channels
+            if synced_count > 0:
+                from worker.tasks.sync_youtube_videos import sync_channel_videos
+
+                channel_ids = [sub["channel_id"] for sub in subscriptions if sub.get("channel_id")]
+                for channel_id in channel_ids:
+                    sync_channel_videos.delay(
+                        user_id=user_id,
+                        channel_id=channel_id,
+                        max_videos=50,
+                        incremental=True,
+                    )
+                logger.info(f"Triggered video sync for {len(channel_ids)} channels")
+
+            # Send WebSocket notification
+            import json
+
+            notification = json.dumps(
+                {
+                    "code": 0,
+                    "message": "success",
+                    "data": {
+                        "type": "youtube_subscriptions_synced",
+                        "synced_count": synced_count,
+                    },
+                    "traceId": request_id or "",
+                },
+                ensure_ascii=False,
+            )
+            publish_user_notification_sync(user_id, notification)
+
             return {
                 "status": "success",
                 "synced_count": synced_count,
@@ -148,7 +180,7 @@ def _build_credentials(account: Account) -> Credentials:
     if expiry and expiry.tzinfo is not None:
         expiry = expiry.astimezone(timezone.utc).replace(tzinfo=None)
 
-    return Credentials(
+    return Credentials(  # nosec B106 - not a password
         token=account.access_token,
         refresh_token=account.refresh_token,
         token_uri="https://oauth2.googleapis.com/token",

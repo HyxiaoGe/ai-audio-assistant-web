@@ -36,6 +36,19 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=0),  # 每小时整点执行
         "options": {"queue": "default"},
     },
+    # YouTube 视频同步 - 每天 UTC 3:00 执行
+    "sync-youtube-videos-daily": {
+        "task": "worker.tasks.sync_youtube_videos.sync_all_subscriptions_videos",
+        "schedule": crontab(hour=3, minute=0),  # 每天 UTC 3:00
+        "options": {"queue": "default"},
+        "kwargs": {"max_videos_per_channel": 20},
+    },
+    # YouTube 智能同步检查 - 每小时 :30 执行
+    "check-youtube-scheduled-syncs": {
+        "task": "worker.tasks.sync_youtube_videos.check_scheduled_syncs",
+        "schedule": crontab(minute=30),  # 每小时 30 分执行
+        "options": {"queue": "default"},
+    },
 }
 
 ConfigManager.configure_db(
@@ -70,3 +83,5 @@ from worker.tasks import process_youtube  # noqa: F401, E402
 from worker.tasks import quota_alert  # noqa: F401, E402
 from worker.tasks import regenerate_summary  # noqa: F401, E402
 from worker.tasks import sync_youtube_subscriptions  # noqa: F401, E402
+from worker.tasks import sync_youtube_videos  # noqa: F401, E402
+from worker.tasks import youtube_auto_transcribe  # noqa: F401, E402

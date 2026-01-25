@@ -8,15 +8,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
 # Allow scope changes (Google may return additional scopes like openid, profile, email)
-os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"  # nosec B105
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
+from google.auth.transport.requests import Request  # noqa: E402
+from google.oauth2.credentials import Credentials  # noqa: E402
+from google_auth_oauthlib.flow import Flow  # noqa: E402
 
-from app.config import settings
-from app.core.exceptions import BusinessError
-from app.i18n.codes import ErrorCode
+from app.config import settings  # noqa: E402
+from app.core.exceptions import BusinessError  # noqa: E402
+from app.i18n.codes import ErrorCode  # noqa: E402
 
 logger = logging.getLogger("app.youtube.oauth")
 
@@ -120,7 +120,7 @@ class YouTubeOAuthService:
             )
 
         try:
-            credentials = Credentials(
+            credentials = Credentials(  # nosec B106 - not a password
                 token=None,
                 refresh_token=refresh_token,
                 token_uri="https://oauth2.googleapis.com/token",
@@ -169,7 +169,7 @@ class YouTubeOAuthService:
             else:
                 expiry = expires_at
 
-        return Credentials(
+        return Credentials(  # nosec B106 - not a password
             token=access_token,
             refresh_token=refresh_token,
             token_uri="https://oauth2.googleapis.com/token",

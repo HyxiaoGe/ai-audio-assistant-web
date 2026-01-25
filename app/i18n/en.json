@@ -43,5 +43,7 @@
   "51901": "YouTube authorization failed: {reason}",
   "51902": "YouTube authorization expired, please re-authorize",
   "51903": "YouTube API error: {reason}",
-  "51904": "Invalid YouTube authorization state, please try again"
+  "51904": "Invalid YouTube authorization state, please try again",
+  "51905": "Not subscribed to this channel: {reason}",
+  "51906": "Video not found in cache: {reason}"
 }

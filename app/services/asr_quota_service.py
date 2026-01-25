@@ -188,6 +188,55 @@ def get_quota_providers_sync(
     return {provider for (provider, _variant) in effective.keys()}
 
 
+def check_any_provider_available_sync(
+    session: Session,
+    providers: Iterable[str],
+    owner_user_id: Optional[str] = None,
+    variant: str = "file",
+    now: Optional[datetime] = None,
+) -> tuple[bool, list[str]]:
+    """Check if any ASR provider has available quota (sync version).
+
+    For use in Celery worker tasks.
+
+    Args:
+        session: Database session (sync)
+        providers: List of provider names to check
+        owner_user_id: User ID
+        variant: ASR variant (file, file_fast)
+        now: Current time
+
+    Returns:
+        (is_available, list of available providers)
+    """
+    provider_list = [p for p in providers if isinstance(p, str)]
+    if not provider_list:
+        return False, []
+
+    available = select_available_provider_sync(
+        session, provider_list, owner_user_id, variant=variant, now=now
+    )
+
+    # If no quota records, all providers are available (no quota limits)
+    quota_providers = get_quota_providers_sync(
+        session, provider_list, owner_user_id, variant=variant, now=now
+    )
+
+    if not quota_providers:
+        # No quota records, all providers are available
+        return True, provider_list
+
+    if available:
+        return True, available
+
+    # Check for providers without quota configured (unlimited)
+    unlimited_providers = [p for p in provider_list if p not in quota_providers]
+    if unlimited_providers:
+        return True, unlimited_providers
+
+    return False, []
+
+
 def record_usage_sync(
     session: Session,
     provider: str,

@@ -12,7 +12,9 @@ from app.models.task import Task
 from app.models.task_stage import TaskStage
 from app.models.transcript import Transcript
 from app.models.user import User
+from app.models.youtube_auto_transcribe_log import YouTubeAutoTranscribeLog
 from app.models.youtube_subscription import YouTubeSubscription
+from app.models.youtube_video import YouTubeVideo
 
 __all__ = [
     "User",
@@ -28,5 +30,7 @@ __all__ = [
     "AsrUserQuota",
     "ServiceConfig",
     "ServiceConfigHistory",
+    "YouTubeAutoTranscribeLog",
     "YouTubeSubscription",
+    "YouTubeVideo",
 ]

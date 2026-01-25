@@ -59,3 +59,17 @@ def publish_task_update_sync(task_id: str, user_id: str, message: str) -> None:
     client.publish(f"tasks:{task_id}", message)
     # Publish to user-global channel (new global WebSocket)
     client.publish(f"user:{user_id}:updates", message)
+
+
+def publish_user_notification_sync(user_id: str, message: str) -> None:
+    """
+    Publish notification to user's global channel.
+
+    Used for non-task notifications like YouTube sync completion.
+
+    Args:
+        user_id: User ID for user-global channel
+        message: JSON message to publish
+    """
+    client = get_sync_redis_client()
+    client.publish(f"user:{user_id}:updates", message)
