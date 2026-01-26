@@ -107,6 +107,7 @@ class VisualSummaryRequest(BaseModel):
     image_format: Literal["png", "svg"] = Field(
         default="png", description="图片格式（当 generate_image=True 时）"
     )
+    regenerate: bool = Field(default=False, description="是否强制重新生成（即使已存在）")
 
 
 class VisualSummaryResponse(BaseModel):

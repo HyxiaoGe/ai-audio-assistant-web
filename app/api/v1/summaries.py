@@ -687,6 +687,34 @@ async def generate_visual_summary(
             ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成可视化摘要"
         )
 
+    # Check if visual summary already exists (unless regenerate=True)
+    summary_type = f"visual_{data.visual_type}"
+    if not data.regenerate:
+        existing_stmt = (
+            select(Summary)
+            .where(
+                Summary.task_id == task_id,
+                Summary.summary_type == summary_type,
+                Summary.is_active.is_(True),
+            )
+            .order_by(Summary.created_at.desc())
+            .limit(1)
+        )
+        existing_result = await db.execute(existing_stmt)
+        existing_summary = existing_result.scalar_one_or_none()
+
+        if existing_summary:
+            # Return existing summary instead of creating new one
+            return success(
+                data={
+                    "task_id": task_id,
+                    "summary_id": str(existing_summary.id),
+                    "visual_type": data.visual_type,
+                    "status": "exists",
+                    "message": "可视化摘要已存在，如需重新生成请设置 regenerate=true",
+                }
+            )
+
     # Auto-detect content_style if not provided
     content_style = data.content_style or "general"
 

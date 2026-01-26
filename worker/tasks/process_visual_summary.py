@@ -54,6 +54,35 @@ def process_visual_summary(
 
         async with async_session_factory() as session:
             try:
+                # ===== Step 0: 检查是否已存在（防止并发重复创建） =====
+                from app.models.summary import Summary
+
+                summary_type = f"visual_{visual_type}"
+                existing_stmt = (
+                    select(Summary)
+                    .where(
+                        Summary.task_id == task_id,
+                        Summary.summary_type == summary_type,
+                        Summary.is_active.is_(True),
+                    )
+                    .limit(1)
+                )
+                existing_result = await session.execute(existing_stmt)
+                existing_summary = existing_result.scalar_one_or_none()
+
+                if existing_summary:
+                    logger.info(
+                        f"[{request_id}] Visual summary already exists for task {task_id}, "
+                        f"type: {visual_type}, skipping generation"
+                    )
+                    return {
+                        "task_id": task_id,
+                        "summary_id": str(existing_summary.id),
+                        "visual_type": visual_type,
+                        "status": "skipped",
+                        "reason": "already_exists",
+                    }
+
                 # ===== Step 1: 获取转写片段 =====
                 logger.info(f"[{request_id}] Fetching transcripts for task {task_id}")
 
