@@ -718,6 +718,18 @@ async def generate_visual_summary(
     # Auto-detect content_style if not provided
     content_style = data.content_style or "general"
 
+    # If regenerate=true, deactivate existing summaries first
+    if data.regenerate:
+        deactivate_stmt = (
+            Summary.__table__.update()
+            .where(Summary.task_id == task_id)
+            .where(Summary.summary_type == summary_type)
+            .where(Summary.is_active.is_(True))
+            .values(is_active=False)
+        )
+        await db.execute(deactivate_stmt)
+        await db.commit()
+
     # Submit visual summary generation task
     trace_id = getattr(request.state, "trace_id", None)
     celery_app.send_task(
