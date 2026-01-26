@@ -5,7 +5,7 @@
 repos:
   # 基础检查
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace        # 移除行尾空格
       - id: end-of-file-fixer          # 确保文件以换行符结尾
