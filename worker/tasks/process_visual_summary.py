@@ -20,6 +20,7 @@ def process_visual_summary(
     image_format: str = "png",
     user_id: str | None = None,
     request_id: str | None = None,
+    regenerate: bool = False,
 ):
     """可视化摘要生成任务
 
@@ -33,10 +34,12 @@ def process_visual_summary(
         image_format: 图片格式 (png/svg)
         user_id: 用户 ID
         request_id: 请求追踪 ID
+        regenerate: 是否强制重新生成
     """
     logger.info(
         f"[{request_id}] Starting visual summary generation - "
-        f"task_id: {task_id}, type: {visual_type}, style: {content_style}"
+        f"task_id: {task_id}, type: {visual_type}, style: {content_style}, "
+        f"regenerate: {regenerate}"
     )
     logger.info(
         f"[{request_id}] Parameters: provider={provider} (type: {type(provider).__name__}), "
@@ -47,7 +50,7 @@ def process_visual_summary(
 
     async def _process():
         import redis.asyncio as aioredis
-        from sqlalchemy import select
+        from sqlalchemy import select, update
 
         from app.core.config import settings
         from app.db import async_session_factory
@@ -76,31 +79,32 @@ def process_visual_summary(
                 }
 
             async with async_session_factory() as session:
-                # 检查是否已存在
-                existing_stmt = (
-                    select(Summary)
-                    .where(
-                        Summary.task_id == task_id,
-                        Summary.summary_type == summary_type,
-                        Summary.is_active.is_(True),
+                # 检查是否已存在（如果不是强制重新生成）
+                if not regenerate:
+                    existing_stmt = (
+                        select(Summary)
+                        .where(
+                            Summary.task_id == task_id,
+                            Summary.summary_type == summary_type,
+                            Summary.is_active.is_(True),
+                        )
+                        .limit(1)
                     )
-                    .limit(1)
-                )
-                existing_result = await session.execute(existing_stmt)
-                existing_summary = existing_result.scalar_one_or_none()
+                    existing_result = await session.execute(existing_stmt)
+                    existing_summary = existing_result.scalar_one_or_none()
 
-                if existing_summary:
-                    logger.info(
-                        f"[{request_id}] Visual summary already exists for task {task_id}, "
-                        f"type: {visual_type}, skipping generation"
-                    )
-                    return {
-                        "task_id": task_id,
-                        "summary_id": str(existing_summary.id),
-                        "visual_type": visual_type,
-                        "status": "skipped",
-                        "reason": "already_exists",
-                    }
+                    if existing_summary:
+                        logger.info(
+                            f"[{request_id}] Visual summary already exists for task {task_id}, "
+                            f"type: {visual_type}, skipping generation"
+                        )
+                        return {
+                            "task_id": task_id,
+                            "summary_id": str(existing_summary.id),
+                            "visual_type": visual_type,
+                            "status": "skipped",
+                            "reason": "already_exists",
+                        }
 
                 # ===== Step 1: 获取转写片段 =====
                 logger.info(f"[{request_id}] Fetching transcripts for task {task_id}")
@@ -149,7 +153,22 @@ def process_visual_summary(
                     image_format=image_format,
                 )
 
-                # ===== Step 3: 提交数据库事务 =====
+                # ===== Step 3: 如果是重新生成，deactivate 旧记录 =====
+                if regenerate:
+                    deactivate_stmt = (
+                        update(Summary)
+                        .where(Summary.task_id == task_id)
+                        .where(Summary.summary_type == summary_type)
+                        .where(Summary.id != summary.id)
+                        .where(Summary.is_active.is_(True))
+                        .values(is_active=False)
+                    )
+                    await session.execute(deactivate_stmt)
+                    logger.info(
+                        f"[{request_id}] Deactivated old visual summaries for task {task_id}"
+                    )
+
+                # ===== Step 4: 提交数据库事务 =====
                 await session.commit()
 
                 logger.info(
