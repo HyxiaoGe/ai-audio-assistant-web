@@ -52,7 +52,7 @@ def process_visual_summary(
         import redis.asyncio as aioredis
         from sqlalchemy import select, update
 
-        from app.core.config import settings
+        from app.config import settings
         from app.db import async_session_factory
         from app.models.summary import Summary
         from app.models.transcript import Transcript
