@@ -232,15 +232,21 @@ async def generate_visual_summary(
     logger.info(f"Task {task_id}: Preprocessed text length: {len(preprocessed_text)} chars")
 
     # ===== Step 3: 获取 LLM 服务 =====
-    # Set default model_id if not provided
-    if not model_id and provider:
-        default_models = {
-            "deepseek": "deepseek-chat",
-            "qwen": "qwen-plus",
-            "doubao": "doubao-pro-4k",
-            "moonshot": "moonshot-v1-8k",
-        }
-        model_id = default_models.get(provider)
+    # Set defaults if not provided
+    default_models = {
+        "deepseek": "deepseek-chat",
+        "qwen": "qwen-plus",
+        "doubao": "doubao-pro-4k",
+        "moonshot": "moonshot-v1-8k",
+    }
+
+    # If neither provider nor model_id is provided, use deepseek as default
+    if not provider and not model_id:
+        provider = "deepseek"
+        model_id = "deepseek-chat"
+    elif provider and not model_id:
+        # If provider is set but model_id is not, use default model for that provider
+        model_id = default_models.get(provider, "deepseek-chat")
 
     llm_service: LLMService = await SmartFactory.get_service(
         "llm", provider=provider, model_id=model_id
