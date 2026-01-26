@@ -46,18 +46,37 @@ def process_visual_summary(
     )
 
     async def _process():
+        import redis.asyncio as aioredis
         from sqlalchemy import select
 
+        from app.core.config import settings
         from app.db import async_session_factory
+        from app.models.summary import Summary
         from app.models.transcript import Transcript
         from worker.tasks.summary_visual_generator import generate_visual_summary
 
-        async with async_session_factory() as session:
-            try:
-                # ===== Step 0: 检查是否已存在（防止并发重复创建） =====
-                from app.models.summary import Summary
+        # ===== Step 0: 使用 Redis 锁防止并发重复创建 =====
+        summary_type = f"visual_{visual_type}"
+        lock_key = f"visual_summary_lock:{task_id}:{visual_type}"
 
-                summary_type = f"visual_{visual_type}"
+        redis_client = aioredis.from_url(settings.REDIS_URL)
+        try:
+            # 尝试获取锁，超时 120 秒（LLM 生成可能较慢）
+            lock_acquired = await redis_client.set(lock_key, "1", nx=True, ex=120)
+            if not lock_acquired:
+                logger.info(
+                    f"[{request_id}] Another worker is generating visual summary for "
+                    f"task {task_id}, type: {visual_type}, skipping"
+                )
+                return {
+                    "task_id": task_id,
+                    "visual_type": visual_type,
+                    "status": "skipped",
+                    "reason": "generation_in_progress",
+                }
+
+            async with async_session_factory() as session:
+                # 检查是否已存在
                 existing_stmt = (
                     select(Summary)
                     .where(
@@ -147,17 +166,17 @@ def process_visual_summary(
                     "status": "completed",
                 }
 
-            except Exception as e:
-                logger.error(
-                    f"[{request_id}] Failed to generate visual summary: {e}",
-                    exc_info=True,
-                )
-                await session.rollback()
-                raise
+        finally:
+            # 释放锁并关闭 Redis 连接
+            await redis_client.delete(lock_key)
+            await redis_client.aclose()
 
     try:
         result = asyncio.run(_process())
-        logger.info(f"[{request_id}] Visual summary task completed: {result['summary_id']}")
+        if result.get("status") == "completed":
+            logger.info(f"[{request_id}] Visual summary task completed: {result.get('summary_id')}")
+        else:
+            logger.info(f"[{request_id}] Visual summary task result: {result}")
         return result
 
     except Exception as e:
