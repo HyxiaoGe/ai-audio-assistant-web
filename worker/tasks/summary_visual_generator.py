@@ -169,11 +169,9 @@ async def upload_visual_image(
         tmp_path = tmp_file.name
 
     try:
-        # 上传到存储
+        # 上传到存储（同步方法）
         content_type = "image/png" if image_format == "png" else "image/svg+xml"
-        await storage.upload_file(
-            object_name=object_key, file_path=tmp_path, content_type=content_type
-        )
+        storage.upload_file(object_name=object_key, file_path=tmp_path, content_type=content_type)
         logger.info(f"Uploaded visual image to storage: {object_key}")
         return object_key
 

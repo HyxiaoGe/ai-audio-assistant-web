@@ -53,11 +53,9 @@ async def upload_outline_image(
         tmp_path = tmp_file.name
 
     try:
-        # 上传到存储
+        # 上传到存储（同步方法）
         content_type = f"image/{image_format}"
-        await storage.upload_file(
-            object_name=object_key, file_path=tmp_path, content_type=content_type
-        )
+        storage.upload_file(object_name=object_key, file_path=tmp_path, content_type=content_type)
         logger.info(f"Uploaded outline image to storage: {object_key}")
         return object_key
 
@@ -177,7 +175,7 @@ async def generate_outline_summary(
         summary_type="visual_outline",
         version=1,
         is_active=True,
-        content=None,  # outline 类型没有文本内容
+        content="[AI 生成的内容大纲图]",  # outline 类型主要是图片，此处为占位描述
         model_used=actual_model,
         prompt_version="v1.5.0",
         token_count=0,
