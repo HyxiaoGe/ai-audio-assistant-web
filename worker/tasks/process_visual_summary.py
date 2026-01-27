@@ -153,8 +153,15 @@ def process_visual_summary(
                     image_format=image_format,
                 )
 
-                # ===== Step 3: 如果是重新生成，deactivate 旧记录 =====
+                # ===== Step 3: Flush 获取生成的 ID =====
+                # summary.id 在 flush 之前是 None（服务器端 UUID 生成）
+                await session.flush()
+
+                # ===== Step 4: 如果是重新生成，deactivate 旧记录 =====
                 if regenerate:
+                    logger.info(
+                        f"[{request_id}] Deactivating old summaries, new summary.id: {summary.id}"
+                    )
                     deactivate_stmt = (
                         update(Summary)
                         .where(Summary.task_id == task_id)
@@ -168,7 +175,7 @@ def process_visual_summary(
                         f"[{request_id}] Deactivated old visual summaries for task {task_id}"
                     )
 
-                # ===== Step 4: 提交数据库事务 =====
+                # ===== Step 5: 提交数据库事务 =====
                 await session.commit()
 
                 logger.info(
