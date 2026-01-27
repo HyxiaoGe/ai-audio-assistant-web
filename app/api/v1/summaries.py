@@ -662,7 +662,13 @@ async def generate_visual_summary(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> JSONResponse:
-    """生成可视化摘要（思维导图/时间轴/流程图）"""
+    """生成可视化摘要（思维导图/时间轴/流程图/大纲图）
+
+    - mindmap: 思维导图（Mermaid 格式）
+    - timeline: 时间轴（Mermaid 格式）
+    - flowchart: 流程图（Mermaid 格式）
+    - outline: 大纲图（AI 图像生成，默认使用 google/gemini-3-pro-image-preview）
+    """
     from worker.celery_app import celery_app
 
     # Verify task exists and belongs to user

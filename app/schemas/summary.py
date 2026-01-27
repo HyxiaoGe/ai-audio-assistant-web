@@ -90,18 +90,20 @@ class SummaryComparisonResponse(BaseModel):
 class VisualSummaryRequest(BaseModel):
     """可视化摘要生成请求"""
 
-    visual_type: Literal["mindmap", "timeline", "flowchart"] = Field(
-        description="可视化类型：mindmap(思维导图), timeline(时间轴), flowchart(流程图)"
+    visual_type: Literal["mindmap", "timeline", "flowchart", "outline"] = Field(
+        description="可视化类型：mindmap(思维导图), timeline(时间轴), flowchart(流程图), outline(大纲图)"
     )
     content_style: Optional[str] = Field(
         default=None,
         description="内容风格 (meeting/lecture/podcast/video/general)，为 None 时自动检测",
     )
     provider: Optional[str] = Field(
-        default=None, description="LLM 服务提供商（如 doubao, deepseek），为 None 则自动选择"
+        default=None,
+        description="LLM 服务提供商。outline 类型默认使用 openrouter，其他类型为 None 则自动选择",
     )
     model_id: Optional[str] = Field(
-        default=None, description="模型 ID（如 deepseek-chat），用于支持多模型的服务"
+        default=None,
+        description="模型 ID。outline 类型默认使用 google/gemini-3-pro-image-preview",
     )
     generate_image: bool = Field(default=True, description="是否生成 PNG/SVG 图片（后端渲染）")
     image_format: Literal["png", "svg"] = Field(
@@ -116,9 +118,9 @@ class VisualSummaryResponse(BaseModel):
     id: str
     task_id: str
     visual_type: str
-    format: str  # "mermaid"
-    content: str  # Mermaid 语法代码
-    image_url: Optional[str] = None  # 生成的图片 URL（如果有）
+    format: str  # "mermaid" 或 "image"（outline 类型）
+    content: Optional[str] = None  # Mermaid 语法代码（outline 类型为 None）
+    image_url: Optional[str] = None  # 生成的图片 URL
     model_used: Optional[str] = None
     token_count: Optional[int] = None
     created_at: datetime

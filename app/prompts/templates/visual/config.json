@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "category": "visual",
   "supported_locales": ["zh-CN", "en-US"],
   "supported_content_styles": ["meeting", "lecture", "podcast", "interview", "tutorial", "review", "news", "explainer", "documentary", "video", "general"],
@@ -33,6 +33,20 @@
         "top_p": 0.9
       },
       "recommended_for": ["meeting", "video", "general"]
+    },
+    "outline": {
+      "description": "生成内容大纲图（AI 图像生成）",
+      "output_format": "image",
+      "model_params": {
+        "temperature": 0.7,
+        "max_tokens": 4096
+      },
+      "image_config": {
+        "aspect_ratio": "3:4",
+        "image_size": "2K",
+        "model": "google/gemini-3-pro-image-preview"
+      },
+      "recommended_for": ["lecture", "podcast", "video", "documentary", "explainer"]
     }
   }
 }

@@ -200,6 +200,23 @@ class PromptManager:
             },
         }
 
+    def get_visual_config(self, visual_type: str) -> Dict[str, Any]:
+        """获取可视化类型的配置
+
+        Args:
+            visual_type: 可视化类型（如 mindmap, timeline, flowchart, outline）
+
+        Returns:
+            包含 output_format, model_params, image_config 等的配置字典
+        """
+        config = self._load_config("visual")
+        prompt_types = config.get("prompt_types", {})
+
+        if visual_type not in prompt_types:
+            return {}
+
+        return prompt_types[visual_type]
+
 
 # 全局单例
 _prompt_manager = PromptManager()

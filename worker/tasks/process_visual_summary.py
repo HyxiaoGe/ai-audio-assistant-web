@@ -26,10 +26,10 @@ def process_visual_summary(
 
     Args:
         task_id: 任务 ID
-        visual_type: 可视化类型 (mindmap/timeline/flowchart)
+        visual_type: 可视化类型 (mindmap/timeline/flowchart/outline)
         content_style: 内容风格 (meeting/lecture/podcast/video/general)
-        provider: LLM provider（可选）
-        model_id: LLM model ID（可选）
+        provider: LLM provider（可选，outline 类型默认 openrouter）
+        model_id: LLM model ID（可选，outline 类型默认 google/gemini-3-pro-image-preview）
         generate_image: 是否生成图片
         image_format: 图片格式 (png/svg)
         user_id: 用户 ID
@@ -140,18 +140,34 @@ def process_visual_summary(
                 # ===== Step 2: 生成可视化摘要 =====
                 logger.info(f"[{request_id}] Generating {visual_type} visual summary")
 
-                summary = await generate_visual_summary(
-                    task_id=task_id,
-                    segments=segments,
-                    visual_type=visual_type,
-                    content_style=content_style,
-                    session=session,
-                    user_id=user_id,
-                    provider=provider,
-                    model_id=model_id,
-                    generate_image=generate_image,
-                    image_format=image_format,
-                )
+                if visual_type == "outline":
+                    # outline 类型使用 AI 图像生成
+                    from worker.tasks.outline_generator import generate_outline_summary
+
+                    summary = await generate_outline_summary(
+                        task_id=task_id,
+                        segments=segments,
+                        content_style=content_style,
+                        session=session,
+                        user_id=user_id,
+                        provider=provider,
+                        model_id=model_id,
+                        image_format=image_format,
+                    )
+                else:
+                    # 其他类型使用 Mermaid 生成
+                    summary = await generate_visual_summary(
+                        task_id=task_id,
+                        segments=segments,
+                        visual_type=visual_type,
+                        content_style=content_style,
+                        session=session,
+                        user_id=user_id,
+                        provider=provider,
+                        model_id=model_id,
+                        generate_image=generate_image,
+                        image_format=image_format,
+                    )
 
                 # ===== Step 3: Flush 获取生成的 ID =====
                 # summary.id 在 flush 之前是 None（服务器端 UUID 生成）

@@ -383,3 +383,128 @@ class OpenRouterLLMService(LLMService):
         OpenRouter 价格随模型变化，统一返回 0 以避免误导。
         """
         return 0.0
+
+    @monitor("llm", "openrouter")
+    async def generate_image(
+        self,
+        prompt: str,
+        system_message: str | None = None,
+        aspect_ratio: str = "16:9",
+        image_size: str = "2K",
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> bytes:
+        """生成图像
+
+        使用支持图像生成的模型（如 google/gemini-3-pro-image-preview）生成图像。
+
+        Args:
+            prompt: 图像生成提示词
+            system_message: 系统消息（可选）
+            aspect_ratio: 宽高比，支持 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9
+            image_size: 分辨率，支持 1K, 2K, 4K
+            temperature: 温度参数
+            max_tokens: 最大 token 数
+
+        Returns:
+            bytes: 图像二进制数据（PNG 格式）
+
+        Raises:
+            BusinessError: 生成失败时抛出
+        """
+        import base64
+
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": self._model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "modalities": ["image", "text"],
+            "image_config": {
+                "aspect_ratio": aspect_ratio,
+                "image_size": image_size,
+            },
+        }
+
+        headers = self._build_headers()
+
+        try:
+            async with httpx.AsyncClient(base_url=self._base_url, timeout=180.0) as client:
+                response = await client.post("/chat/completions", json=payload, headers=headers)
+                response.raise_for_status()
+
+                result = response.json()
+                if "error" in result:
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                        reason=str(result.get("error")),
+                    )
+
+                # 从响应中提取图像
+                message = result.get("choices", [{}])[0].get("message", {})
+                images = message.get("images", [])
+
+                if not images:
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                        reason="OpenRouter returned no images",
+                    )
+
+                # 获取第一张图像的 base64 数据
+                image_url = images[0].get("image_url", {}).get("url", "")
+                if not image_url:
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                        reason="OpenRouter returned empty image URL",
+                    )
+
+                # 解析 data URL: data:image/png;base64,xxxxx
+                if image_url.startswith("data:"):
+                    # 提取 base64 部分
+                    parts = image_url.split(",", 1)
+                    if len(parts) != 2:
+                        raise BusinessError(
+                            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                            reason="Invalid image data URL format",
+                        )
+                    image_data = base64.b64decode(parts[1])
+                else:
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                        reason=f"Unexpected image URL format: {image_url[:50]}...",
+                    )
+
+                return image_data
+
+        except httpx.TimeoutException as exc:
+            raise BusinessError(
+                ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                reason=f"OpenRouter image generation timeout: {exc}",
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            if status_code == 429:
+                raise BusinessError(
+                    ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                    reason=f"OpenRouter rate limit exceeded (HTTP {status_code})",
+                ) from exc
+            elif 500 <= status_code < 600:
+                raise BusinessError(
+                    ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                    reason=f"OpenRouter server error (HTTP {status_code})",
+                ) from exc
+            else:
+                raise BusinessError(
+                    ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                    reason=f"OpenRouter image request failed (HTTP {status_code}): {exc.response.text}",
+                ) from exc
+        except httpx.HTTPError as exc:
+            raise BusinessError(
+                ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                reason=f"OpenRouter network error: {exc}",
+            ) from exc
