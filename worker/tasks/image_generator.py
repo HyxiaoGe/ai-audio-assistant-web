@@ -14,7 +14,7 @@ import re
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from app.core.smart_factory import SmartFactory
 from app.prompts.manager import get_prompt_manager
@@ -253,13 +253,13 @@ async def generate_single_image(
 
 
 async def generate_images_parallel(
-    placeholders: list[dict],
+    placeholders: list[dict[str, Any]],
     user_id: str,
     task_id: str,
     max_images: int = 3,
     timeout: int = 60,
-    on_image_ready: Optional[callable] = None,
-) -> list[dict]:
+    on_image_ready: Optional[Callable[[dict[str, Any], int, int], None]] = None,
+) -> list[dict[str, Any]]:
     """并行生成多张图片，每生成一张立即回调
 
     Args:
@@ -283,14 +283,14 @@ async def generate_images_parallel(
     logger.info(f"Generating {total} images in parallel for task {task_id}")
 
     # 创建任务，保留索引信息
-    async def generate_with_index(index: int, item: dict) -> tuple[int, dict]:
+    async def generate_with_index(index: int, item: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         result = await generate_single_image(item, user_id, task_id, timeout)
         return index, result
 
     tasks = [asyncio.create_task(generate_with_index(i, p)) for i, p in enumerate(placeholders)]
 
     # 按完成顺序处理结果
-    final_results = [None] * total
+    final_results: list[dict[str, Any]] = [{}] * total
     completed_count = 0
 
     for coro in asyncio.as_completed(tasks):
@@ -307,7 +307,7 @@ async def generate_images_parallel(
             logger.error(f"Image generation exception: {e}")
             # 找到未完成的占位符
             for i, r in enumerate(final_results):
-                if r is None:
+                if not r:
                     final_results[i] = {
                         "placeholder": placeholders[i]["placeholder"],
                         "url": None,
@@ -319,7 +319,7 @@ async def generate_images_parallel(
                         on_image_ready(final_results[i], completed_count, total)
                     break
 
-    success_count = sum(1 for r in final_results if r and r["status"] == "success")
+    success_count = sum(1 for r in final_results if r and r.get("status") == "success")
     logger.info(f"Image generation completed: {success_count}/{total} succeeded")
 
     return final_results
@@ -361,9 +361,9 @@ async def process_summary_images(
     user_id: str,
     summary_type: str,
     content_style: str | None = None,
-    redis_client: Optional[object] = None,
+    redis_client: Optional[Any] = None,
     stream_key: Optional[str] = None,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict[str, Any]]]:
     """处理摘要中的图片占位符
 
     Args:

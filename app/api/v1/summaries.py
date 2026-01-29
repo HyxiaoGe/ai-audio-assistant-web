@@ -847,4 +847,4 @@ async def get_summary_image(path: str) -> "Response":
 
         return Response(content=image_data, media_type=content_type)
     except Exception as e:
-        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND, reason=f"Image not found: {e}")
+        raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR, reason=f"Image not found: {e}")
