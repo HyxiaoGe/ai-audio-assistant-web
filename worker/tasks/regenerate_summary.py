@@ -20,6 +20,11 @@ from app.models.transcript import Transcript
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import get_sync_redis_client
+from worker.tasks.image_generator import (
+    extract_image_placeholders,
+    is_auto_images_enabled,
+    process_summary_images,
+)
 
 logger = logging.getLogger("worker.regenerate_summary")
 
@@ -115,6 +120,7 @@ def _regenerate_summary(
     stream_key = f"summary_stream:{task_id}:{summary_type}"
 
     user_id: Optional[str] = None
+    content_style: str = "meeting"  # 默认风格
     with get_sync_db_session() as session:
         transcript_stmt = (
             select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
@@ -125,9 +131,14 @@ def _regenerate_summary(
         if not transcripts:
             raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要")
 
-        user_id = session.execute(
-            select(Task.user_id).where(Task.id == task_id)
-        ).scalar_one_or_none()
+        # 获取 user_id 和 content_style
+        task_result = session.execute(
+            select(Task.user_id, Task.options).where(Task.id == task_id)
+        ).first()
+        if task_result:
+            user_id = task_result[0]
+            options = task_result[1] or {}
+            content_style = options.get("summary_style") or "meeting"
 
         # 将旧摘要标记为非活跃
         summary_stmt = select(Summary).where(
@@ -184,6 +195,8 @@ def _regenerate_summary(
     else:
         logger.info("[%s] Auto-selected LLM model: %s", request_id, used_model_id)
 
+    logger.info("[%s] Using content_style: %s", request_id, content_style)
+
     redis_client.publish(
         stream_key,
         json.dumps(
@@ -212,8 +225,8 @@ def _regenerate_summary(
 
         async def _generate():
             nonlocal full_content
-            logger.info(f"[{request_id}] Starting stream generation for {stream_key}")
-            async for chunk in llm_service.summarize_stream(transcript_text, summary_type):
+            logger.info(f"[{request_id}] Starting stream generation for {stream_key} (style: {content_style})")
+            async for chunk in llm_service.summarize_stream(transcript_text, summary_type, content_style):
                 full_content += chunk
                 redis_client.publish(
                     stream_key,
@@ -272,6 +285,10 @@ def _regenerate_summary(
                 f"type: {summary_type}, version: {new_version}, id: {summary_id}"
             )
 
+        # 检查是否有图片占位符
+        placeholders = extract_image_placeholders(full_content)
+        has_images = len(placeholders) > 0
+
         redis_client.publish(
             stream_key,
             json.dumps(
@@ -286,12 +303,53 @@ def _regenerate_summary(
                         "total_length": len(full_content),
                         "provider": used_provider,
                         "model_id": used_model_id,
+                        "has_images": has_images,
+                        "image_count": len(placeholders),
                     },
                 },
                 ensure_ascii=False,
             ),
         )
         logger.info(f"[{request_id}] Published summary.completed event for summary {summary_id}")
+
+        # 处理图片占位符（如果启用且有占位符）
+        if has_images and is_auto_images_enabled(summary_type):
+            logger.info(
+                f"[{request_id}] Processing {len(placeholders)} image placeholders for task {task_id}"
+            )
+
+            async def _process_images():
+                return await process_summary_images(
+                    content=full_content,
+                    task_id=task_id,
+                    user_id=user_id or "",
+                    summary_type=summary_type,
+                    content_style=content_style,
+                    redis_client=redis_client,
+                    stream_key=stream_key,
+                )
+
+            try:
+                final_content, image_results = asyncio.run(_process_images())
+
+                # 更新摘要内容
+                if image_results:
+                    with get_sync_db_session() as session:
+                        summary_to_update = session.query(Summary).filter(
+                            Summary.id == summary_id
+                        ).first()
+                        if summary_to_update:
+                            summary_to_update.content = final_content
+                            session.commit()
+                            logger.info(
+                                f"[{request_id}] Updated summary {summary_id} with "
+                                f"{len([r for r in image_results if r['status'] == 'success'])} images"
+                            )
+            except Exception as img_err:
+                # 图片生成失败不影响摘要，只记录日志
+                logger.warning(
+                    f"[{request_id}] Image processing failed for task {task_id}: {img_err}"
+                )
 
     except Exception as e:
         error_code = getattr(e, "code", "UNKNOWN_ERROR")

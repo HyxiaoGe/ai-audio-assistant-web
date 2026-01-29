@@ -6,7 +6,7 @@ from typing import AsyncIterator
 
 from fastapi import APIRouter, Body, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -804,3 +804,47 @@ async def get_visual_summary(
     )
 
     return success(data=jsonable_encoder(response))
+
+
+# ===== Summary Images Endpoint =====
+
+
+@router.get("/images/{path:path}")
+async def get_summary_image(path: str) -> "Response":
+    """获取摘要配图（直接代理返回图片内容）
+
+    path 格式: {user_id}/{task_id}/{image_id}.png
+    """
+    from minio import Minio
+
+    from app.config import settings
+
+    # 完整的 object_key
+    object_key = f"summary_images/{path}"
+
+    # 直接从 MinIO 获取图片内容
+    client = Minio(
+        endpoint=settings.MINIO_ENDPOINT,
+        access_key=settings.MINIO_ACCESS_KEY,
+        secret_key=settings.MINIO_SECRET_KEY,
+        secure=bool(settings.MINIO_USE_SSL),
+    )
+
+    try:
+        response = client.get_object(settings.MINIO_BUCKET, object_key)
+        image_data = response.read()
+        response.close()
+        response.release_conn()
+
+        # 根据扩展名确定 content-type
+        content_type = "image/png"
+        if path.endswith(".jpg") or path.endswith(".jpeg"):
+            content_type = "image/jpeg"
+        elif path.endswith(".gif"):
+            content_type = "image/gif"
+        elif path.endswith(".webp"):
+            content_type = "image/webp"
+
+        return Response(content=image_data, media_type=content_type)
+    except Exception as e:
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND, reason=f"Image not found: {e}")

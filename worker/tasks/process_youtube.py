@@ -37,6 +37,11 @@ from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_task_update_sync
 from worker.stage_manager import StageManager
+from worker.tasks.image_generator import (
+    extract_image_placeholders,
+    is_auto_images_enabled,
+    process_summary_images,
+)
 
 logger = logging.getLogger("worker.process_youtube")
 
@@ -1103,24 +1108,33 @@ def _process_youtube(
                     task.llm_provider = llm_provider
                     session.commit()
                 full_text = "\n".join([seg.content for seg in segments])
+
+                # 提取 content_style
+                options = task.options or {}
+                content_style = options.get("summary_style") or "meeting"
+                if not isinstance(content_style, str):
+                    content_style = "meeting"
+
                 logger.info(
-                    "Task %s: Starting LLM summarization with %d characters of text",
+                    "Task %s: Starting LLM summarization with %d characters (style: %s)",
                     task_id,
                     len(full_text),
-                    extra={"task_id": task_id, "text_length": len(full_text)},
+                    content_style,
+                    extra={"task_id": task_id, "text_length": len(full_text), "content_style": content_style},
                 )
 
                 summaries = []
                 llm_usages: list[LLMUsage] = []
                 for summary_type in ("overview", "key_points", "action_items"):
                     logger.info(
-                        "Task %s: Generating %s summary",
+                        "Task %s: Generating %s summary (style: %s)",
                         task_id,
                         summary_type,
-                        extra={"task_id": task_id, "summary_type": summary_type},
+                        content_style,
+                        extra={"task_id": task_id, "summary_type": summary_type, "content_style": content_style},
                     )
                     try:
-                        content = asyncio.run(llm_service.summarize(full_text, summary_type))
+                        content = asyncio.run(llm_service.summarize(full_text, summary_type, content_style))
                     except Exception:
                         if llm_provider:
                             llm_usages.append(
@@ -1176,6 +1190,56 @@ def _process_youtube(
                 if llm_usages:
                     session.add_all(llm_usages)
                 session.commit()
+
+                # ========== 处理 overview 摘要的图片 ==========
+                for summary in summaries:
+                    if summary.summary_type == "overview" and is_auto_images_enabled(
+                        "overview", content_style
+                    ):
+                        placeholders = extract_image_placeholders(summary.content)
+                        if placeholders:
+                            logger.info(
+                                "Task %s: Found %d image placeholders in overview summary",
+                                task_id,
+                                len(placeholders),
+                                extra={"task_id": task_id, "placeholder_count": len(placeholders)},
+                            )
+                            try:
+                                final_content, image_results = asyncio.run(
+                                    process_summary_images(
+                                        content=summary.content,
+                                        task_id=str(task.id),
+                                        user_id=str(task.user_id),
+                                        summary_type="overview",
+                                        content_style=content_style,
+                                    )
+                                )
+                                if image_results:
+                                    success_count = sum(
+                                        1 for r in image_results if r["status"] == "success"
+                                    )
+                                    logger.info(
+                                        "Task %s: Generated %d/%d images for overview summary",
+                                        task_id,
+                                        success_count,
+                                        len(image_results),
+                                        extra={
+                                            "task_id": task_id,
+                                            "success_count": success_count,
+                                            "total_count": len(image_results),
+                                        },
+                                    )
+                                    # 更新摘要内容
+                                    summary.content = final_content
+                                    session.commit()
+                            except Exception as img_err:
+                                logger.warning(
+                                    "Task %s: Image processing failed: %s",
+                                    task_id,
+                                    img_err,
+                                    extra={"task_id": task_id, "error": str(img_err)},
+                                )
+
                 stage_manager.complete_stage(
                     session, StageType.SUMMARIZE, {"summary_count": len(summaries)}
                 )

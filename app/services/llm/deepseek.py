@@ -165,7 +165,7 @@ class DeepSeekLLMService(LLMService):
             category="summary",
             prompt_type=summary_type,
             locale="zh-CN",
-            variables={"transcript": text, "content_style": content_style},
+            variables={"transcript": text, "content_style": content_style, "quality_notice": ""},
         )
 
         payload = {

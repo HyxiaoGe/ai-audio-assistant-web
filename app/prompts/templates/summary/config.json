@@ -1,5 +1,18 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
+  "features": {
+    "auto_images": {
+      "enabled": true,
+      "max_images": 3,
+      "timeout_seconds": 300,
+      "supported_summary_types": ["overview"],
+      "supported_content_styles": ["meeting", "lecture", "podcast", "video", "documentary", "explainer", "interview"],
+      "image_model": {
+        "provider": "openrouter",
+        "model_id": "google/gemini-3-pro-image-preview"
+      }
+    }
+  },
   "supported_content_styles": [
     "meeting",
     "lecture",
@@ -52,6 +65,15 @@
   "default_locale": "zh-CN",
   "supported_locales": ["zh-CN", "en-US"],
   "changelog": {
+    "1.4.0": {
+      "date": "2025-01-28",
+      "changes": [
+        "Added auto_images feature for AI-driven image generation in summaries",
+        "Image placeholders format: {{IMAGE: description}}",
+        "Supported for overview summary type with lecture, podcast, video, documentary, explainer styles",
+        "Maximum 3 images per summary with 60s timeout"
+      ]
+    },
     "1.3.0": {
       "date": "2025-01-25",
       "changes": [
