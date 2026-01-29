@@ -39,18 +39,12 @@ def extract_image_placeholders(content: str) -> list[dict]:
     # 先尝试双花括号格式
     double_matches = re.findall(r"\{\{IMAGE:\s*([^}]+)\}\}", content)
     for m in double_matches:
-        results.append({
-            "placeholder": f"{{{{IMAGE: {m}}}}}",
-            "description": m.strip()
-        })
+        results.append({"placeholder": f"{{{{IMAGE: {m}}}}}", "description": m.strip()})
 
     # 再尝试单花括号格式（排除已匹配的双花括号）
     single_matches = re.findall(r"(?<!\{)\{IMAGE:\s*([^}]+)\}(?!\})", content)
     for m in single_matches:
-        results.append({
-            "placeholder": f"{{IMAGE: {m}}}",
-            "description": m.strip()
-        })
+        results.append({"placeholder": f"{{IMAGE: {m}}}", "description": m.strip()})
 
     return results
 
@@ -137,7 +131,9 @@ async def upload_image(
         # 上传到 MinIO（供前端访问）
         try:
             minio_storage = await SmartFactory.get_service("storage", provider="minio")
-            minio_storage.upload_file(object_name=object_key, file_path=tmp_path, content_type=content_type)
+            minio_storage.upload_file(
+                object_name=object_key, file_path=tmp_path, content_type=content_type
+            )
             logger.info(f"Uploaded summary image to MinIO: {object_key}")
         except Exception as e:
             logger.warning(f"Failed to upload to MinIO: {e}")
@@ -145,7 +141,9 @@ async def upload_image(
         # 上传到云存储（备份）
         try:
             cloud_storage = await SmartFactory.get_service("storage")
-            cloud_storage.upload_file(object_name=object_key, file_path=tmp_path, content_type=content_type)
+            cloud_storage.upload_file(
+                object_name=object_key, file_path=tmp_path, content_type=content_type
+            )
             logger.info(f"Uploaded summary image to cloud storage: {object_key}")
         except Exception as e:
             logger.warning(f"Failed to upload to cloud storage: {e}")
@@ -222,6 +220,7 @@ async def generate_single_image(
 
         # 返回后端 API URL，前端通过 API 代理访问图片
         from app.config import settings
+
         # 本地开发用 localhost:8000，生产环境需要设置 API_BASE_URL
         api_base = (settings.API_BASE_URL or "http://localhost:8000").rstrip("/")
         image_path = object_key.replace("summary_images/", "")
@@ -288,10 +287,7 @@ async def generate_images_parallel(
         result = await generate_single_image(item, user_id, task_id, timeout)
         return index, result
 
-    tasks = [
-        asyncio.create_task(generate_with_index(i, p))
-        for i, p in enumerate(placeholders)
-    ]
+    tasks = [asyncio.create_task(generate_with_index(i, p)) for i, p in enumerate(placeholders)]
 
     # 按完成顺序处理结果
     final_results = [None] * total

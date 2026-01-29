@@ -225,8 +225,12 @@ def _regenerate_summary(
 
         async def _generate():
             nonlocal full_content
-            logger.info(f"[{request_id}] Starting stream generation for {stream_key} (style: {content_style})")
-            async for chunk in llm_service.summarize_stream(transcript_text, summary_type, content_style):
+            logger.info(
+                f"[{request_id}] Starting stream generation for {stream_key} (style: {content_style})"
+            )
+            async for chunk in llm_service.summarize_stream(
+                transcript_text, summary_type, content_style
+            ):
                 full_content += chunk
                 redis_client.publish(
                     stream_key,
@@ -335,9 +339,9 @@ def _regenerate_summary(
                 # 更新摘要内容
                 if image_results:
                     with get_sync_db_session() as session:
-                        summary_to_update = session.query(Summary).filter(
-                            Summary.id == summary_id
-                        ).first()
+                        summary_to_update = (
+                            session.query(Summary).filter(Summary.id == summary_id).first()
+                        )
                         if summary_to_update:
                             summary_to_update.content = final_content
                             session.commit()

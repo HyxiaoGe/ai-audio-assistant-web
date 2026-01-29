@@ -1120,7 +1120,11 @@ def _process_youtube(
                     task_id,
                     len(full_text),
                     content_style,
-                    extra={"task_id": task_id, "text_length": len(full_text), "content_style": content_style},
+                    extra={
+                        "task_id": task_id,
+                        "text_length": len(full_text),
+                        "content_style": content_style,
+                    },
                 )
 
                 summaries = []
@@ -1131,10 +1135,16 @@ def _process_youtube(
                         task_id,
                         summary_type,
                         content_style,
-                        extra={"task_id": task_id, "summary_type": summary_type, "content_style": content_style},
+                        extra={
+                            "task_id": task_id,
+                            "summary_type": summary_type,
+                            "content_style": content_style,
+                        },
                     )
                     try:
-                        content = asyncio.run(llm_service.summarize(full_text, summary_type, content_style))
+                        content = asyncio.run(
+                            llm_service.summarize(full_text, summary_type, content_style)
+                        )
                     except Exception:
                         if llm_provider:
                             llm_usages.append(
