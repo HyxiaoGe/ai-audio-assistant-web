@@ -12,9 +12,15 @@ RUN apt-get update \
         ffmpeg \
         nodejs \
         npm \
+        curl \
+        unzip \
     && npm install -g @mermaid-js/mermaid-cli \
     && mmdc --version \
-    && rm -rf /var/lib/apt/lists/*
+    # Install deno for yt-dlp YouTube extraction
+    && curl -fsSL https://deno.land/install.sh | sh \
+    && mv /root/.deno/bin/deno /usr/local/bin/ \
+    && deno --version \
+    && rm -rf /var/lib/apt/lists/* /root/.deno
 
 COPY pyproject.toml ./
 RUN python - <<'PY'

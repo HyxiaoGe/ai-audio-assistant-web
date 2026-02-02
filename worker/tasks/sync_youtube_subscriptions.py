@@ -20,12 +20,15 @@ from app.config import settings
 from app.models.account import Account
 from app.models.youtube_subscription import YouTubeSubscription
 from worker.db import get_sync_db_session
-from worker.redis_client import publish_user_notification_sync
+from worker.redis_client import get_sync_redis_client, publish_user_notification_sync
 
 logger = logging.getLogger(__name__)
 
 # Provider name for YouTube OAuth account
 YOUTUBE_PROVIDER = "youtube"
+
+# Lock duration for deduplication (seconds)
+SYNC_LOCK_DURATION = 30
 
 
 @shared_task(
@@ -58,6 +61,19 @@ def sync_youtube_subscriptions(
         Dict with sync results
     """
     logger.info(f"Starting YouTube subscription sync for user {user_id}")
+
+    # Deduplication: skip if another sync is already running for this user
+    redis_client = get_sync_redis_client()
+    lock_key = f"youtube_sync_lock:{user_id}"
+
+    # Try to acquire lock (SET NX with expiration)
+    if not redis_client.set(lock_key, "1", nx=True, ex=SYNC_LOCK_DURATION):
+        logger.info(f"Sync already in progress for user {user_id}, skipping duplicate")
+        return {
+            "status": "skipped",
+            "reason": "sync_already_in_progress",
+            "synced_count": 0,
+        }
 
     try:
         with get_sync_db_session() as session:
@@ -162,6 +178,9 @@ def sync_youtube_subscriptions(
             )
             publish_user_notification_sync(user_id, notification)
 
+            # Release lock after successful completion
+            redis_client.delete(lock_key)
+
             return {
                 "status": "success",
                 "synced_count": synced_count,
@@ -170,6 +189,8 @@ def sync_youtube_subscriptions(
 
     except Exception as e:
         logger.exception(f"Unexpected error in sync task: {e}")
+        # Release lock on error so user can retry
+        redis_client.delete(lock_key)
         raise  # Let Celery handle retry
 
 

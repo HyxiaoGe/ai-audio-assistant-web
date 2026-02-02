@@ -94,6 +94,7 @@ class YouTubeSubscriptionService:
             account.access_token = access_token
             account.refresh_token = refresh_token
             account.token_expires_at = expires_at
+            account.needs_reauth = False  # Clear reauth flag on reconnect
             logger.info(f"Updated YouTube account for user {user_id}")
         else:
             # Create new account
@@ -463,4 +464,5 @@ class YouTubeSubscriptionService:
             "subscription_count": subscription_count,
             "last_synced_at": last_synced_at,
             "token_expires_at": account.token_expires_at,
+            "needs_reauth": account.needs_reauth,
         }

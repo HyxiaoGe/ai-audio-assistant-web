@@ -211,10 +211,39 @@ def sync_channel_videos(
 
                 except Exception as e:
                     logger.exception(f"Failed to refresh token: {e}")
+
+                    # Check if this is an invalid_grant error (refresh token expired/revoked)
+                    error_str = str(e).lower()
+                    if "invalid_grant" in error_str or "token has been expired or revoked" in error_str:
+                        # Only mark and notify if not already marked (avoid duplicate notifications)
+                        if not account.needs_reauth:
+                            account.needs_reauth = True
+                            session.commit()
+                            logger.warning(f"Marked account for user {user_id} as needs_reauth=True")
+
+                            # Send WebSocket notification to frontend (only once)
+                            import json
+
+                            notification = json.dumps(
+                                {
+                                    "code": 0,
+                                    "message": "success",
+                                    "data": {
+                                        "type": "youtube_reauth_required",
+                                        "reason": "refresh_token_expired",
+                                        "message": "YouTube authorization has expired. Please reconnect your account.",
+                                    },
+                                    "traceId": request_id or "",
+                                },
+                                ensure_ascii=False,
+                            )
+                            publish_user_notification_sync(user_id, notification)
+
                     return {
                         "status": "error",
                         "error": f"Token refresh failed: {e}",
                         "synced_count": 0,
+                        "needs_reauth": "invalid_grant" in error_str,
                     }
 
             # Build YouTube API client
@@ -499,18 +528,26 @@ def sync_all_subscriptions_videos(
 
     try:
         with get_sync_db_session() as session:
-            # Get all subscriptions with sync enabled
+            # Get all subscriptions with sync enabled, excluding users who need reauth
             result = session.execute(
                 select(
                     YouTubeSubscription.user_id,
                     YouTubeSubscription.channel_id,
                 )
-                .where(YouTubeSubscription.sync_enabled == True)  # noqa: E712
+                .join(
+                    Account,
+                    (Account.user_id == YouTubeSubscription.user_id)
+                    & (Account.provider == YOUTUBE_PROVIDER),
+                )
+                .where(
+                    YouTubeSubscription.sync_enabled == True,  # noqa: E712
+                    Account.needs_reauth == False,  # noqa: E712
+                )
                 .distinct()
             )
             subscriptions = result.all()
 
-            logger.info(f"Found {len(subscriptions)} subscriptions to sync (sync_enabled)")
+            logger.info(f"Found {len(subscriptions)} subscriptions to sync (sync_enabled, valid auth)")
 
             for user_id, channel_id in subscriptions:
                 try:
@@ -577,11 +614,18 @@ def check_scheduled_syncs(
         with get_sync_db_session() as session:
             # Find subscriptions due for sync
             # - sync_enabled must be True
+            # - account.needs_reauth must be False
             # - next_sync_at is NULL (never calculated) OR <= now
             result = session.execute(
                 select(YouTubeSubscription.user_id, YouTubeSubscription.channel_id)
+                .join(
+                    Account,
+                    (Account.user_id == YouTubeSubscription.user_id)
+                    & (Account.provider == YOUTUBE_PROVIDER),
+                )
                 .where(
                     YouTubeSubscription.sync_enabled == True,  # noqa: E712
+                    Account.needs_reauth == False,  # noqa: E712
                     or_(
                         YouTubeSubscription.next_sync_at.is_(None),
                         YouTubeSubscription.next_sync_at <= now,
@@ -591,7 +635,7 @@ def check_scheduled_syncs(
             )
 
             subscriptions = result.all()
-            logger.info(f"Found {len(subscriptions)} channels due for sync")
+            logger.info(f"Found {len(subscriptions)} channels due for sync (valid auth)")
 
             for user_id, channel_id in subscriptions:
                 try:

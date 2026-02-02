@@ -22,6 +22,7 @@ class YouTubeConnectionStatus(BaseModel):
     subscription_count: int = 0
     last_synced_at: Optional[datetime] = None
     token_expires_at: Optional[datetime] = None
+    needs_reauth: bool = False  # True if refresh token expired and user needs to reconnect
 
 
 class YouTubeDisconnectResponse(BaseModel):
