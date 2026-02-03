@@ -217,6 +217,99 @@ class PromptManager:
 
         return prompt_types[visual_type]
 
+    def get_image_config(self, content_style: str) -> Dict[str, Any]:
+        """获取内容风格对应的图片配置
+
+        Args:
+            content_style: 内容风格 (lecture/podcast/meeting/...)
+
+        Returns:
+            包含 default_type, visual_style, aspect_ratio, layout, color_scheme 的配置字典
+        """
+        config = self._load_config("images")
+        mapping = config.get("content_style_mapping", {})
+        return mapping.get(content_style, mapping.get("general", {}))
+
+    def get_image_prompt(
+        self,
+        content_style: str,
+        image_type: str,
+        description: str,
+        key_texts: list[str],
+        locale: str = "zh-CN",
+    ) -> str:
+        """获取图片生成提示词
+
+        Args:
+            content_style: 内容风格 (lecture/podcast/meeting/...)
+            image_type: 图片类型 (infographic/mindmap/timeline/comparison/concept)
+            description: 图片描述
+            key_texts: 图片中需要包含的关键文字列表
+            locale: 语言
+
+        Returns:
+            完整的图片生成提示词
+        """
+        # 加载配置和模板
+        config = self._load_config("images")
+        templates = self._load_prompts("images", locale)
+
+        # 获取内容风格配置
+        style_config = config.get("content_style_mapping", {}).get(
+            content_style, config["content_style_mapping"]["general"]
+        )
+
+        # 获取视觉风格提示词
+        visual_style_key = style_config.get("visual_style", "flat_vector")
+        visual_styles = config.get("visual_styles", {})
+        lang_key = "prompt_zh" if locale.startswith("zh") else "prompt_en"
+        visual_style_prompt = visual_styles.get(visual_style_key, {}).get(
+            lang_key, visual_styles.get("flat_vector", {}).get(lang_key, "")
+        )
+
+        # 获取布局模板
+        layout_key = style_config.get("layout", "flexible")
+        layout_instructions = templates.get("layout_templates", {}).get(
+            layout_key, templates.get("layout_templates", {}).get("flexible", "")
+        )
+
+        # 获取颜色配置
+        colors = style_config.get("color_scheme", {})
+
+        # 获取图片类型名称
+        image_type_names = templates.get("image_type_names", {})
+        image_type_name = image_type_names.get(image_type, image_type)
+
+        # 获取内容风格名称
+        content_style_name = templates.get("content_style_names", {}).get(
+            content_style, content_style
+        )
+
+        # 格式化关键文字
+        if key_texts:
+            key_texts_formatted = "\n".join([f"- {text}" for text in key_texts])
+        else:
+            if locale.startswith("zh"):
+                key_texts_formatted = "- (根据主题自动生成合适的标签)"
+            else:
+                key_texts_formatted = "- (Auto-generate appropriate labels based on topic)"
+
+        # 构建最终提示词
+        base_prompt = templates.get("base_prompt", "")
+        final_prompt = base_prompt.format(
+            image_type=image_type_name,
+            content_style_name=content_style_name,
+            visual_style_prompt=visual_style_prompt,
+            primary_color=colors.get("primary", "#3B82F6"),
+            secondary_color=colors.get("secondary", "#10B981"),
+            background_color=colors.get("background", "#FFFFFF"),
+            description=description,
+            key_texts_formatted=key_texts_formatted,
+            layout_instructions=layout_instructions,
+        )
+
+        return final_prompt
+
 
 # 全局单例
 _prompt_manager = PromptManager()

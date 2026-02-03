@@ -1,0 +1,192 @@
+{
+  "version": "1.0.0",
+  "category": "images",
+  "supported_locales": ["zh-CN", "en-US"],
+  "image_types": {
+    "infographic": {
+      "name_zh": "信息图",
+      "name_en": "Infographic",
+      "description": "带文字标注的结构化信息图",
+      "recommended_for": ["lecture", "explainer", "tutorial", "video"]
+    },
+    "mindmap": {
+      "name_zh": "思维导图",
+      "name_en": "Mind Map",
+      "description": "中心辐射的概念关系图",
+      "recommended_for": ["podcast", "interview", "review"]
+    },
+    "timeline": {
+      "name_zh": "时间轴",
+      "name_en": "Timeline",
+      "description": "时间或流程序列图",
+      "recommended_for": ["documentary", "news", "meeting"]
+    },
+    "comparison": {
+      "name_zh": "对比图",
+      "name_en": "Comparison Chart",
+      "description": "并列对比的可视化",
+      "recommended_for": ["review", "explainer"]
+    },
+    "concept": {
+      "name_zh": "概念图",
+      "name_en": "Concept Diagram",
+      "description": "抽象概念的可视化解释",
+      "recommended_for": ["lecture", "explainer"]
+    }
+  },
+  "visual_styles": {
+    "flat_vector": {
+      "name_zh": "扁平插画",
+      "name_en": "Flat Vector",
+      "prompt_zh": "扁平向量插画风格，清晰的轮廓线，明亮的纯色块，现代简约，无渐变",
+      "prompt_en": "Flat vector illustration style with clean outlines, bright solid colors, modern and minimal, no gradients"
+    },
+    "isometric_3d": {
+      "name_zh": "等距3D",
+      "name_en": "Isometric 3D",
+      "prompt_zh": "等距3D风格，轻微立体感，现代科技感，几何图形，柔和阴影",
+      "prompt_en": "Isometric 3D style with subtle depth, modern tech aesthetic, geometric shapes, soft shadows"
+    },
+    "hand_drawn": {
+      "name_zh": "手绘风格",
+      "name_en": "Hand Drawn",
+      "prompt_zh": "手绘插画风格，温暖亲切，略带手工质感，有机线条，自然配色",
+      "prompt_en": "Hand-drawn illustration style, warm and approachable, organic lines with handcrafted feel, natural colors"
+    },
+    "infographic_modern": {
+      "name_zh": "现代信息图",
+      "name_en": "Modern Infographic",
+      "prompt_zh": "现代信息图风格，数据可视化，图标化表达，清晰的视觉层级，专业商务感",
+      "prompt_en": "Modern infographic style, data visualization focus, iconographic elements, clear visual hierarchy, professional business feel"
+    },
+    "chalkboard": {
+      "name_zh": "黑板风格",
+      "name_en": "Chalkboard",
+      "prompt_zh": "黑板风格，白色或彩色粉笔线条在深色背景，教育感，学术氛围，略带粉笔质感",
+      "prompt_en": "Chalkboard style, white or colored chalk lines on dark background, educational academic atmosphere, subtle chalk texture"
+    }
+  },
+  "content_style_mapping": {
+    "lecture": {
+      "default_type": "infographic",
+      "visual_style": "flat_vector",
+      "aspect_ratio": "3:4",
+      "layout": "hierarchical",
+      "color_scheme": {
+        "primary": "#3B82F6",
+        "secondary": "#10B981",
+        "background": "#F8FAFC"
+      }
+    },
+    "podcast": {
+      "default_type": "mindmap",
+      "visual_style": "hand_drawn",
+      "aspect_ratio": "16:9",
+      "layout": "radial",
+      "color_scheme": {
+        "primary": "#F59E0B",
+        "secondary": "#8B5CF6",
+        "background": "#FFFBEB"
+      }
+    },
+    "interview": {
+      "default_type": "mindmap",
+      "visual_style": "flat_vector",
+      "aspect_ratio": "16:9",
+      "layout": "conversation",
+      "color_scheme": {
+        "primary": "#6366F1",
+        "secondary": "#EC4899",
+        "background": "#F5F3FF"
+      }
+    },
+    "meeting": {
+      "default_type": "timeline",
+      "visual_style": "infographic_modern",
+      "aspect_ratio": "16:9",
+      "layout": "horizontal_flow",
+      "color_scheme": {
+        "primary": "#0EA5E9",
+        "secondary": "#14B8A6",
+        "background": "#F0F9FF"
+      }
+    },
+    "documentary": {
+      "default_type": "timeline",
+      "visual_style": "hand_drawn",
+      "aspect_ratio": "16:9",
+      "layout": "narrative_flow",
+      "color_scheme": {
+        "primary": "#78716C",
+        "secondary": "#D97706",
+        "background": "#FAF5F0"
+      }
+    },
+    "explainer": {
+      "default_type": "concept",
+      "visual_style": "flat_vector",
+      "aspect_ratio": "3:4",
+      "layout": "step_by_step",
+      "color_scheme": {
+        "primary": "#22C55E",
+        "secondary": "#3B82F6",
+        "background": "#F0FDF4"
+      }
+    },
+    "video": {
+      "default_type": "infographic",
+      "visual_style": "isometric_3d",
+      "aspect_ratio": "16:9",
+      "layout": "highlights",
+      "color_scheme": {
+        "primary": "#EF4444",
+        "secondary": "#F59E0B",
+        "background": "#FFFFFF"
+      }
+    },
+    "tutorial": {
+      "default_type": "infographic",
+      "visual_style": "flat_vector",
+      "aspect_ratio": "3:4",
+      "layout": "step_by_step",
+      "color_scheme": {
+        "primary": "#8B5CF6",
+        "secondary": "#06B6D4",
+        "background": "#FAF5FF"
+      }
+    },
+    "review": {
+      "default_type": "comparison",
+      "visual_style": "infographic_modern",
+      "aspect_ratio": "16:9",
+      "layout": "split_comparison",
+      "color_scheme": {
+        "primary": "#10B981",
+        "secondary": "#EF4444",
+        "background": "#ECFDF5"
+      }
+    },
+    "news": {
+      "default_type": "timeline",
+      "visual_style": "infographic_modern",
+      "aspect_ratio": "16:9",
+      "layout": "timeline_flow",
+      "color_scheme": {
+        "primary": "#1E40AF",
+        "secondary": "#DC2626",
+        "background": "#EFF6FF"
+      }
+    },
+    "general": {
+      "default_type": "infographic",
+      "visual_style": "flat_vector",
+      "aspect_ratio": "16:9",
+      "layout": "flexible",
+      "color_scheme": {
+        "primary": "#6366F1",
+        "secondary": "#10B981",
+        "background": "#FFFFFF"
+      }
+    }
+  }
+}

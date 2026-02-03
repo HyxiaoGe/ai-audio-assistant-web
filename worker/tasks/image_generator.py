@@ -21,30 +21,118 @@ from app.prompts.manager import get_prompt_manager
 
 logger = logging.getLogger(__name__)
 
-# 图片占位符正则表达式（支持单花括号和双花括号两种格式）
-IMAGE_PLACEHOLDER_PATTERN = r"\{?\{IMAGE:\s*([^}]+)\}?\}"
+# 新格式图片占位符正则：{{IMAGE: 类型 | 描述 | 关键文字}} 或 {IMAGE: 类型 | 描述 | 关键文字}
+IMAGE_PLACEHOLDER_PATTERN_NEW_DOUBLE = r"\{\{IMAGE:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^}]+)\}\}"
+IMAGE_PLACEHOLDER_PATTERN_NEW_SINGLE = r"(?<!\{)\{IMAGE:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^}]+)\}(?!\})"
+
+# 旧格式图片占位符正则（向后兼容）：{{IMAGE: 描述}} 或 {IMAGE: 描述}
+IMAGE_PLACEHOLDER_PATTERN_OLD = r"\{?\{IMAGE:\s*([^}|]+)\}?\}"
 
 
 def extract_image_placeholders(content: str) -> list[dict]:
-    """提取所有图片占位符
+    """提取所有图片占位符（支持新旧两种格式，单双花括号）
+
+    新格式: {{IMAGE: 类型 | 描述 | 关键文字}} 或 {IMAGE: 类型 | 描述 | 关键文字}
+    旧格式: {{IMAGE: 描述}} 或 {IMAGE: 描述}
 
     Args:
         content: 摘要内容
 
     Returns:
-        [{"placeholder": "原始占位符", "description": "描述"}, ...]
+        [{"placeholder": "原始占位符", "type": "图片类型", "description": "描述", "key_texts": ["文字1", "文字2"]}, ...]
     """
-    # 匹配 {{IMAGE: xxx}} 或 {IMAGE: xxx} 格式
     results = []
-    # 先尝试双花括号格式
-    double_matches = re.findall(r"\{\{IMAGE:\s*([^}]+)\}\}", content)
-    for m in double_matches:
-        results.append({"placeholder": f"{{{{IMAGE: {m}}}}}", "description": m.strip()})
+    matched_positions = set()
 
-    # 再尝试单花括号格式（排除已匹配的双花括号）
-    single_matches = re.findall(r"(?<!\{)\{IMAGE:\s*([^}]+)\}(?!\})", content)
-    for m in single_matches:
-        results.append({"placeholder": f"{{IMAGE: {m}}}", "description": m.strip()})
+    # 1. 先匹配新格式（双花括号）{{IMAGE: 类型 | 描述 | 关键文字}}
+    for match in re.finditer(IMAGE_PLACEHOLDER_PATTERN_NEW_DOUBLE, content):
+        image_type = match.group(1).strip().lower()
+        description = match.group(2).strip()
+        key_texts_str = match.group(3).strip()
+        key_texts = [t.strip() for t in key_texts_str.split(",") if t.strip()]
+
+        # 重建原始占位符用于后续替换
+        placeholder = f"{{{{IMAGE: {match.group(1).strip()} | {match.group(2).strip()} | {match.group(3).strip()}}}}}"
+
+        results.append(
+            {
+                "placeholder": placeholder,
+                "type": image_type,
+                "description": description,
+                "key_texts": key_texts,
+            }
+        )
+        matched_positions.add((match.start(), match.end()))
+
+    # 2. 匹配新格式（单花括号）{IMAGE: 类型 | 描述 | 关键文字}
+    for match in re.finditer(IMAGE_PLACEHOLDER_PATTERN_NEW_SINGLE, content):
+        # 跳过已匹配的位置
+        if any(
+            start <= match.start() < end or start < match.end() <= end
+            for start, end in matched_positions
+        ):
+            continue
+
+        image_type = match.group(1).strip().lower()
+        description = match.group(2).strip()
+        key_texts_str = match.group(3).strip()
+        key_texts = [t.strip() for t in key_texts_str.split(",") if t.strip()]
+
+        # 使用原始单花括号格式
+        placeholder = f"{{IMAGE: {match.group(1).strip()} | {match.group(2).strip()} | {match.group(3).strip()}}}"
+
+        results.append(
+            {
+                "placeholder": placeholder,
+                "type": image_type,
+                "description": description,
+                "key_texts": key_texts,
+            }
+        )
+        matched_positions.add((match.start(), match.end()))
+
+    # 3. 匹配旧格式（双花括号）{{IMAGE: 描述}}
+    for match in re.finditer(r"\{\{IMAGE:\s*([^}|]+)\}\}", content):
+        # 跳过已匹配的位置
+        if any(
+            start <= match.start() < end or start < match.end() <= end
+            for start, end in matched_positions
+        ):
+            continue
+
+        description = match.group(1).strip()
+        placeholder = f"{{{{IMAGE: {description}}}}}"
+
+        results.append(
+            {
+                "placeholder": placeholder,
+                "type": None,  # 旧格式无类型，后续使用默认
+                "description": description,
+                "key_texts": [],
+            }
+        )
+        matched_positions.add((match.start(), match.end()))
+
+    # 4. 匹配旧格式（单花括号）{IMAGE: 描述}
+    for match in re.finditer(r"(?<!\{)\{IMAGE:\s*([^}|]+)\}(?!\})", content):
+        # 跳过已匹配的位置
+        if any(
+            start <= match.start() < end or start < match.end() <= end
+            for start, end in matched_positions
+        ):
+            continue
+
+        description = match.group(1).strip()
+        placeholder = f"{{IMAGE: {description}}}"
+
+        results.append(
+            {
+                "placeholder": placeholder,
+                "type": None,
+                "description": description,
+                "key_texts": [],
+            }
+        )
 
     return results
 
@@ -85,17 +173,25 @@ def is_auto_images_enabled(summary_type: str, content_style: str | None = None) 
     config = get_auto_images_config()
 
     if not config.get("enabled", False):
+        logger.debug("Auto images disabled: feature not enabled in config")
         return False
 
     supported_types = config.get("supported_summary_types", [])
     if summary_type not in supported_types:
+        logger.debug(
+            f"Auto images disabled: summary_type '{summary_type}' not in supported types {supported_types}"
+        )
         return False
 
     if content_style:
         supported_styles = config.get("supported_content_styles", [])
         if content_style not in supported_styles:
+            logger.debug(
+                f"Auto images disabled: content_style '{content_style}' not in supported styles {supported_styles}"
+            )
             return False
 
+    logger.debug(f"Auto images enabled for summary_type={summary_type}, content_style={content_style}")
     return True
 
 
@@ -177,56 +273,81 @@ async def generate_single_image(
     item: dict,
     user_id: str,
     task_id: str,
+    content_style: str = "general",
+    locale: str = "zh-CN",
     timeout: int = 60,
 ) -> dict:
-    """生成单张图片
+    """生成单张图片（使用风格化提示词）
 
     Args:
-        item: {"placeholder": "{{IMAGE: xxx}}", "description": "xxx"}
+        item: {"placeholder": "...", "type": "图片类型", "description": "描述", "key_texts": [...]}
         user_id: 用户 ID
         task_id: 任务 ID
+        content_style: 内容风格 (lecture/podcast/meeting/...)
+        locale: 语言 (zh-CN/en-US)
         timeout: 超时时间（秒）
 
     Returns:
         {"placeholder": "...", "url": "...", "status": "success|failed"}
     """
     try:
+        # 1. 获取提示词管理器
+        prompt_manager = get_prompt_manager()
+
+        # 2. 获取内容风格对应的图片配置
+        image_config = prompt_manager.get_image_config(content_style)
+
+        # 3. 确定图片类型（优先使用占位符指定的类型，否则使用默认）
+        image_type = item.get("type") or image_config.get("default_type", "infographic")
+
+        # 4. 构建风格化提示词
+        image_prompt = prompt_manager.get_image_prompt(
+            content_style=content_style,
+            image_type=image_type,
+            description=item["description"],
+            key_texts=item.get("key_texts", []),
+            locale=locale,
+        )
+
+        # 5. 获取配置和 LLM 服务
         config = get_auto_images_config()
         image_model = config.get("image_model", {})
         provider = image_model.get("provider", "openrouter")
         model_id = image_model.get("model_id", "google/gemini-2.0-flash-exp:free")
 
-        # 获取 LLM 服务（支持图像生成的模型）
         llm_service = await SmartFactory.get_service(
             "llm",
             provider=provider,
             model_id=model_id,
         )
 
-        # 生成图片
-        image_prompt = f"生成一张信息图，用于文章配图。要求：\n1. 风格：现代、简洁、专业\n2. 主题：{item['description']}\n3. 配色：和谐、适合阅读\n4. 不要包含任何文字"
+        # 6. 获取宽高比配置
+        aspect_ratio = image_config.get("aspect_ratio", "16:9")
 
+        # 7. 生成图片
         image_data = await asyncio.wait_for(
             llm_service.generate_image(
                 prompt=image_prompt,
-                aspect_ratio="16:9",
+                aspect_ratio=aspect_ratio,
                 image_size="2K",
             ),
             timeout=timeout,
         )
 
-        # 上传到存储（MinIO + 云存储）
+        # 8. 上传到存储（MinIO + 云存储）
         object_key = await upload_image(user_id, task_id, image_data)
 
-        # 返回后端 API URL，前端通过 API 代理访问图片
+        # 9. 返回后端 API URL
         from app.config import settings
 
-        # 本地开发用 localhost:8000，生产环境需要设置 API_BASE_URL
         api_base = (settings.API_BASE_URL or "http://localhost:8000").rstrip("/")
         image_path = object_key.replace("summary_images/", "")
         image_url = f"{api_base}/api/v1/summaries/images/{image_path}"
 
-        logger.info(f"Generated image for '{item['description']}': {object_key}")
+        logger.info(
+            f"Generated styled image ({image_type}/{content_style}) "
+            f"for '{item['description']}': {object_key}"
+        )
 
         return {
             "placeholder": item["placeholder"],
@@ -256,6 +377,8 @@ async def generate_images_parallel(
     placeholders: list[dict[str, Any]],
     user_id: str,
     task_id: str,
+    content_style: str = "general",
+    locale: str = "zh-CN",
     max_images: int = 3,
     timeout: int = 60,
     on_image_ready: Optional[Callable[[dict[str, Any], int, int], None]] = None,
@@ -263,9 +386,11 @@ async def generate_images_parallel(
     """并行生成多张图片，每生成一张立即回调
 
     Args:
-        placeholders: [{"placeholder": "{{IMAGE: xxx}}", "description": "xxx"}, ...]
+        placeholders: [{"placeholder": "...", "type": "...", "description": "...", "key_texts": [...]}, ...]
         user_id: 用户 ID
         task_id: 任务 ID
+        content_style: 内容风格 (lecture/podcast/meeting/...)
+        locale: 语言 (zh-CN/en-US)
         max_images: 最大图片数量
         timeout: 单张图片超时（秒）
         on_image_ready: 单张图片完成时的回调函数，参数为 (result, current_index, total)
@@ -280,11 +405,11 @@ async def generate_images_parallel(
         return []
 
     total = len(placeholders)
-    logger.info(f"Generating {total} images in parallel for task {task_id}")
+    logger.info(f"Generating {total} styled images ({content_style}/{locale}) for task {task_id}")
 
     # 创建任务，保留索引信息
     async def generate_with_index(index: int, item: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-        result = await generate_single_image(item, user_id, task_id, timeout)
+        result = await generate_single_image(item, user_id, task_id, content_style, locale, timeout)
         return index, result
 
     tasks = [asyncio.create_task(generate_with_index(i, p)) for i, p in enumerate(placeholders)]
@@ -338,10 +463,25 @@ def replace_placeholders(content: str, image_results: list[dict]) -> str:
     for result in image_results:
         placeholder = result["placeholder"]
         if result["status"] == "success" and result.get("url"):
-            # 提取描述作为 alt text（处理单双花括号两种格式）
+            # 提取描述作为 alt text
+            # 新格式: {{IMAGE: 类型 | 描述 | 关键文字}} 或 {IMAGE: 类型 | 描述 | 关键文字}
+            # 旧格式: {{IMAGE: 描述}} 或 {IMAGE: 描述}
             description = placeholder
-            description = description.replace("{{IMAGE: ", "").replace("}}", "")
-            description = description.replace("{IMAGE: ", "").replace("}", "")
+            # 处理新格式（取描述部分）
+            if "|" in description:
+                # 移除花括号（支持单双花括号）
+                cleaned = description.replace("{{IMAGE:", "").replace("}}", "")
+                cleaned = cleaned.replace("{IMAGE:", "").replace("}", "")
+                parts = cleaned.split("|")
+                if len(parts) >= 2:
+                    description = parts[1].strip()
+                else:
+                    description = parts[0].strip()
+            else:
+                # 处理旧格式
+                description = description.replace("{{IMAGE: ", "").replace("}}", "")
+                description = description.replace("{IMAGE: ", "").replace("}", "")
+
             # 替换为 Markdown 图片
             markdown_img = f"![{description}]({result['url']})"
             content = content.replace(placeholder, markdown_img)
@@ -361,6 +501,7 @@ async def process_summary_images(
     user_id: str,
     summary_type: str,
     content_style: str | None = None,
+    locale: str = "zh-CN",
     redis_client: Optional[Any] = None,
     stream_key: Optional[str] = None,
 ) -> tuple[str, list[dict[str, Any]]]:
@@ -372,6 +513,7 @@ async def process_summary_images(
         user_id: 用户 ID
         summary_type: 摘要类型
         content_style: 内容风格
+        locale: 语言 (zh-CN/en-US)
         redis_client: Redis 客户端（用于发布事件）
         stream_key: SSE 流 key
 
@@ -437,6 +579,8 @@ async def process_summary_images(
         placeholders,
         user_id,
         task_id,
+        content_style=content_style or "general",
+        locale=locale,
         max_images=max_images,
         timeout=timeout,
         on_image_ready=on_image_ready,
