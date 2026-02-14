@@ -5,19 +5,20 @@ services:
     env_file: .env
     environment:
       TZ: UTC
-      DATABASE_URL: postgresql+asyncpg://user:pass@db:5432/audio_assistant
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://user:pass@prompthub-postgres:5432/audio_assistant
+      REDIS_URL: redis://prompthub-redis:6379/0
       MINIO_ENDPOINT: minio:9000
       MINIO_USE_SSL: "false"
     volumes:
       - .:/app
       - ./data:/app/data
     ports:
-      - "8000:8000"
+      - "8088:8000"
     depends_on:
-      - db
-      - redis
       - minio
+    networks:
+      - shared
+      - default
 
   worker:
     build: .
@@ -25,8 +26,8 @@ services:
     env_file: .env
     environment:
       TZ: UTC
-      DATABASE_URL: postgresql+asyncpg://user:pass@db:5432/audio_assistant
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://user:pass@prompthub-postgres:5432/audio_assistant
+      REDIS_URL: redis://prompthub-redis:6379/0
       MINIO_ENDPOINT: minio:9000
       MINIO_USE_SSL: "false"
       CONFIG_CENTER_DB_ENABLED: "false"  # Disable config DB in worker to avoid event loop conflicts
@@ -34,9 +35,10 @@ services:
       - .:/app
       - ./data:/app/data
     depends_on:
-      - db
-      - redis
       - minio
+    networks:
+      - shared
+      - default
 
   beat:
     build: .
@@ -44,36 +46,16 @@ services:
     env_file: .env
     environment:
       TZ: UTC
-      DATABASE_URL: postgresql+asyncpg://user:pass@db:5432/audio_assistant
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://user:pass@prompthub-postgres:5432/audio_assistant
+      REDIS_URL: redis://prompthub-redis:6379/0
       MINIO_ENDPOINT: minio:9000
       MINIO_USE_SSL: "false"
       CONFIG_CENTER_DB_ENABLED: "false"
     volumes:
       - .:/app
-    depends_on:
-      - redis
-
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: pass
-      POSTGRES_DB: audio_assistant
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d audio_assistant"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    networks:
+      - shared
+      - default
 
   minio:
     image: minio/minio:RELEASE.2024-12-13T22-19-12Z
@@ -104,13 +86,16 @@ services:
     env_file: .env
     environment:
       TZ: UTC
-      DATABASE_URL: postgresql+asyncpg://user:pass@db:5432/audio_assistant
+      DATABASE_URL: postgresql+asyncpg://user:pass@prompthub-postgres:5432/audio_assistant
     volumes:
       - .:/app
-    depends_on:
-      db:
-        condition: service_healthy
+    networks:
+      - shared
 
 volumes:
-  postgres_data:
   minio_data:
+
+networks:
+  shared:
+    external: true
+    name: shared-infra

@@ -135,5 +135,10 @@ class Settings(BaseSettings):
 
     TASK_CLEANUP_DELAY_SECONDS: int = Field(default=300)
 
+    # PromptHub
+    PROMPTHUB_BASE_URL: Optional[str] = Field(default=None)
+    PROMPTHUB_API_KEY: Optional[str] = Field(default=None)
+    PROMPTHUB_CACHE_TTL: int = Field(default=300)  # seconds
+
 
 settings = Settings()

@@ -1,30 +1,75 @@
-"""提示词管理器"""
+"""提示词管理器 - 通过 PromptHub API 获取提示词模板"""
 
 from __future__ import annotations
 
 import json
+import logging
+import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
+
+import httpx
+from jinja2 import BaseLoader, Environment, TemplateSyntaxError
 
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
 
+log = logging.getLogger(__name__)
+
 
 class PromptManager:
-    """提示词管理器"""
+    """提示词管理器
+
+    从 PromptHub API 获取提示词模板，配置数据从本地 config.json 读取。
+    """
 
     _instance: Optional[PromptManager] = None
-    _prompts_cache: Dict[str, Dict] = {}
 
-    def __new__(cls):
+    def __new__(cls) -> PromptManager:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
-        if not hasattr(self, "_initialized"):
-            self.prompts_dir = Path(__file__).parent / "templates"
-            self._initialized = True
+    def __init__(self) -> None:
+        if hasattr(self, "_initialized"):
+            return
+        self._initialized = True
+
+        # Local config path (config.json files only)
+        self.prompts_dir = Path(__file__).parent / "templates"
+
+        # Config cache (permanent)
+        self._config_cache: Dict[str, Dict] = {}
+
+        # PromptHub config (lazy import settings to avoid circular import)
+        from app.config import settings
+
+        self._hub_url: Optional[str] = getattr(settings, "PROMPTHUB_BASE_URL", None)
+        self._hub_key: Optional[str] = getattr(settings, "PROMPTHUB_API_KEY", None)
+        self._hub_ttl: int = getattr(settings, "PROMPTHUB_CACHE_TTL", 300)
+        self._hub_enabled: bool = bool(self._hub_url and self._hub_key)
+
+        # PromptHub slug->id index (preloaded from list endpoint)
+        self._hub_index: Dict[str, str] = {}  # slug -> prompt_id
+        self._hub_index_expiry: float = 0.0
+
+        # PromptHub content cache: slug -> (expiry_timestamp, content_string)
+        self._hub_cache: Dict[str, Tuple[float, str]] = {}
+
+        # HTTP client (lazy init)
+        self._http: Optional[httpx.Client] = None
+
+        # Jinja2 environment for rendering PromptHub templates
+        self._jinja_env = Environment(loader=BaseLoader())
+
+        if self._hub_enabled:
+            log.info("PromptHub enabled: %s (TTL=%ds)", self._hub_url, self._hub_ttl)
+        else:
+            log.warning("PromptHub not configured — prompts will not be available")
+
+    # ====================================================================
+    # Public API
+    # ====================================================================
 
     def get_prompt(
         self,
@@ -37,85 +82,47 @@ class PromptManager:
         """获取提示词
 
         Args:
-            category: 类别（如 summary, segmentation）
+            category: 类别（如 summary, segmentation, visual）
             prompt_type: 提示词类型（如 overview, key_points, action_items, segment）
             locale: 语言（如 zh-CN, en-US）
             variables: 模板变量（如 {transcript}, {quality_notice}）
-            content_style: 内容风格（如 meeting, lecture, podcast）- 可选，也可在variables中提供
+            content_style: 内容风格（如 meeting, lecture, podcast）
 
         Returns:
             包含 system, user_prompt, model_params 的字典
         """
-        prompt_data = self._load_prompts(category, locale)
-        config_data = self._load_config(category)
-
-        if prompt_type not in prompt_data["prompts"]:
-            raise BusinessError(
-                ErrorCode.INVALID_PARAMETER, detail=f"Unknown prompt type: {prompt_type}"
-            )
-
-        # 获取content_style（优先使用参数，其次从variables中获取，最后默认为meeting）
         if content_style is None:
-            content_style = variables.get("content_style", "meeting") if variables else "meeting"
+            content_style = (variables or {}).get("content_style", "meeting")
 
-        # 获取prompt模板（支持新旧两种格式）
-        prompt_config = prompt_data["prompts"][prompt_type]
-
-        # 新格式：templates字典（针对不同content_style）
-        if "templates" in prompt_config:
-            templates = prompt_config["templates"]
-            if content_style in templates:
-                prompt_template = templates[content_style]
-            else:
-                # 如果没有指定风格的模板，使用meeting或第一个可用的
-                prompt_template = templates.get("meeting", list(templates.values())[0])
-        # 旧格式：单个template字符串
-        elif "template" in prompt_config:
-            prompt_template = prompt_config["template"]
-        else:
+        if not self._hub_enabled:
             raise BusinessError(
                 ErrorCode.SYSTEM_ERROR,
-                reason=f"No template found for {category}/{prompt_type}",
+                reason="PromptHub not configured",
             )
 
-        # 替换模板变量
-        if variables:
-            try:
-                user_prompt = prompt_template.format(**variables)
-            except KeyError as e:
-                # 缺少必需的变量，提供更友好的错误信息
-                raise BusinessError(
-                    ErrorCode.INVALID_PARAMETER,
-                    reason=f"Missing required variable in prompt template: {e}",
-                )
-        else:
-            user_prompt = prompt_template
+        # 1. Fetch user_prompt template from PromptHub
+        slug = self._build_prompt_slug(category, prompt_type, locale, content_style)
+        template_content = self._fetch_hub_prompt(slug)
+        if not template_content:
+            raise BusinessError(
+                ErrorCode.SYSTEM_ERROR,
+                reason=f"Prompt not found in PromptHub: {slug}",
+            )
 
-        # 获取system配置
-        system_config = prompt_data["system"]
+        # 2. Get shared modules and merge with caller variables
+        shared_vars = self._resolve_shared_vars(locale)
+        all_vars = {**shared_vars, **(variables or {})}
 
-        # 根据content_style选择system message
-        if isinstance(system_config.get(content_style), dict):
-            # 新格式：每个风格有独立的配置
-            style_config = system_config.get(content_style, system_config.get("general", {}))
-            system_message = style_config.get("role", "你是一个专业的内容分析助手。")
+        # 3. Render user_prompt with Jinja2
+        user_prompt = self._render_jinja2(template_content, all_vars)
 
-            # 添加style和tolerance说明（如果有）
-            if style_config.get("style"):
-                system_message += f"\n\n风格要求：{style_config['style']}"
-            if style_config.get("tolerance"):
-                system_message += f"\n\n容错说明：{style_config['tolerance']}"
-        else:
-            # 旧格式：单一的role配置
-            system_message = system_config.get("role", "你是一个专业的内容分析助手。")
+        # 4. Get system message from PromptHub
+        system_message = self._get_system_from_hub(category, locale, content_style)
+        if system_message is None:
+            system_message = ""
 
-        # 添加约束条件
-        if system_config.get("constraints"):
-            constraints = "\n".join(f"- {c}" for c in system_config["constraints"])
-            system_message += f"\n\n约束条件：\n{constraints}"
-
-        # 获取model参数
-        # Try to get from prompt_types first (new structure), fall back to top-level (old structure)
+        # 5. model_params from local config.json
+        config_data = self._load_config(category)
         if "prompt_types" in config_data and prompt_type in config_data["prompt_types"]:
             model_params = config_data["prompt_types"][prompt_type].get("model_params", {})
         else:
@@ -131,101 +138,27 @@ class PromptManager:
                 "locale": locale,
                 "content_style": content_style,
                 "version": config_data.get("version", "unknown"),
+                "source": "prompthub",
             },
         }
 
-    def _load_prompts(self, category: str, locale: str) -> Dict:
-        """加载提示词文件（带缓存）"""
-        cache_key = f"{category}:{locale}"
-
-        if cache_key in self._prompts_cache:
-            return self._prompts_cache[cache_key]
-
-        prompt_file = self.prompts_dir / category / f"{locale}.json"
-
-        if not prompt_file.exists():
-            prompt_file = self.prompts_dir / category / "zh-CN.json"
-            if not prompt_file.exists():
-                raise BusinessError(
-                    ErrorCode.SYSTEM_ERROR, reason=f"Prompt file not found: {category}/{locale}"
-                )
-
-        with open(prompt_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        self._prompts_cache[cache_key] = data
-        return data
-
-    def _load_config(self, category: str) -> Dict:
-        """加载配置文件（带缓存）"""
-        cache_key = f"{category}:config"
-
-        if cache_key in self._prompts_cache:
-            return self._prompts_cache[cache_key]
-
-        config_file = self.prompts_dir / category / "config.json"
-
-        if not config_file.exists():
-            return {
-                "version": "1.0.0",
-                "model_params": {},
-            }
-
-        with open(config_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        self._prompts_cache[cache_key] = data
-        return data
-
-    def clear_cache(self):
-        """清除缓存"""
-        self._prompts_cache.clear()
-
-    def list_available_prompts(self, category: str) -> Dict[str, Any]:
-        """列出可用的提示词类型"""
-        config = self._load_config(category)
-        prompts_zh = self._load_prompts(category, "zh-CN")
-
-        return {
-            "category": category,
-            "version": config.get("version"),
-            "supported_locales": config.get("supported_locales", ["zh-CN"]),
-            "prompt_types": list(prompts_zh["prompts"].keys()),
-            "prompts": {
-                name: {
-                    "name": data.get("name"),
-                    "description": data.get("description"),
-                }
-                for name, data in prompts_zh["prompts"].items()
-            },
-        }
+    def clear_cache(self) -> None:
+        """清除所有缓存"""
+        self._config_cache.clear()
+        self._hub_index.clear()
+        self._hub_index_expiry = 0.0
+        self._hub_cache.clear()
 
     def get_visual_config(self, visual_type: str) -> Dict[str, Any]:
-        """获取可视化类型的配置
-
-        Args:
-            visual_type: 可视化类型（如 mindmap, timeline, flowchart, outline）
-
-        Returns:
-            包含 output_format, model_params, image_config 等的配置字典
-        """
+        """获取可视化类型的配置（从本地 config.json 读取）"""
         config = self._load_config("visual")
         prompt_types = config.get("prompt_types", {})
-
         if visual_type not in prompt_types:
             return {}
-
         return prompt_types[visual_type]
 
     def get_image_config(self, content_style: str) -> Dict[str, Any]:
-        """获取内容风格对应的图片配置
-
-        Args:
-            content_style: 内容风格 (lecture/podcast/meeting/...)
-
-        Returns:
-            包含 default_type, visual_style, aspect_ratio, layout, color_scheme 的配置字典
-        """
+        """获取内容风格对应的图片配置（从本地 config.json 读取）"""
         config = self._load_config("images")
         mapping = config.get("content_style_mapping", {})
         return mapping.get(content_style, mapping.get("general", {}))
@@ -238,77 +171,255 @@ class PromptManager:
         key_texts: list[str],
         locale: str = "zh-CN",
     ) -> str:
-        """获取图片生成提示词
-
-        Args:
-            content_style: 内容风格 (lecture/podcast/meeting/...)
-            image_type: 图片类型 (infographic/mindmap/timeline/comparison/concept)
-            description: 图片描述
-            key_texts: 图片中需要包含的关键文字列表
-            locale: 语言
-
-        Returns:
-            完整的图片生成提示词
-        """
-        # 加载配置和模板
+        """获取图片生成提示词"""
         config = self._load_config("images")
-        templates = self._load_prompts("images", locale)
+        lang = "zh" if locale.startswith("zh") else "en"
 
-        # 获取内容风格配置
+        # Style config
         style_config = config.get("content_style_mapping", {}).get(
             content_style, config["content_style_mapping"]["general"]
         )
 
-        # 获取视觉风格提示词
+        # Visual style prompt
         visual_style_key = style_config.get("visual_style", "flat_vector")
         visual_styles = config.get("visual_styles", {})
-        lang_key = "prompt_zh" if locale.startswith("zh") else "prompt_en"
+        lang_key = f"prompt_{lang}"
         visual_style_prompt = visual_styles.get(visual_style_key, {}).get(
             lang_key, visual_styles.get("flat_vector", {}).get(lang_key, "")
         )
 
-        # 获取布局模板
+        # Layout instructions from config.json
         layout_key = style_config.get("layout", "flexible")
-        layout_instructions = templates.get("layout_templates", {}).get(
-            layout_key, templates.get("layout_templates", {}).get("flexible", "")
+        layout_templates = config.get("layout_templates", {}).get(lang, {})
+        layout_instructions = layout_templates.get(
+            layout_key, layout_templates.get("flexible", "")
         )
 
-        # 获取颜色配置
+        # Colors
         colors = style_config.get("color_scheme", {})
 
-        # 获取图片类型名称
-        image_type_names = templates.get("image_type_names", {})
-        image_type_name = image_type_names.get(image_type, image_type)
-
-        # 获取内容风格名称
-        content_style_name = templates.get("content_style_names", {}).get(
+        # Localized names from config.json
+        image_type_name = config.get("image_type_names", {}).get(lang, {}).get(
+            image_type, image_type
+        )
+        content_style_name = config.get("content_style_names", {}).get(lang, {}).get(
             content_style, content_style
         )
 
-        # 格式化关键文字
+        # Format key texts
         if key_texts:
             key_texts_formatted = "\n".join([f"- {text}" for text in key_texts])
         else:
-            if locale.startswith("zh"):
+            if lang == "zh":
                 key_texts_formatted = "- (根据主题自动生成合适的标签)"
             else:
                 key_texts_formatted = "- (Auto-generate appropriate labels based on topic)"
 
-        # 构建最终提示词
-        base_prompt = templates.get("base_prompt", "")
-        final_prompt = base_prompt.format(
-            image_type=image_type_name,
-            content_style_name=content_style_name,
-            visual_style_prompt=visual_style_prompt,
-            primary_color=colors.get("primary", "#3B82F6"),
-            secondary_color=colors.get("secondary", "#10B981"),
-            background_color=colors.get("background", "#FFFFFF"),
-            description=description,
-            key_texts_formatted=key_texts_formatted,
-            layout_instructions=layout_instructions,
+        template_vars = {
+            "image_type": image_type_name,
+            "content_style_name": content_style_name,
+            "visual_style_prompt": visual_style_prompt,
+            "primary_color": colors.get("primary", "#3B82F6"),
+            "secondary_color": colors.get("secondary", "#10B981"),
+            "background_color": colors.get("background", "#FFFFFF"),
+            "description": description,
+            "key_texts_formatted": key_texts_formatted,
+            "layout_instructions": layout_instructions,
+        }
+
+        # Fetch base_prompt from PromptHub
+        if self._hub_enabled:
+            loc_short = locale.split("-")[0]
+            slug = f"images-baseprompt-{loc_short}"
+            hub_content = self._fetch_hub_prompt(slug)
+            if hub_content:
+                return self._render_jinja2(hub_content, template_vars)
+
+        raise BusinessError(
+            ErrorCode.SYSTEM_ERROR,
+            reason="Failed to fetch image prompt from PromptHub",
         )
 
-        return final_prompt
+    # ====================================================================
+    # PromptHub integration
+    # ====================================================================
+
+    def _get_http_client(self) -> httpx.Client:
+        """Lazy-init HTTP client for PromptHub API."""
+        if self._http is None:
+            self._http = httpx.Client(
+                base_url=self._hub_url,
+                headers={
+                    "Authorization": f"Bearer {self._hub_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=10.0,
+            )
+        return self._http
+
+    def _ensure_hub_index(self) -> None:
+        """Build slug->id index from PromptHub list endpoint (lightweight, no content)."""
+        now = time.monotonic()
+        if self._hub_index and self._hub_index_expiry > now:
+            return
+
+        try:
+            client = self._get_http_client()
+            index: Dict[str, str] = {}
+
+            page = 1
+            while True:
+                resp = client.get(
+                    "/api/v1/prompts",
+                    params={"page": page, "page_size": 100},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                items = data.get("data", [])
+                meta = data.get("meta", {})
+
+                for item in items:
+                    s = item.get("slug", "")
+                    pid = item.get("id", "")
+                    if s and pid:
+                        index[s] = pid
+
+                total_pages = meta.get("total_pages", 1)
+                if page >= total_pages:
+                    break
+                page += 1
+
+            self._hub_index = index
+            self._hub_index_expiry = now + self._hub_ttl
+            log.info("PromptHub index loaded: %d slugs", len(index))
+
+        except Exception as e:
+            log.warning("Failed to load PromptHub index: %s", e)
+            self._hub_index_expiry = now + 30
+
+    def _fetch_hub_prompt(self, slug: str) -> Optional[str]:
+        """Fetch a prompt's content from PromptHub by slug, with TTL cache.
+
+        Uses a two-phase approach:
+        1. Preloaded slug->id index (from list endpoint)
+        2. Per-slug content cache (from individual endpoint)
+        """
+        now = time.monotonic()
+
+        # Check content cache first
+        cached = self._hub_cache.get(slug)
+        if cached and cached[0] > now:
+            return cached[1] if cached[1] else None
+
+        # Ensure slug->id index is loaded
+        self._ensure_hub_index()
+
+        prompt_id = self._hub_index.get(slug)
+        if not prompt_id:
+            log.debug("PromptHub: slug '%s' not in index", slug)
+            self._hub_cache[slug] = (now + 60, "")  # cache miss briefly
+            return None
+
+        # Fetch content from individual endpoint
+        try:
+            client = self._get_http_client()
+            resp = client.get(f"/api/v1/prompts/{prompt_id}")
+            resp.raise_for_status()
+            data = resp.json()
+            item = data.get("data", data)
+            content = item.get("content", "")
+
+            self._hub_cache[slug] = (now + self._hub_ttl, content)
+            return content if content else None
+
+        except Exception as e:
+            log.debug("PromptHub fetch error for '%s' (id=%s): %s", slug, prompt_id, e)
+            return None
+
+    def _render_jinja2(self, template_str: str, variables: Dict[str, Any]) -> str:
+        """Render a Jinja2 template string with variables."""
+        try:
+            tpl = self._jinja_env.from_string(template_str)
+            return tpl.render(**variables)
+        except TemplateSyntaxError as e:
+            log.warning("Jinja2 syntax error in template: %s", e)
+            return self._simple_render(template_str, variables)
+
+    @staticmethod
+    def _simple_render(template_str: str, variables: Dict[str, Any]) -> str:
+        """Simple fallback renderer: replace {{ var }} with values."""
+        import re
+
+        def _replace(m: re.Match) -> str:
+            key = m.group(1).strip()
+            return str(variables.get(key, m.group(0)))
+
+        return re.sub(r"\{\{\s*(\w+)\s*\}\}", _replace, template_str)
+
+    def _build_prompt_slug(
+        self, category: str, prompt_type: str, locale: str, content_style: str
+    ) -> str:
+        """Build the PromptHub slug from parameters."""
+        loc_short = locale.split("-")[0]
+        type_slug = prompt_type.replace("_", "")  # key_points -> keypoints
+
+        # action_items doesn't vary by content_style
+        if prompt_type == "action_items":
+            return f"{category}-{type_slug}-{loc_short}"
+
+        return f"{category}-{type_slug}-{content_style}-{loc_short}"
+
+    def _resolve_shared_vars(self, locale: str) -> Dict[str, str]:
+        """Fetch shared modules (format_rules, image_requirements) from PromptHub."""
+        loc_short = locale.split("-")[0]
+        shared: Dict[str, str] = {}
+
+        fmt = self._fetch_hub_prompt(f"shared-format-rules-{loc_short}")
+        if fmt:
+            shared["format_rules"] = fmt
+
+        img = self._fetch_hub_prompt(f"shared-image-req-{loc_short}")
+        if img:
+            shared["image_requirements"] = img
+
+        return shared
+
+    def _get_system_from_hub(
+        self, category: str, locale: str, content_style: str
+    ) -> Optional[str]:
+        """Fetch and render system role from PromptHub."""
+        loc_short = locale.split("-")[0]
+        slug = f"shared-system-role-{loc_short}"
+        content = self._fetch_hub_prompt(slug)
+        if not content:
+            return None
+
+        return self._render_jinja2(content, {"content_style": content_style})
+
+    # ====================================================================
+    # Local config.json (model params, visual/image configs)
+    # ====================================================================
+
+    def _load_config(self, category: str) -> Dict:
+        """加载配置文件（带缓存）"""
+        cache_key = f"{category}:config"
+
+        if cache_key in self._config_cache:
+            return self._config_cache[cache_key]
+
+        config_file = self.prompts_dir / category / "config.json"
+
+        if not config_file.exists():
+            return {
+                "version": "1.0.0",
+                "model_params": {},
+            }
+
+        with open(config_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        self._config_cache[cache_key] = data
+        return data
 
 
 # 全局单例
