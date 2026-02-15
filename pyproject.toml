@@ -39,6 +39,7 @@ dependencies = [
     "google-api-python-client>=2.100.0",
     "google-auth>=2.25.0",
     "google-auth-oauthlib>=1.2.0",
+    "prompthub-sdk",
 ]
 
 [dependency-groups]
@@ -142,3 +143,6 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
 ]
+
+[tool.uv.sources]
+prompthub-sdk = { path = "../../prompthub/sdk", editable = true }

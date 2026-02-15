@@ -1,15 +1,13 @@
-"""提示词管理器 - 通过 PromptHub API 获取提示词模板"""
+"""提示词管理器 - 通过 PromptHub SDK 获取提示词模板"""
 
 from __future__ import annotations
 
 import json
 import logging
-import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
-import httpx
-from jinja2 import BaseLoader, Environment, TemplateSyntaxError
+from prompthub import NotFoundError, PromptHubClient, PromptHubError
 
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
@@ -20,7 +18,7 @@ log = logging.getLogger(__name__)
 class PromptManager:
     """提示词管理器
 
-    从 PromptHub API 获取提示词模板，配置数据从本地 config.json 读取。
+    通过 PromptHub SDK 获取提示词模板，配置数据从本地 config.json 读取。
     """
 
     _instance: Optional[PromptManager] = None
@@ -41,31 +39,24 @@ class PromptManager:
         # Config cache (permanent)
         self._config_cache: Dict[str, Dict] = {}
 
-        # PromptHub config (lazy import settings to avoid circular import)
+        # PromptHub SDK client (lazy import settings to avoid circular import)
         from app.config import settings
 
-        self._hub_url: Optional[str] = getattr(settings, "PROMPTHUB_BASE_URL", None)
-        self._hub_key: Optional[str] = getattr(settings, "PROMPTHUB_API_KEY", None)
-        self._hub_ttl: int = getattr(settings, "PROMPTHUB_CACHE_TTL", 300)
-        self._hub_enabled: bool = bool(self._hub_url and self._hub_key)
+        hub_url: Optional[str] = getattr(settings, "PROMPTHUB_BASE_URL", None)
+        hub_key: Optional[str] = getattr(settings, "PROMPTHUB_API_KEY", None)
+        hub_ttl: int = getattr(settings, "PROMPTHUB_CACHE_TTL", 300)
 
-        # PromptHub slug->id index (preloaded from list endpoint)
-        self._hub_index: Dict[str, str] = {}  # slug -> prompt_id
-        self._hub_index_expiry: float = 0.0
-
-        # PromptHub content cache: slug -> (expiry_timestamp, content_string)
-        self._hub_cache: Dict[str, Tuple[float, str]] = {}
-
-        # HTTP client (lazy init)
-        self._http: Optional[httpx.Client] = None
-
-        # Jinja2 environment for rendering PromptHub templates
-        self._jinja_env = Environment(loader=BaseLoader())
-
-        if self._hub_enabled:
-            log.info("PromptHub enabled: %s (TTL=%ds)", self._hub_url, self._hub_ttl)
-        else:
+        if not hub_url or not hub_key:
+            self._client: Optional[PromptHubClient] = None
             log.warning("PromptHub not configured — prompts will not be available")
+            return
+
+        self._client = PromptHubClient(
+            base_url=hub_url,
+            api_key=hub_key,
+            cache_ttl=hub_ttl,
+        )
+        log.info("PromptHub SDK initialized: %s (TTL=%ds)", hub_url, hub_ttl)
 
     # ====================================================================
     # Public API
@@ -91,37 +82,43 @@ class PromptManager:
         Returns:
             包含 system, user_prompt, model_params 的字典
         """
-        if content_style is None:
-            content_style = (variables or {}).get("content_style", "meeting")
-
-        if not self._hub_enabled:
+        if self._client is None:
             raise BusinessError(
                 ErrorCode.SYSTEM_ERROR,
                 reason="PromptHub not configured",
             )
 
-        # 1. Fetch user_prompt template from PromptHub
+        if content_style is None:
+            content_style = (variables or {}).get("content_style", "meeting")
+
         slug = self._build_prompt_slug(category, prompt_type, locale, content_style)
-        template_content = self._fetch_hub_prompt(slug)
-        if not template_content:
+
+        try:
+            # SDK handles: slug lookup, HTTP call, caching, response parsing
+            prompt = self._client.prompts.get_by_slug(slug)
+
+            # Merge shared vars + caller vars, then render server-side
+            shared_vars = self._resolve_shared_vars(locale)
+            all_vars = {**shared_vars, **(variables or {})}
+
+            rendered = self._client.prompts.render(prompt.id, variables=all_vars)
+            user_prompt = rendered.rendered_content
+
+        except NotFoundError:
             raise BusinessError(
                 ErrorCode.SYSTEM_ERROR,
                 reason=f"Prompt not found in PromptHub: {slug}",
             )
+        except PromptHubError as e:
+            raise BusinessError(
+                ErrorCode.SYSTEM_ERROR,
+                reason=f"PromptHub error [{e.code}]: {e.message}",
+            )
 
-        # 2. Get shared modules and merge with caller variables
-        shared_vars = self._resolve_shared_vars(locale)
-        all_vars = {**shared_vars, **(variables or {})}
-
-        # 3. Render user_prompt with Jinja2
-        user_prompt = self._render_jinja2(template_content, all_vars)
-
-        # 4. Get system message from PromptHub
+        # System message
         system_message = self._get_system_from_hub(category, locale, content_style)
-        if system_message is None:
-            system_message = ""
 
-        # 5. model_params from local config.json
+        # model_params from local config.json
         config_data = self._load_config(category)
         if "prompt_types" in config_data and prompt_type in config_data["prompt_types"]:
             model_params = config_data["prompt_types"][prompt_type].get("model_params", {})
@@ -129,7 +126,7 @@ class PromptManager:
             model_params = config_data.get("model_params", {}).get(prompt_type, {})
 
         return {
-            "system": system_message,
+            "system": system_message or "",
             "user_prompt": user_prompt,
             "model_params": model_params,
             "metadata": {
@@ -138,16 +135,14 @@ class PromptManager:
                 "locale": locale,
                 "content_style": content_style,
                 "version": config_data.get("version", "unknown"),
-                "source": "prompthub",
+                "source": "prompthub-sdk",
             },
         }
 
     def clear_cache(self) -> None:
         """清除所有缓存"""
         self._config_cache.clear()
-        self._hub_index.clear()
-        self._hub_index_expiry = 0.0
-        self._hub_cache.clear()
+        # SDK cache is managed internally by TTLCache
 
     def get_visual_config(self, visual_type: str) -> Dict[str, Any]:
         """获取可视化类型的配置（从本地 config.json 读取）"""
@@ -172,6 +167,12 @@ class PromptManager:
         locale: str = "zh-CN",
     ) -> str:
         """获取图片生成提示词"""
+        if self._client is None:
+            raise BusinessError(
+                ErrorCode.SYSTEM_ERROR,
+                reason="PromptHub not configured",
+            )
+
         config = self._load_config("images")
         lang = "zh" if locale.startswith("zh") else "en"
 
@@ -180,181 +181,26 @@ class PromptManager:
             content_style, config["content_style_mapping"]["general"]
         )
 
-        # Visual style prompt
-        visual_style_key = style_config.get("visual_style", "flat_vector")
-        visual_styles = config.get("visual_styles", {})
-        lang_key = f"prompt_{lang}"
-        visual_style_prompt = visual_styles.get(visual_style_key, {}).get(
-            lang_key, visual_styles.get("flat_vector", {}).get(lang_key, "")
+        template_vars = self._build_image_template_vars(
+            config, style_config, lang, image_type, content_style, description, key_texts
         )
 
-        # Layout instructions from config.json
-        layout_key = style_config.get("layout", "flexible")
-        layout_templates = config.get("layout_templates", {}).get(lang, {})
-        layout_instructions = layout_templates.get(
-            layout_key, layout_templates.get("flexible", "")
-        )
+        loc_short = locale.split("-")[0]
+        slug = f"images-baseprompt-{loc_short}"
 
-        # Colors
-        colors = style_config.get("color_scheme", {})
-
-        # Localized names from config.json
-        image_type_name = config.get("image_type_names", {}).get(lang, {}).get(
-            image_type, image_type
-        )
-        content_style_name = config.get("content_style_names", {}).get(lang, {}).get(
-            content_style, content_style
-        )
-
-        # Format key texts
-        if key_texts:
-            key_texts_formatted = "\n".join([f"- {text}" for text in key_texts])
-        else:
-            if lang == "zh":
-                key_texts_formatted = "- (根据主题自动生成合适的标签)"
-            else:
-                key_texts_formatted = "- (Auto-generate appropriate labels based on topic)"
-
-        template_vars = {
-            "image_type": image_type_name,
-            "content_style_name": content_style_name,
-            "visual_style_prompt": visual_style_prompt,
-            "primary_color": colors.get("primary", "#3B82F6"),
-            "secondary_color": colors.get("secondary", "#10B981"),
-            "background_color": colors.get("background", "#FFFFFF"),
-            "description": description,
-            "key_texts_formatted": key_texts_formatted,
-            "layout_instructions": layout_instructions,
-        }
-
-        # Fetch base_prompt from PromptHub
-        if self._hub_enabled:
-            loc_short = locale.split("-")[0]
-            slug = f"images-baseprompt-{loc_short}"
-            hub_content = self._fetch_hub_prompt(slug)
-            if hub_content:
-                return self._render_jinja2(hub_content, template_vars)
-
-        raise BusinessError(
-            ErrorCode.SYSTEM_ERROR,
-            reason="Failed to fetch image prompt from PromptHub",
-        )
-
-    # ====================================================================
-    # PromptHub integration
-    # ====================================================================
-
-    def _get_http_client(self) -> httpx.Client:
-        """Lazy-init HTTP client for PromptHub API."""
-        if self._http is None:
-            self._http = httpx.Client(
-                base_url=self._hub_url,
-                headers={
-                    "Authorization": f"Bearer {self._hub_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=10.0,
+        try:
+            prompt = self._client.prompts.get_by_slug(slug)
+            rendered = self._client.prompts.render(prompt.id, variables=template_vars)
+            return rendered.rendered_content
+        except PromptHubError as e:
+            raise BusinessError(
+                ErrorCode.SYSTEM_ERROR,
+                reason=f"Failed to fetch image prompt: {e.message}",
             )
-        return self._http
 
-    def _ensure_hub_index(self) -> None:
-        """Build slug->id index from PromptHub list endpoint (lightweight, no content)."""
-        now = time.monotonic()
-        if self._hub_index and self._hub_index_expiry > now:
-            return
-
-        try:
-            client = self._get_http_client()
-            index: Dict[str, str] = {}
-
-            page = 1
-            while True:
-                resp = client.get(
-                    "/api/v1/prompts",
-                    params={"page": page, "page_size": 100},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                items = data.get("data", [])
-                meta = data.get("meta", {})
-
-                for item in items:
-                    s = item.get("slug", "")
-                    pid = item.get("id", "")
-                    if s and pid:
-                        index[s] = pid
-
-                total_pages = meta.get("total_pages", 1)
-                if page >= total_pages:
-                    break
-                page += 1
-
-            self._hub_index = index
-            self._hub_index_expiry = now + self._hub_ttl
-            log.info("PromptHub index loaded: %d slugs", len(index))
-
-        except Exception as e:
-            log.warning("Failed to load PromptHub index: %s", e)
-            self._hub_index_expiry = now + 30
-
-    def _fetch_hub_prompt(self, slug: str) -> Optional[str]:
-        """Fetch a prompt's content from PromptHub by slug, with TTL cache.
-
-        Uses a two-phase approach:
-        1. Preloaded slug->id index (from list endpoint)
-        2. Per-slug content cache (from individual endpoint)
-        """
-        now = time.monotonic()
-
-        # Check content cache first
-        cached = self._hub_cache.get(slug)
-        if cached and cached[0] > now:
-            return cached[1] if cached[1] else None
-
-        # Ensure slug->id index is loaded
-        self._ensure_hub_index()
-
-        prompt_id = self._hub_index.get(slug)
-        if not prompt_id:
-            log.debug("PromptHub: slug '%s' not in index", slug)
-            self._hub_cache[slug] = (now + 60, "")  # cache miss briefly
-            return None
-
-        # Fetch content from individual endpoint
-        try:
-            client = self._get_http_client()
-            resp = client.get(f"/api/v1/prompts/{prompt_id}")
-            resp.raise_for_status()
-            data = resp.json()
-            item = data.get("data", data)
-            content = item.get("content", "")
-
-            self._hub_cache[slug] = (now + self._hub_ttl, content)
-            return content if content else None
-
-        except Exception as e:
-            log.debug("PromptHub fetch error for '%s' (id=%s): %s", slug, prompt_id, e)
-            return None
-
-    def _render_jinja2(self, template_str: str, variables: Dict[str, Any]) -> str:
-        """Render a Jinja2 template string with variables."""
-        try:
-            tpl = self._jinja_env.from_string(template_str)
-            return tpl.render(**variables)
-        except TemplateSyntaxError as e:
-            log.warning("Jinja2 syntax error in template: %s", e)
-            return self._simple_render(template_str, variables)
-
-    @staticmethod
-    def _simple_render(template_str: str, variables: Dict[str, Any]) -> str:
-        """Simple fallback renderer: replace {{ var }} with values."""
-        import re
-
-        def _replace(m: re.Match) -> str:
-            key = m.group(1).strip()
-            return str(variables.get(key, m.group(0)))
-
-        return re.sub(r"\{\{\s*(\w+)\s*\}\}", _replace, template_str)
+    # ====================================================================
+    # PromptHub SDK helpers
+    # ====================================================================
 
     def _build_prompt_slug(
         self, category: str, prompt_type: str, locale: str, content_style: str
@@ -371,30 +217,93 @@ class PromptManager:
 
     def _resolve_shared_vars(self, locale: str) -> Dict[str, str]:
         """Fetch shared modules (format_rules, image_requirements) from PromptHub."""
+        if self._client is None:
+            return {}
+
         loc_short = locale.split("-")[0]
         shared: Dict[str, str] = {}
 
-        fmt = self._fetch_hub_prompt(f"shared-format-rules-{loc_short}")
-        if fmt:
-            shared["format_rules"] = fmt
+        try:
+            fmt = self._client.prompts.get_by_slug(f"shared-format-rules-{loc_short}")
+            shared["format_rules"] = fmt.content
+        except NotFoundError:
+            pass
 
-        img = self._fetch_hub_prompt(f"shared-image-req-{loc_short}")
-        if img:
-            shared["image_requirements"] = img
+        try:
+            img = self._client.prompts.get_by_slug(f"shared-image-req-{loc_short}")
+            shared["image_requirements"] = img.content
+        except NotFoundError:
+            pass
 
         return shared
 
-    def _get_system_from_hub(
-        self, category: str, locale: str, content_style: str
-    ) -> Optional[str]:
+    def _get_system_from_hub(self, category: str, locale: str, content_style: str) -> Optional[str]:
         """Fetch and render system role from PromptHub."""
-        loc_short = locale.split("-")[0]
-        slug = f"shared-system-role-{loc_short}"
-        content = self._fetch_hub_prompt(slug)
-        if not content:
+        if self._client is None:
             return None
 
-        return self._render_jinja2(content, {"content_style": content_style})
+        loc_short = locale.split("-")[0]
+        slug = f"shared-system-role-{loc_short}"
+
+        try:
+            prompt = self._client.prompts.get_by_slug(slug)
+            rendered = self._client.prompts.render(
+                prompt.id, variables={"content_style": content_style}
+            )
+            return rendered.rendered_content
+        except PromptHubError:
+            return None
+
+    def _build_image_template_vars(
+        self,
+        config: Dict,
+        style_config: Dict,
+        lang: str,
+        image_type: str,
+        content_style: str,
+        description: str,
+        key_texts: list[str],
+    ) -> Dict[str, Any]:
+        """Build template variables for image prompt rendering."""
+        visual_style_key = style_config.get("visual_style", "flat_vector")
+        visual_styles = config.get("visual_styles", {})
+        lang_key = f"prompt_{lang}"
+        visual_style_prompt = visual_styles.get(visual_style_key, {}).get(
+            lang_key, visual_styles.get("flat_vector", {}).get(lang_key, "")
+        )
+
+        layout_key = style_config.get("layout", "flexible")
+        layout_templates = config.get("layout_templates", {}).get(lang, {})
+        layout_instructions = layout_templates.get(layout_key, layout_templates.get("flexible", ""))
+
+        colors = style_config.get("color_scheme", {})
+
+        image_type_name = (
+            config.get("image_type_names", {}).get(lang, {}).get(image_type, image_type)
+        )
+        content_style_name = (
+            config.get("content_style_names", {}).get(lang, {}).get(content_style, content_style)
+        )
+
+        if key_texts:
+            key_texts_formatted = "\n".join([f"- {text}" for text in key_texts])
+        else:
+            if lang == "zh":
+                key_texts_formatted = "- (根据主题自动生成合适的标签)"
+            else:
+                key_texts_formatted = "- (Auto-generate appropriate labels based on topic)"
+
+        return {
+            "image_type": image_type_name,
+            "content_style_name": content_style_name,
+            "visual_style_prompt": visual_style_prompt,
+            "primary_color": colors.get("primary", "#3B82F6"),
+            "secondary_color": colors.get("secondary", "#10B981"),
+            "background_color": colors.get("background", "#FFFFFF"),
+            "description": description,
+            "key_texts_formatted": key_texts_formatted,
+            "layout_instructions": layout_instructions,
+        }
 
     # ====================================================================
     # Local config.json (model params, visual/image configs)

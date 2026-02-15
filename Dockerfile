@@ -30,12 +30,20 @@ import tomllib
 with open("pyproject.toml", "rb") as f:
     data = tomllib.load(f)
 
-requirements = data["project"]["dependencies"]
+requirements = [
+    r for r in data["project"]["dependencies"]
+    if "prompthub-sdk" not in r
+]
 path = pathlib.Path("/tmp/requirements.txt")
 path.write_text("\n".join(requirements))
 PY
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
+
+# Install prompthub-sdk from local source (via additional_contexts)
+COPY --from=prompthub-sdk . /tmp/prompthub-sdk
+RUN pip install --no-cache-dir /tmp/prompthub-sdk \
+    && rm -rf /tmp/prompthub-sdk
 
 COPY . .
 
