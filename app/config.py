@@ -139,6 +139,7 @@ class Settings(BaseSettings):
     PROMPTHUB_BASE_URL: Optional[str] = Field(default=None)
     PROMPTHUB_API_KEY: Optional[str] = Field(default=None)
     PROMPTHUB_CACHE_TTL: int = Field(default=300)  # seconds
+    PROMPTHUB_IMAGE_GEN_PROJECT_ID: Optional[str] = Field(default=None)
 
 
 settings = Settings()

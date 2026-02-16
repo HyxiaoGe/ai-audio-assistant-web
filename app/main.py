@@ -49,6 +49,11 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(api_router)
+
+    from app.api.templates import router as templates_router
+
+    app.include_router(templates_router, prefix="/api")
+
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(LocaleMiddleware)
     app.add_middleware(UserContextMiddleware)
