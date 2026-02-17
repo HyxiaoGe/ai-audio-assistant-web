@@ -3,25 +3,20 @@ from __future__ import annotations
 from logging.config import fileConfig
 from typing import Any
 
-from sqlalchemy import engine_from_config, pool
-
 from alembic import context  # type: ignore[attr-defined]
 from app.config import settings
 from app.models import asr_pricing_config as _asr_pricing_config  # noqa: F401
 from app.models import asr_usage as _asr_usage  # noqa: F401
 from app.models import asr_usage_period as _asr_usage_period  # noqa: F401
 from app.models import asr_user_quota as _asr_user_quota  # noqa: F401
-from app.models import prompt_template as _prompt_template  # noqa: F401
 from app.models import service_config as _service_config  # noqa: F401
 from app.models import service_config_history as _service_config_history  # noqa: F401
 from app.models import summary as _summary  # noqa: F401
 from app.models import task as _task  # noqa: F401
 from app.models import transcript as _transcript  # noqa: F401
 from app.models import user as _user  # noqa: F401
-from app.models import user_template_favorite as _user_template_favorite  # noqa: F401
-from app.models import user_template_like as _user_template_like  # noqa: F401
-from app.models import user_template_usage as _user_template_usage  # noqa: F401
 from app.models.base import Base
+from sqlalchemy import engine_from_config, pool
 
 config: Any = context.config
 if config.config_file_name is not None:

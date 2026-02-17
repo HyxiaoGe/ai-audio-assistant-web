@@ -19,9 +19,11 @@ from app.core.response import error
 from app.core.smart_factory import SelectionStrategy, SmartFactory, SmartFactoryConfig
 from app.db import async_session_factory
 from app.i18n.codes import ErrorCode
-from app.services.asr import aliyun  # noqa: F401
-from app.services.asr import tencent  # noqa: F401
-from app.services.asr import volcengine  # noqa: F401
+from app.services.asr import (
+    aliyun,  # noqa: F401
+    tencent,  # noqa: F401
+    volcengine,  # noqa: F401
+)
 from app.services.asr import configs as asr_configs  # noqa: F401
 
 # 导入所有服务模块以触发 @register_service 装饰器
@@ -49,10 +51,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(api_router)
-
-    from app.api.templates import router as templates_router
-
-    app.include_router(templates_router, prefix="/api")
 
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(LocaleMiddleware)
