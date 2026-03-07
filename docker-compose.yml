@@ -1,7 +1,7 @@
 x-build: &default-build
   context: .
   additional_contexts:
-    prompthub-sdk: ../../prompthub/sdk
+    prompthub-sdk: ../prompthub/sdk
 
 services:
   api:
@@ -20,6 +20,9 @@ services:
       - ./data:/app/data
     ports:
       - "8088:8000"
+    restart: unless-stopped
+    networks:
+      - ai-audio-network
 
   worker:
     build: *default-build
@@ -32,10 +35,13 @@ services:
       MINIO_ENDPOINT: 192.168.1.10:9000
       MINIO_USE_SSL: "false"
       PROMPTHUB_BASE_URL: http://prompthub-backend:8000
-      CONFIG_CENTER_DB_ENABLED: "false"  # Disable config DB in worker to avoid event loop conflicts
+      CONFIG_CENTER_DB_ENABLED: "false"
     volumes:
       - .:/app
       - ./data:/app/data
+    restart: unless-stopped
+    networks:
+      - ai-audio-network
 
   beat:
     build: *default-build
@@ -51,6 +57,9 @@ services:
       CONFIG_CENTER_DB_ENABLED: "false"
     volumes:
       - .:/app
+    restart: unless-stopped
+    networks:
+      - ai-audio-network
 
   migrate:
     build: *default-build
@@ -63,7 +72,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://user:pass@192.168.1.10:5432/audio_assistant
     volumes:
       - .:/app
+    networks:
+      - ai-audio-network
 
 networks:
-  default:
-    name: ai-audio-network
+  ai-audio-network:
+    external: true
