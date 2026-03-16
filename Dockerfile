@@ -32,7 +32,7 @@ with open("pyproject.toml", "rb") as f:
 
 requirements = [
     r for r in data["project"]["dependencies"]
-    if "prompthub-sdk" not in r
+    if "prompthub-sdk" not in r and "auth-client" not in r
 ]
 path = pathlib.Path("/tmp/requirements.txt")
 path.write_text("\n".join(requirements))
@@ -44,6 +44,11 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
 COPY --from=prompthub-sdk . /tmp/prompthub-sdk
 RUN pip install --no-cache-dir /tmp/prompthub-sdk \
     && rm -rf /tmp/prompthub-sdk
+
+# Install auth-client from local source (via additional_contexts)
+COPY --from=auth-client . /tmp/auth-client
+RUN pip install --no-cache-dir /tmp/auth-client[fastapi] \
+    && rm -rf /tmp/auth-client
 
 COPY . .
 

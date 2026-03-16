@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     JWT_SECRET: Optional[str] = Field(default=None)
     JWT_ALGORITHM: Optional[str] = Field(default=None)
 
+    # Auth Service (统一认证)
+    AUTH_SERVICE_URL: str = Field(default="http://localhost:8100")
+    AUTH_SERVICE_JWKS_URL: Optional[str] = Field(default=None)
+
     CONFIG_CENTER_DB_ENABLED: bool = Field(default=True)
     CONFIG_CENTER_CACHE_TTL: int = Field(default=60)
     ADMIN_EMAILS: Optional[str] = Field(default=None)
@@ -130,6 +134,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: Optional[str] = Field(default=None)
     YOUTUBE_OAUTH_REDIRECT_URI: Optional[str] = Field(default=None)
     FRONTEND_URL: str = Field(default="http://localhost:3000")
+
+    # CORS 允许的额外 origins（逗号分隔）
+    CORS_ORIGINS: Optional[str] = Field(default=None)
 
     STATS_CURRENCY: str = Field(default="CNY")
 

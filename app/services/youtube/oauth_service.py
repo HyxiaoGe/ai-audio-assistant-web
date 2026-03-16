@@ -51,13 +51,19 @@ class YouTubeOAuthService:
                 reason="YouTube OAuth not configured",
             )
 
-        flow = self._create_flow()
-        authorization_url, _ = flow.authorization_url(
-            access_type="offline",  # Get refresh_token
-            include_granted_scopes="true",
-            prompt="consent",  # Force consent to ensure refresh_token
-            state=state,
-        )
+        from urllib.parse import urlencode
+
+        params = {
+            "client_id": self._client_id,
+            "redirect_uri": self._redirect_uri,
+            "response_type": "code",
+            "scope": " ".join(YOUTUBE_SCOPES),
+            "access_type": "offline",
+            "include_granted_scopes": "true",
+            "prompt": "consent",
+            "state": state,
+        }
+        authorization_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
 
         logger.info(f"Generated YouTube OAuth URL for state={state[:8]}...")
         return authorization_url
@@ -78,24 +84,31 @@ class YouTubeOAuthService:
             )
 
         try:
-            flow = self._create_flow()
-            flow.fetch_token(code=code)
+            import httpx
 
-            credentials = flow.credentials
+            resp = httpx.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                    "redirect_uri": self._redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+            )
+            resp.raise_for_status()
+            tokens = resp.json()
 
-            access_token = credentials.token
-            refresh_token = credentials.refresh_token
-            expires_at = credentials.expiry
+            access_token = tokens["access_token"]
+            refresh_token = tokens.get("refresh_token", "")
+            expires_in = tokens.get("expires_in", 3600)
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
             if not refresh_token:
                 logger.warning("No refresh_token received from Google")
 
-            # Ensure expires_at has timezone info
-            if expires_at and expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-
             logger.info("Successfully exchanged code for tokens")
-            return access_token, refresh_token or "", expires_at or datetime.now(timezone.utc)
+            return access_token, refresh_token, expires_at
 
         except Exception as e:
             logger.exception(f"Failed to exchange code: {e}")

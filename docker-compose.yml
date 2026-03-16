@@ -2,6 +2,7 @@ x-build: &default-build
   context: .
   additional_contexts:
     prompthub-sdk: ../prompthub/sdk
+    auth-client: ../auth-service/auth-client
 
 services:
   api:
@@ -15,6 +16,8 @@ services:
       MINIO_ENDPOINT: 192.168.1.10:9000
       MINIO_USE_SSL: "false"
       PROMPTHUB_BASE_URL: http://prompthub-backend:8000
+      CORS_ORIGINS: http://192.168.1.10:3002
+      AUTH_SERVICE_URL: http://192.168.1.10:8100
     volumes:
       - .:/app
       - ./data:/app/data

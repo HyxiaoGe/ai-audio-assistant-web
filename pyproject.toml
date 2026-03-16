@@ -40,6 +40,7 @@ dependencies = [
     "google-auth>=2.25.0",
     "google-auth-oauthlib>=1.2.0",
     "prompthub-sdk",
+    "auth-client[fastapi]",
 ]
 
 [dependency-groups]
@@ -146,3 +147,4 @@ markers = [
 
 [tool.uv.sources]
 prompthub-sdk = { path = "../../prompthub/sdk", editable = true }
+auth-client = { path = "../../auth-service/auth-client", editable = true }

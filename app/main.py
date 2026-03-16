@@ -38,12 +38,17 @@ def create_app() -> FastAPI:
     app = FastAPI(title="AI Audio Assistant API", version="0.1.0")
 
     # CORS configuration
+    cors_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+    if settings.CORS_ORIGINS:
+        cors_origins.extend(
+            origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()
+        )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-        ],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

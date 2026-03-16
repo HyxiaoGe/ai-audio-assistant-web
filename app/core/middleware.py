@@ -8,7 +8,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.core.response import reset_request_id, set_request_id
-from app.core.security import decode_access_token, extract_bearer_token
+from app.core.security import extract_bearer_token, get_jwt_validator
 from app.core.user_context import reset_current_user_id, set_current_user_id
 
 logger = logging.getLogger("app.middleware")
@@ -66,10 +66,10 @@ class UserContextMiddleware(BaseHTTPMiddleware):
         if authorization:
             try:
                 token = extract_bearer_token(authorization)
-                payload = decode_access_token(token)
-                subject = payload.get("sub")
-                if isinstance(subject, str) and subject:
-                    token_handle = set_current_user_id(subject)
+                validator = get_jwt_validator()
+                auth_user = await validator.verify_async(token)
+                if auth_user.sub:
+                    token_handle = set_current_user_id(auth_user.sub)
             except Exception:
                 token_handle = None
         try:

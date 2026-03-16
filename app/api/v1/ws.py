@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.i18n import get_message
 from app.core.redis import get_redis_client
-from app.core.security import decode_access_token, extract_bearer_token
+from app.core.security import extract_bearer_token, verify_access_token
 from app.db import async_session_factory
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
@@ -57,18 +57,21 @@ async def _authenticate_token(
     token: str, session: AsyncSession, locale: str, trace_id: str
 ) -> tuple[Optional[User], Optional[ErrorCode]]:
     try:
-        payload = decode_access_token(token)
+        auth_user = await verify_access_token(token)
     except Exception as exc:
         if hasattr(exc, "code"):
             return None, exc.code
         return None, ErrorCode.AUTH_TOKEN_INVALID
 
-    subject = payload.get("sub")
-    if not isinstance(subject, str) or not subject:
+    email = auth_user.email
+    if not email:
         return None, ErrorCode.AUTH_TOKEN_INVALID
 
     result = await session.execute(
-        select(User).where(User.id == subject, User.deleted_at.is_(None))
+        select(User)
+        .where(User.email == email, User.deleted_at.is_(None))
+        .order_by(User.created_at)
+        .limit(1)
     )
     user = result.scalar_one_or_none()
     if user is None:
