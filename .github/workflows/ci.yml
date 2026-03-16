@@ -54,9 +54,16 @@ jobs:
           with open("pyproject.toml", "rb") as f:
               data = tomllib.load(f)
 
+          # Map local path dependencies to GitHub install URLs
+          GIT_DEPS = {
+              "prompthub-sdk": "prompthub-sdk @ git+https://github.com/HyxiaoGe/prompthub.git@main#subdirectory=sdk",
+              "auth-client": "auth-client[fastapi] @ git+https://github.com/HyxiaoGe/auth-service.git@main#subdirectory=auth-client",
+          }
+
           requirements = data["project"]["dependencies"]
           dev = data.get("dependency-groups", {}).get("dev", [])
-          pathlib.Path("requirements-ci.txt").write_text("\n".join(requirements + dev))
+          resolved = [GIT_DEPS.get(r.split(">")[0].split("<")[0].split("=")[0].split("[")[0].strip(), r) for r in requirements + dev]
+          pathlib.Path("requirements-ci.txt").write_text("\n".join(resolved))
           PY
           pip install -r requirements-ci.txt
           rm requirements-ci.txt
@@ -147,9 +154,16 @@ jobs:
           with open("pyproject.toml", "rb") as f:
               data = tomllib.load(f)
 
+          # Map local path dependencies to GitHub install URLs
+          GIT_DEPS = {
+              "prompthub-sdk": "prompthub-sdk @ git+https://github.com/HyxiaoGe/prompthub.git@main#subdirectory=sdk",
+              "auth-client": "auth-client[fastapi] @ git+https://github.com/HyxiaoGe/auth-service.git@main#subdirectory=auth-client",
+          }
+
           requirements = data["project"]["dependencies"]
           dev = data.get("dependency-groups", {}).get("dev", [])
-          pathlib.Path("requirements-ci.txt").write_text("\n".join(requirements + dev))
+          resolved = [GIT_DEPS.get(r.split(">")[0].split("<")[0].split("=")[0].split("[")[0].strip(), r) for r in requirements + dev]
+          pathlib.Path("requirements-ci.txt").write_text("\n".join(resolved))
           PY
           pip install -r requirements-ci.txt
           rm requirements-ci.txt
