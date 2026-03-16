@@ -337,12 +337,9 @@ async def generate_single_image(
         # 8. 上传到存储（MinIO + 云存储）
         object_key = await upload_image(user_id, task_id, image_data)
 
-        # 9. 返回后端 API URL
-        from app.config import settings
-
-        api_base = (settings.API_BASE_URL or "http://localhost:8000").rstrip("/")
+        # 9. 返回相对路径（前端通过 same-origin nginx 代理访问）
         image_path = object_key.replace("summary_images/", "")
-        image_url = f"{api_base}/api/v1/summaries/images/{image_path}"
+        image_url = f"/api/v1/summaries/images/{image_path}"
 
         logger.info(
             f"Generated styled image ({image_type}/{content_style}) "
