@@ -40,7 +40,7 @@ class Task(BaseModel):
     )
 
     user_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False
     )
 
     content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

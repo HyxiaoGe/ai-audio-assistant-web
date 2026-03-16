@@ -13,7 +13,7 @@ from app.i18n.codes import ErrorCode
 from app.models.llm_usage import LLMUsage
 from app.models.task import Task
 from app.models.task_stage import TaskStage
-from app.models.user import User
+from app.api.deps import CurrentUser
 
 _TIME_RANGE_VALUES = {"today", "week", "month", "all"}
 _SERVICE_TYPES = ("asr", "llm")
@@ -35,7 +35,7 @@ def _format_duration(total_seconds: float) -> str:
 
 
 class StatsService:
-    def __init__(self, db: AsyncSession, user: User):
+    def __init__(self, db: AsyncSession, user: CurrentUser):
         self.db = db
         self.user = user
 

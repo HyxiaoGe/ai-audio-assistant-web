@@ -1,11 +1,10 @@
 ﻿from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from app.api.deps import get_current_user
+from app.api.deps import CurrentUser, get_current_user
 from app.core.exceptions import BusinessError
 from app.core.response import success
 from app.i18n.codes import ErrorCode
-from app.models.user import User
 
 router = APIRouter()
 
@@ -21,5 +20,5 @@ async def test_error() -> JSONResponse:
 
 
 @router.get("/test-auth")
-async def test_auth(user: User = Depends(get_current_user)) -> JSONResponse:
+async def test_auth(user: CurrentUser = Depends(get_current_user)) -> JSONResponse:
     return success(data={"user_id": user.id})

@@ -9,13 +9,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import CurrentUser, get_current_user, get_db
 from app.core.exceptions import BusinessError
 from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
 from app.models.transcript import Transcript
-from app.models.user import User
 from app.schemas.transcript import TranscriptItem, TranscriptListResponse
 
 router = APIRouter(prefix="/transcripts")
@@ -51,7 +50,7 @@ def _split_timestamped_transcript(content: str) -> list[_TranscriptSegment]:
 async def get_transcripts(
     task_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     # Verify task exists and belongs to user
     task_stmt = select(Task).where(

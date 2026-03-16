@@ -20,7 +20,7 @@ class LLMUsage(BaseRecord):
     )
 
     user_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False
     )
     task_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True

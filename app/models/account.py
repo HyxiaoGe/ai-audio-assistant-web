@@ -18,7 +18,7 @@ class Account(BaseRecord):
     )
 
     user_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False
     )
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     provider_account_id: Mapped[str] = mapped_column(String(255), nullable=False)

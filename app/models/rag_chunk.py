@@ -14,7 +14,7 @@ class RagChunk(BaseRecord):
     __table_args__ = (UniqueConstraint("task_id", "chunk_index", name="uk_rag_chunks_task"),)
 
     user_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     task_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True

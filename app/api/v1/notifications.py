@@ -8,10 +8,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import CurrentUser, get_current_user, get_db
 from app.core.response import success
 from app.models.notification import Notification
-from app.models.user import User
 from app.schemas.common import PageResponse
 from app.schemas.notification import NotificationResponse, NotificationStatsResponse
 
@@ -22,7 +21,7 @@ router = APIRouter(prefix="/notifications")
 async def list_notifications(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     unread_only: bool = Query(default=False),
@@ -69,7 +68,7 @@ async def list_notifications(
 async def get_notification_stats(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get notification statistics (total, unread, and dismissed count)."""
 
@@ -115,7 +114,7 @@ async def mark_notification_read(
     notification_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Mark a notification as read."""
 
@@ -149,7 +148,7 @@ async def mark_notification_read(
 async def mark_all_read(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Mark all notifications as read."""
 
@@ -180,7 +179,7 @@ async def delete_notification(
     notification_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Dismiss a notification (soft delete)."""
 
@@ -212,7 +211,7 @@ async def delete_notification(
 async def clear_all_notifications(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Dismiss all notifications for the current user (soft delete)."""
 

@@ -14,10 +14,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import CurrentUser, get_current_user, get_db
 from app.core.response import success
 from app.models.asr_usage import ASRUsage
-from app.models.user import User
 from app.schemas.asr_usage import (
     ASRUsageItem,
     ASRUsageListResponse,
@@ -39,7 +38,7 @@ async def get_asr_usage_list(
     end_date: Optional[datetime] = Query(default=None, description="结束日期"),
     task_id: Optional[str] = Query(default=None, description="按任务 ID 筛选"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """获取 ASR 用量明细列表（分页）
 
@@ -113,7 +112,7 @@ async def get_asr_usage_summary(
     end_date: Optional[datetime] = Query(default=None, description="结束日期"),
     provider: Optional[str] = Query(default=None, description="按提供商筛选"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """获取 ASR 用量汇总统计（按提供商分组）
 

@@ -24,7 +24,7 @@ class ServiceConfigHistory(BaseRecord):
     service_type: Mapped[str] = mapped_column(String(20), nullable=False)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     owner_user_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     config: Mapped[dict[str, object]] = mapped_column(
@@ -33,5 +33,5 @@ class ServiceConfigHistory(BaseRecord):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_by: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
     )

@@ -25,7 +25,7 @@ class ServiceConfig(BaseRecord):
     service_type: Mapped[str] = mapped_column(String(20), nullable=False)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     owner_user_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
     )
     config: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
@@ -33,5 +33,5 @@ class ServiceConfig(BaseRecord):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     updated_by: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
     )

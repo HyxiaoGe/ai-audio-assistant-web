@@ -10,14 +10,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import CurrentUser, get_current_user, get_db
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.response import success
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
-from app.models.user import User
 from app.schemas.upload import UploadPresignRequest
 
 router = APIRouter(prefix="/upload")
@@ -80,7 +79,7 @@ def _ensure_extension_allowed(filename: str, allowed: Iterable[str]) -> None:
 @router.post("/presign")
 async def presign_upload(
     data: UploadPresignRequest,
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     allowed = _get_allowed_extensions()

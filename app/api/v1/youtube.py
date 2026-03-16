@@ -14,13 +14,12 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import CurrentUser, get_current_user, get_db
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
-from app.models.user import User
 from app.models.youtube_subscription import YouTubeSubscription
 from app.schemas.youtube import (
     BatchAutoTranscribeRequest,
@@ -132,7 +131,7 @@ async def _trigger_video_sync_if_needed(
 
 @router.get("/auth")
 async def get_auth_url(
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get YouTube OAuth authorization URL.
 
@@ -239,7 +238,7 @@ async def oauth_callback(
 @router.get("/status")
 async def get_connection_status(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get YouTube connection status."""
     subscription_service = YouTubeSubscriptionService()
@@ -251,7 +250,7 @@ async def get_connection_status(
 @router.delete("/disconnect")
 async def disconnect_youtube(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Disconnect YouTube account."""
     subscription_service = YouTubeSubscriptionService()
@@ -269,7 +268,7 @@ async def get_subscriptions(
     show_hidden: bool = Query(False, description="Include hidden channels"),
     starred_only: bool = Query(False, description="Only show starred channels"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get user's YouTube subscriptions (cached).
 
@@ -325,7 +324,7 @@ async def get_subscriptions(
 @router.post("/subscriptions/sync")
 async def sync_subscriptions(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Trigger background sync of YouTube subscriptions.
 
@@ -361,7 +360,7 @@ async def sync_subscriptions(
 async def get_subscription_settings(
     channel_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get settings for a specific subscription."""
     subscription_service = YouTubeSubscriptionService()
@@ -399,7 +398,7 @@ async def update_subscription_settings(
     channel_id: str,
     settings_update: SubscriptionSettingsUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Update settings for a specific subscription."""
     subscription_service = YouTubeSubscriptionService()
@@ -446,7 +445,7 @@ async def update_subscription_settings(
 async def batch_star_subscriptions(
     request: BatchStarRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Batch update starred status for multiple channels."""
     subscription_service = YouTubeSubscriptionService()
@@ -478,7 +477,7 @@ async def batch_star_subscriptions(
 async def batch_auto_transcribe_settings(
     request: BatchAutoTranscribeRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Batch update auto-transcribe settings for multiple channels."""
     subscription_service = YouTubeSubscriptionService()
@@ -563,7 +562,7 @@ async def get_channel_videos(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=50, description="Items per page"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get cached videos for a channel.
 
@@ -655,7 +654,7 @@ async def get_latest_videos(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=50, description="Items per page"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get latest videos across all subscriptions.
 
@@ -723,7 +722,7 @@ async def get_starred_videos(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=50, description="Items per page"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get latest videos from starred channels only.
 
@@ -784,7 +783,7 @@ async def get_starred_videos(
 @router.get("/sync-overview")
 async def get_sync_overview(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get overall video sync status across all subscriptions.
 
@@ -813,7 +812,7 @@ async def get_sync_overview(
 async def get_channel_sync_status(
     channel_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get video sync status for a channel."""
     subscription_service = YouTubeSubscriptionService()
@@ -833,7 +832,7 @@ async def sync_channel_videos(
     channel_id: str,
     max_videos: int = Query(50, ge=1, le=200, description="Max videos to fetch"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Trigger video sync for a specific channel.
 
@@ -877,7 +876,7 @@ async def transcribe_video(
     video_id: str,
     request: YouTubeTranscribeRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Create a transcription task from a cached YouTube video.
 
@@ -955,7 +954,7 @@ async def transcribe_video(
 @router.get("/tasks/{task_id}/status")
 async def get_task_status(
     task_id: str,
-    _: User = Depends(get_current_user),
+    _: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get the status of a YouTube sync task.
 

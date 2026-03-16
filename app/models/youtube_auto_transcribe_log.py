@@ -21,7 +21,7 @@ class YouTubeAutoTranscribeLog(BaseRecord):
 
     user_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("user_profiles.id", ondelete="CASCADE"),
         nullable=False,
     )
     video_id: Mapped[str] = mapped_column(String(20), nullable=False)

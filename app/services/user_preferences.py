@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import logging
+from uuid import UUID
+
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.models.user import User
+from app.api.deps import CurrentUser
+from app.config import settings
+from app.models.user import UserProfile
 from app.schemas.user import UserPreferencesUpdateRequest
+
+logger = logging.getLogger("app.user_preferences")
 
 DEFAULT_TASK_DEFAULTS: dict[str, object] = {
     "language": "auto",
@@ -22,15 +30,59 @@ DEFAULT_NOTIFICATIONS: dict[str, object] = {
 }
 
 
-def _normalize_settings(settings: object) -> dict[str, object]:
-    if isinstance(settings, dict):
-        return dict(settings)
+def _normalize_settings(app_settings: object) -> dict[str, object]:
+    if isinstance(app_settings, dict):
+        return dict(app_settings)
     return {}
 
 
-def get_user_preferences(user: User) -> dict[str, object]:
-    settings = _normalize_settings(user.settings)
-    prefs = settings.get("preferences")
+async def _get_auth_preferences(token: str) -> dict[str, object]:
+    """Fetch UI preferences (locale, timezone) from auth-service."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{settings.AUTH_SERVICE_URL}/auth/userinfo",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                prefs = data.get("preferences", {})
+                return {
+                    "locale": prefs.get("locale", "zh"),
+                    "timezone": prefs.get("timezone", "Asia/Shanghai"),
+                }
+    except Exception as exc:
+        logger.warning("Failed to fetch auth preferences: %s", exc)
+    return {"locale": "zh", "timezone": "Asia/Shanghai"}
+
+
+async def _update_auth_preferences(token: str, locale: str | None, timezone: str | None) -> None:
+    """Update UI preferences on auth-service."""
+    payload: dict[str, str] = {}
+    if locale is not None:
+        payload["locale"] = locale
+    if timezone is not None:
+        payload["timezone"] = timezone
+    if not payload:
+        return
+
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.patch(
+                f"{settings.AUTH_SERVICE_URL}/auth/profile",
+                headers={"Authorization": f"Bearer {token}"},
+                json=payload,
+                timeout=5.0,
+            )
+    except Exception as exc:
+        logger.warning("Failed to update auth preferences: %s", exc)
+
+
+def get_app_preferences(profile: UserProfile) -> dict[str, object]:
+    """Get app-level preferences from local profile."""
+    app_settings = _normalize_settings(profile.app_settings)
+    prefs = app_settings.get("preferences")
     if not isinstance(prefs, dict):
         prefs = {}
 
@@ -46,16 +98,27 @@ def get_user_preferences(user: User) -> dict[str, object]:
 
     return {
         "task_defaults": task_defaults,
-        "ui": {"locale": user.locale, "timezone": user.timezone},
         "notifications": notifications,
     }
 
 
+async def get_user_preferences(profile: UserProfile, token: str) -> dict[str, object]:
+    """Get combined preferences: app-level (local) + UI (auth-service)."""
+    app_prefs = get_app_preferences(profile)
+    ui_prefs = await _get_auth_preferences(token)
+    return {
+        "task_defaults": app_prefs["task_defaults"],
+        "ui": ui_prefs,
+        "notifications": app_prefs["notifications"],
+    }
+
+
 async def update_user_preferences(
-    db: AsyncSession, user: User, payload: UserPreferencesUpdateRequest
+    db: AsyncSession, profile: UserProfile, payload: UserPreferencesUpdateRequest, token: str
 ) -> dict[str, object]:
-    settings = _normalize_settings(user.settings)
-    prefs = settings.get("preferences")
+    """Update preferences: app-level locally, UI via auth-service."""
+    app_settings = _normalize_settings(profile.app_settings)
+    prefs = app_settings.get("preferences")
     if not isinstance(prefs, dict):
         prefs = {}
 
@@ -75,18 +138,20 @@ async def update_user_preferences(
         current.update(updates)
         prefs["notifications"] = current
 
-    if payload.ui is not None:
-        updates = payload.ui.model_dump(exclude_unset=True)
-        if "locale" in updates:
-            user.locale = updates["locale"]
-        if "timezone" in updates:
-            user.timezone = updates["timezone"]
-
-    settings["preferences"] = prefs
-    user.settings = settings
-    flag_modified(user, "settings")
+    app_settings["preferences"] = prefs
+    profile.app_settings = app_settings
+    flag_modified(profile, "app_settings")
 
     await db.commit()
-    await db.refresh(user)
+    await db.refresh(profile)
 
-    return get_user_preferences(user)
+    # Delegate UI preferences to auth-service
+    if payload.ui is not None:
+        ui_updates = payload.ui.model_dump(exclude_unset=True)
+        await _update_auth_preferences(
+            token,
+            locale=ui_updates.get("locale"),
+            timezone=ui_updates.get("timezone"),
+        )
+
+    return await get_user_preferences(profile, token)

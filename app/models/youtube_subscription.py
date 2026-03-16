@@ -32,7 +32,7 @@ class YouTubeSubscription(BaseRecord):
 
     user_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("user_profiles.id", ondelete="CASCADE"),
         nullable=False,
     )
     channel_id: Mapped[str] = mapped_column(String(100), nullable=False)

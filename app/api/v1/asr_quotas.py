@@ -5,12 +5,11 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db, is_admin_user
+from app.api.deps import CurrentUser, get_current_user, get_db, is_admin_user
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.response import success
 from app.i18n.codes import ErrorCode
-from app.models.user import User
 from app.schemas.asr_quota import (
     AsrAdminOverviewResponse,
     AsrFreeQuotaStatus,
@@ -30,7 +29,7 @@ from app.services.asr_quota_service import (
 router = APIRouter(prefix="/asr/quotas")
 
 
-def _ensure_admin(user: User) -> None:
+def _ensure_admin(user: CurrentUser) -> None:
     if not is_admin_user(user):
         raise BusinessError(ErrorCode.PERMISSION_DENIED)
 
@@ -45,13 +44,13 @@ def _resolve_quota_seconds(payload: AsrQuotaUpsertRequest) -> float:
 @router.get("")
 async def get_asr_quotas(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """获取用户免费 ASR 额度信息
 
     管理员用户不受配额限制，返回 is_unlimited=True
     """
-    used_seconds = await get_user_total_usage(db, user_id=str(user.id))
+    used_seconds = await get_user_total_usage(db, user_id=user.id)
 
     # 管理员不受配额限制
     if is_admin_user(user):
@@ -85,7 +84,7 @@ async def get_asr_quotas(
 async def refresh_asr_quota(
     payload: AsrQuotaUpsertRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     _ensure_admin(user)
     quota_seconds = _resolve_quota_seconds(payload)
@@ -96,7 +95,7 @@ async def refresh_asr_quota(
         window_type=payload.window_type,
         quota_seconds=quota_seconds,
         reset=payload.reset,
-        owner_user_id=str(user.id),
+        owner_user_id=user.id,
         window_start=payload.window_start,
         window_end=payload.window_end,
         used_seconds=payload.used_seconds,
@@ -119,7 +118,7 @@ async def refresh_asr_quota(
 async def refresh_global_asr_quota(
     payload: AsrQuotaUpsertRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     _ensure_admin(user)
     quota_seconds = _resolve_quota_seconds(payload)
@@ -152,7 +151,7 @@ async def refresh_global_asr_quota(
 @router.get("/admin/overview")
 async def get_admin_overview(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """获取管理员 ASR 概览
 

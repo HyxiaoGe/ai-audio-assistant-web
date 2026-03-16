@@ -9,7 +9,7 @@ class UserProfileResponse(BaseModel):
     id: str
     email: str
     name: str | None = None
-    avatar_url: str
+    avatar_url: str | None = None
     is_admin: bool = False
 
 

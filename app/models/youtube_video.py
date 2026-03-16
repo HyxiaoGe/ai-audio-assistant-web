@@ -40,7 +40,7 @@ class YouTubeVideo(BaseRecord):
     # Owner (denormalized for faster queries)
     user_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("user_profiles.id", ondelete="CASCADE"),
         nullable=False,
     )
 

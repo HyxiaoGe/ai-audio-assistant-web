@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_admin_user, get_current_user, get_db
+from app.api.deps import CurrentUser, get_admin_user, get_current_user, get_db
 from app.core.config_manager import ConfigManager
 from app.core.exceptions import BusinessError
 from app.core.health_checker import HealthChecker
@@ -14,7 +14,6 @@ from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.models.service_config import ServiceConfig
 from app.models.service_config_history import ServiceConfigHistory
-from app.models.user import User
 from app.schemas.config_center import ConfigRollbackRequest, ConfigUpdateRequest
 
 router = APIRouter(prefix="/configs", tags=["config-center"])
@@ -38,7 +37,7 @@ async def list_configs(
     service_type: Optional[str] = None,
     provider: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_admin_user),
+    _: CurrentUser = Depends(get_admin_user),
 ) -> Any:
     stmt = select(ServiceConfig)
     if service_type:
@@ -54,7 +53,7 @@ async def get_config(
     service_type: str,
     provider: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_admin_user),
+    _: CurrentUser = Depends(get_admin_user),
 ) -> Any:
     stmt = select(ServiceConfig).where(
         ServiceConfig.service_type == service_type,
@@ -72,7 +71,7 @@ async def upsert_config(
     provider: str,
     payload: ConfigUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_admin_user),
+    user: CurrentUser = Depends(get_admin_user),
 ) -> Any:
     config_data = dict(payload.config)
     config_data["enabled"] = payload.enabled
@@ -128,7 +127,7 @@ async def rollback_config(
     provider: str,
     payload: ConfigRollbackRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_admin_user),
+    user: CurrentUser = Depends(get_admin_user),
 ) -> Any:
     stmt = select(ServiceConfig).where(
         ServiceConfig.service_type == service_type,
@@ -179,7 +178,7 @@ async def rollback_config(
 async def refresh_cache(
     service_type: Optional[str] = None,
     provider: Optional[str] = None,
-    _: User = Depends(get_admin_user),
+    _: CurrentUser = Depends(get_admin_user),
 ) -> Any:
     await ConfigManager.refresh_from_db(service_type, provider)
     return success(data={"refreshed": True})
@@ -190,7 +189,7 @@ async def list_my_configs(
     service_type: Optional[str] = None,
     provider: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> Any:
     stmt = select(ServiceConfig).where(ServiceConfig.owner_user_id == user.id)
     if service_type:
@@ -206,7 +205,7 @@ async def get_my_config(
     service_type: str,
     provider: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> Any:
     stmt = select(ServiceConfig).where(
         ServiceConfig.service_type == service_type,
@@ -225,7 +224,7 @@ async def upsert_my_config(
     provider: str,
     payload: ConfigUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> Any:
     config_data = dict(payload.config)
     config_data["enabled"] = payload.enabled
@@ -281,7 +280,7 @@ async def rollback_my_config(
     provider: str,
     payload: ConfigRollbackRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> Any:
     stmt = select(ServiceConfig).where(
         ServiceConfig.service_type == service_type,

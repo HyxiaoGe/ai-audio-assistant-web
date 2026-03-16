@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from dataclasses import dataclass
 from typing import Optional
 from uuid import uuid4
 
@@ -16,7 +17,6 @@ from app.core.security import extract_bearer_token, verify_access_token
 from app.db import async_session_factory
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
-from app.models.user import User
 
 router = APIRouter(prefix="/ws")
 
@@ -24,6 +24,12 @@ AUTH_TIMEOUT_SECONDS = 5
 CLOSE_CODE_AUTH_TIMEOUT = 4001
 CLOSE_CODE_AUTH_FAILED = 4003
 CLOSE_CODE_TOKEN_EXPIRED = 4004
+
+
+@dataclass
+class WsUser:
+    id: str
+    email: str
 
 
 def _get_locale(websocket: WebSocket) -> str:
@@ -55,7 +61,7 @@ def _get_close_code(error_code: ErrorCode) -> int:
 
 async def _authenticate_token(
     token: str, session: AsyncSession, locale: str, trace_id: str
-) -> tuple[Optional[User], Optional[ErrorCode]]:
+) -> tuple[Optional[WsUser], Optional[ErrorCode]]:
     try:
         auth_user = await verify_access_token(token)
     except Exception as exc:
@@ -63,25 +69,16 @@ async def _authenticate_token(
             return None, exc.code
         return None, ErrorCode.AUTH_TOKEN_INVALID
 
-    email = auth_user.email
-    if not email:
+    user_id = auth_user.sub
+    if not user_id:
         return None, ErrorCode.AUTH_TOKEN_INVALID
 
-    result = await session.execute(
-        select(User)
-        .where(User.email == email, User.deleted_at.is_(None))
-        .order_by(User.created_at)
-        .limit(1)
-    )
-    user = result.scalar_one_or_none()
-    if user is None:
-        return None, ErrorCode.USER_NOT_FOUND
-    return user, None
+    return WsUser(id=user_id, email=auth_user.email), None
 
 
 async def _authenticate_header(
     websocket: WebSocket, session: AsyncSession, locale: str, trace_id: str
-) -> tuple[Optional[User], Optional[ErrorCode]]:
+) -> tuple[Optional[WsUser], Optional[ErrorCode]]:
     authorization = websocket.headers.get("Authorization")
     try:
         token = extract_bearer_token(authorization)
@@ -94,7 +91,7 @@ async def _authenticate_header(
 
 async def _authenticate_in_band(
     websocket: WebSocket, session: AsyncSession, locale: str, trace_id: str
-) -> tuple[Optional[User], Optional[ErrorCode]]:
+) -> tuple[Optional[WsUser], Optional[ErrorCode]]:
     try:
         raw_message = await asyncio.wait_for(websocket.receive_text(), timeout=AUTH_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
@@ -155,7 +152,7 @@ async def user_updates(websocket: WebSocket) -> None:
         await _send_ok(
             websocket,
             "authenticated",
-            {"type": "authenticated", "user_id": str(user.id)},
+            {"type": "authenticated", "user_id": user.id},
             trace_id,
         )
 

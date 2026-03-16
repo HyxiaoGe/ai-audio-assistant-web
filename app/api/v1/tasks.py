@@ -5,9 +5,8 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import CurrentUser, get_current_user, get_db
 from app.core.response import success
-from app.models.user import User
 from app.schemas.common import PageResponse
 from app.schemas.task import (
     TaskBatchDeleteRequest,
@@ -26,7 +25,7 @@ async def create_task(
     request: Request,
     data: TaskCreateRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     trace_id = getattr(request.state, "trace_id", None)
     task = await TaskService.create_task(db, user, data, trace_id)
@@ -43,7 +42,7 @@ async def create_task(
 async def list_tasks(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     status: str = Query(default="all"),
@@ -76,7 +75,7 @@ async def list_tasks(
 async def get_task_detail(
     task_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     detail = await TaskService.get_task_detail(db, user, task_id)
     response = TaskDetailResponse(**detail.model_dump())
@@ -87,7 +86,7 @@ async def get_task_detail(
 async def delete_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     await TaskService.delete_task(db, user, task_id)
     return success(data=None)
@@ -97,7 +96,7 @@ async def delete_task(
 async def retry_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """重试失败的任务.
 
@@ -115,7 +114,7 @@ async def retry_task(
 async def batch_delete_tasks(
     data: TaskBatchDeleteRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """批量删除任务.
 

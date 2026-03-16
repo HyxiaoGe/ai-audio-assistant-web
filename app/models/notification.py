@@ -13,7 +13,7 @@ from app.models.base import BaseRecord
 
 if TYPE_CHECKING:
     from app.models.task import Task
-    from app.models.user import User
+    from app.models.user import UserProfile
 
 
 class Notification(BaseRecord):
@@ -32,7 +32,7 @@ class Notification(BaseRecord):
 
     # Foreign Keys
     user_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False
     )
     task_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False),
@@ -76,7 +76,7 @@ class Notification(BaseRecord):
     )  # 过期时间（可选）
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="notifications")  # type: ignore
+    user: Mapped["UserProfile"] = relationship("UserProfile", back_populates="notifications")  # type: ignore
     task: Mapped[Optional["Task"]] = relationship(  # type: ignore
         "Task", back_populates="notifications"
     )

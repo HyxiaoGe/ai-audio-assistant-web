@@ -20,7 +20,7 @@ from app.core.exceptions import BusinessError
 from app.core.registry import ServiceRegistry
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
-from app.models.user import User
+from app.api.deps import CurrentUser
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem
 from app.services.asr_quota_service import check_any_provider_available
 
@@ -191,7 +191,7 @@ class TaskService:
 
     @staticmethod
     async def _check_asr_quota_precheck(
-        db: AsyncSession, user: User, data: TaskCreateRequest
+        db: AsyncSession, user: CurrentUser, data: TaskCreateRequest
     ) -> None:
         """ASR 配额预检
 
@@ -258,7 +258,7 @@ class TaskService:
 
     @staticmethod
     async def create_task(
-        db: AsyncSession, user: User, data: TaskCreateRequest, trace_id: Optional[str]
+        db: AsyncSession, user: CurrentUser, data: TaskCreateRequest, trace_id: Optional[str]
     ) -> Task:
         if data.source_type not in {"upload", "youtube"}:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_type")
@@ -384,7 +384,7 @@ class TaskService:
     @staticmethod
     async def list_tasks(
         db: AsyncSession,
-        user: User,
+        user: CurrentUser,
         page: int,
         page_size: int,
         status_filter: str,
@@ -442,7 +442,7 @@ class TaskService:
         return items, total
 
     @staticmethod
-    async def get_task_detail(db: AsyncSession, user: User, task_id: str) -> TaskDetailResponse:
+    async def get_task_detail(db: AsyncSession, user: CurrentUser, task_id: str) -> TaskDetailResponse:
         result = await db.execute(
             select(Task).where(
                 Task.id == task_id,
@@ -615,7 +615,7 @@ class TaskService:
         )
 
     @staticmethod
-    async def delete_task(db: AsyncSession, user: User, task_id: str) -> None:
+    async def delete_task(db: AsyncSession, user: CurrentUser, task_id: str) -> None:
         result = await db.execute(
             select(Task).where(
                 Task.id == task_id,
@@ -643,7 +643,7 @@ class TaskService:
             celery_app.send_task("worker.tasks.cleanup_task_data", args=task_args)
 
     @staticmethod
-    async def retry_task(db: AsyncSession, user: User, task_id: str) -> dict[str, object]:
+    async def retry_task(db: AsyncSession, user: CurrentUser, task_id: str) -> dict[str, object]:
         """重试失败的任务.
 
         Args:
@@ -760,7 +760,7 @@ class TaskService:
 
     @staticmethod
     async def batch_delete_tasks(
-        db: AsyncSession, user: User, task_ids: list[str]
+        db: AsyncSession, user: CurrentUser, task_ids: list[str]
     ) -> dict[str, object]:
         """批量删除任务.
 

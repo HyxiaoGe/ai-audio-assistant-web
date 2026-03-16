@@ -10,13 +10,12 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_current_user_from_query, get_db
+from app.api.deps import CurrentUser, get_current_user, get_current_user_from_query, get_db
 from app.core.exceptions import BusinessError
 from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
-from app.models.user import User
 from app.schemas.summary import (
     SummaryCompareRequest,
     SummaryItem,
@@ -33,7 +32,7 @@ router = APIRouter(prefix="/summaries")
 async def get_summaries(
     task_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     # Verify task exists and belongs to user
     task_stmt = select(Task).where(
@@ -81,7 +80,7 @@ async def regenerate_summary(
     task_id: str,
     data: SummaryRegenerateRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """重新生成指定类型的摘要"""
     from worker.celery_app import celery_app
@@ -134,7 +133,7 @@ async def stream_summary_regeneration(
     task_id: str,
     summary_type: str = Query(..., description="摘要类型"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user_from_query),
+    user: CurrentUser = Depends(get_current_user_from_query),
 ) -> StreamingResponse:
 
     # Verify task belongs to user
@@ -282,7 +281,7 @@ async def activate_summary(
     task_id: str,
     summary_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """将对比结果设置为当前活跃版本
 
@@ -352,7 +351,7 @@ async def compare_models(
     task_id: str,
     data: SummaryCompareRequest = Body(...),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """并行生成多个模型的摘要用于对比
 
@@ -423,7 +422,7 @@ async def get_comparison_results(
     task_id: str,
     comparison_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """获取多模型对比结果
 
@@ -491,7 +490,7 @@ async def stream_comparison(
     comparison_id: str,
     summary_type: str = Query(..., description="摘要类型"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user_from_query),
+    user: CurrentUser = Depends(get_current_user_from_query),
 ) -> StreamingResponse:
     """流式获取多模型对比结果
 
@@ -660,7 +659,7 @@ async def generate_visual_summary(
     task_id: str,
     data: VisualSummaryRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """生成可视化摘要（思维导图/时间轴/流程图/大纲图）
 
@@ -758,7 +757,7 @@ async def get_visual_summary(
     task_id: str,
     visual_type: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """获取已生成的可视化摘要"""
 
