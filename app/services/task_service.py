@@ -454,14 +454,10 @@ class TaskService:
         if task is None:
             raise BusinessError(ErrorCode.TASK_NOT_FOUND)
 
-        # 生成音频播放 URL（通过后端 API 代理，隐藏存储实现细节）
+        # 生成音频播放 URL（相对路径，通过 nginx same-origin 代理）
         audio_url = None
         if task.source_key:
-            from app.config import settings
-
-            # 返回完整 URL，包含后端地址
-            api_base = settings.API_BASE_URL or "http://localhost:8000"
-            audio_url = f"{api_base}/api/v1/media/{task.source_key}"
+            audio_url = f"/api/v1/media/{task.source_key}"
 
         # 构建阶段信息
         from app.schemas.task import TaskStageResponse
