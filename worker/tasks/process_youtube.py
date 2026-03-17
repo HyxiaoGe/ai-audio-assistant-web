@@ -33,6 +33,7 @@ from app.models.transcript import Transcript
 from app.services.asr.base import TranscriptSegment, WordTimestamp
 from app.services.asr_quota_service import record_usage_sync
 from app.services.rag import ingest_task_chunks_sync
+from app.services.transcript_polish import polish_transcripts
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_task_update_sync
@@ -1048,6 +1049,94 @@ def _process_youtube(
                     len(transcripts),
                     extra={"task_id": task_id, "segment_count": len(transcripts)},
                 )
+
+                # ========== 转写润色（固定步骤）==========
+                _update_task(session, task, "polishing", 72, "polishing", request_id)
+                stage_manager.start_stage(session, StageType.POLISH)
+
+                try:
+                    transcript_rows = (
+                        session.query(Transcript)
+                        .filter(Transcript.task_id == task_id)
+                        .order_by(Transcript.sequence)
+                        .all()
+                    )
+
+                    seg_dicts = [
+                        {
+                            "sequence": t.sequence,
+                            "content": t.content,
+                            "start_time": float(t.start_time),
+                            "end_time": float(t.end_time),
+                        }
+                        for t in transcript_rows
+                    ]
+
+                    polish_provider, polish_model_id = _resolve_llm_selection(
+                        task, str(task.user_id)
+                    )
+                    polish_llm = asyncio.run(
+                        SmartFactory.get_service(
+                            "llm",
+                            provider=polish_provider,
+                            model_id=polish_model_id,
+                            user_id=str(task.user_id),
+                        )
+                    )
+
+                    polish_results = asyncio.run(
+                        polish_transcripts(polish_llm, seg_dicts)
+                    )
+
+                    changed_count = 0
+                    for pr in polish_results:
+                        if pr.changed:
+                            for t in transcript_rows:
+                                if t.sequence == pr.sequence:
+                                    t.original_content = pr.original_content
+                                    t.content = pr.polished_content
+                                    t.is_edited = True
+                                    changed_count += 1
+                                    break
+
+                    if changed_count > 0:
+                        session.commit()
+
+                    stage_manager.complete_stage(
+                        session,
+                        StageType.POLISH,
+                        {
+                            "total_segments": len(seg_dicts),
+                            "changed_segments": changed_count,
+                        },
+                    )
+                    logger.info(
+                        "Task %s: Polish completed, %d/%d segments changed",
+                        task_id,
+                        changed_count,
+                        len(seg_dicts),
+                        extra={
+                            "task_id": task_id,
+                            "changed_segments": changed_count,
+                            "total_segments": len(seg_dicts),
+                        },
+                    )
+
+                except Exception as exc:
+                    logger.warning(
+                        "Task %s: Polish failed, continuing with original transcripts: %s",
+                        task_id,
+                        exc,
+                        extra={"task_id": task_id, "error": str(exc)},
+                    )
+                    stage_manager.fail_stage(
+                        session,
+                        StageType.POLISH,
+                        ErrorCode.LLM_SERVICE_FAILED,
+                        str(exc),
+                    )
+                # ========== 润色结束 ==========
+
         except Exception as exc:
             logger.exception("Transcription failed: %s", exc)
             with get_sync_db_session() as session:
@@ -1091,7 +1180,7 @@ def _process_youtube(
                 task = _get_task(session, task_id)
                 if task is None:
                     return
-                _update_task(session, task, "summarizing", 75, "summarizing", request_id)
+                _update_task(session, task, "summarizing", 82, "summarizing", request_id)
                 stage_manager.start_stage(session, StageType.SUMMARIZE)
                 # 使用 SmartFactory 获取 LLM 服务（自动选择最优服务）
                 provider, model_id = _resolve_llm_selection(task, str(task.user_id))
@@ -1107,7 +1196,14 @@ def _process_youtube(
                 if llm_provider:
                     task.llm_provider = llm_provider
                     session.commit()
-                full_text = "\n".join([seg.content for seg in segments])
+                # 从 DB 读取最新的转写内容（可能已被润色修改）
+                latest_transcripts = (
+                    session.query(Transcript)
+                    .filter(Transcript.task_id == task_id)
+                    .order_by(Transcript.sequence)
+                    .all()
+                )
+                full_text = "\n".join([t.content for t in latest_transcripts])
 
                 # 提取 content_style
                 options = task.options or {}

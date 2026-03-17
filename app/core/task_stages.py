@@ -11,6 +11,7 @@ class StageType(str, Enum):
     TRANSCODE = "transcode"  # 转码
     UPLOAD_STORAGE = "upload_storage"  # 上传存储
     TRANSCRIBE = "transcribe"  # ASR 转写
+    POLISH = "polish"  # 转写润色
     SUMMARIZE = "summarize"  # LLM 摘要
 
 
@@ -41,6 +42,7 @@ YOUTUBE_STAGE_FLOW = [
     StageType.TRANSCODE,
     StageType.UPLOAD_STORAGE,
     StageType.TRANSCRIBE,
+    StageType.POLISH,
     StageType.SUMMARIZE,
 ]
 
@@ -48,6 +50,7 @@ YOUTUBE_STAGE_FLOW = [
 AUDIO_STAGE_FLOW = [
     StageType.UPLOAD_STORAGE,
     StageType.TRANSCRIBE,
+    StageType.POLISH,
     StageType.SUMMARIZE,
 ]
 
@@ -65,8 +68,8 @@ RETRY_MODE_START_STAGE: dict[RetryMode, StageType | None] = {
 RETRY_MODE_CLEAR_STAGES: dict[RetryMode, str | list[StageType]] = {
     RetryMode.FULL: "all",  # 清空所有阶段
     RetryMode.AUTO: "from_failed",  # 清空失败阶段及其后续阶段
-    RetryMode.FROM_TRANSCRIBE: [StageType.TRANSCRIBE, StageType.SUMMARIZE],
-    RetryMode.TRANSCRIBE_ONLY: [StageType.TRANSCRIBE, StageType.SUMMARIZE],
+    RetryMode.FROM_TRANSCRIBE: [StageType.TRANSCRIBE, StageType.POLISH, StageType.SUMMARIZE],
+    RetryMode.TRANSCRIBE_ONLY: [StageType.TRANSCRIBE, StageType.POLISH, StageType.SUMMARIZE],
     RetryMode.SUMMARIZE_ONLY: [StageType.SUMMARIZE],
 }
 

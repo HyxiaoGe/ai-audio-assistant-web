@@ -33,6 +33,7 @@ from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp
 from app.services.asr_quota_service import record_usage
 from app.services.llm.base import LLMService
 from app.services.rag import ingest_task_chunks_async
+from app.services.transcript_polish import polish_transcripts
 from app.services.storage.base import StorageService
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
@@ -767,7 +768,73 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     extra={"task_id": task_id},
                 )
 
-            await _update_task(session, task, "summarizing", 80, "summarizing", request_id)
+            # ========== 转写润色（固定步骤）==========
+            await _update_task(session, task, "polishing", 72, "polishing", request_id)
+
+            try:
+                polish_query = (
+                    select(Transcript)
+                    .where(Transcript.task_id == task_id)
+                    .order_by(Transcript.sequence)
+                )
+                polish_result = await session.execute(polish_query)
+                transcript_rows = polish_result.scalars().all()
+
+                seg_dicts = [
+                    {
+                        "sequence": t.sequence,
+                        "content": t.content,
+                        "start_time": float(t.start_time),
+                        "end_time": float(t.end_time),
+                    }
+                    for t in transcript_rows
+                ]
+
+                polish_provider, polish_model_id = _resolve_llm_selection(
+                    task, str(task.user_id)
+                )
+                polish_llm: LLMService = await _maybe_await(
+                    get_llm_service(polish_provider, polish_model_id, str(task.user_id))
+                )
+
+                polish_results = await polish_transcripts(polish_llm, seg_dicts)
+
+                changed_count = 0
+                for pr in polish_results:
+                    if pr.changed:
+                        for t in transcript_rows:
+                            if t.sequence == pr.sequence:
+                                t.original_content = pr.original_content
+                                t.content = pr.polished_content
+                                t.is_edited = True
+                                changed_count += 1
+                                break
+
+                if changed_count > 0:
+                    await _commit(session)
+
+                logger.info(
+                    "Task %s: Polish completed, %d/%d segments changed",
+                    task_id,
+                    changed_count,
+                    len(seg_dicts),
+                    extra={
+                        "task_id": task_id,
+                        "changed_segments": changed_count,
+                        "total_segments": len(seg_dicts),
+                    },
+                )
+
+            except Exception as exc:
+                logger.warning(
+                    "Task %s: Polish failed, continuing with original transcripts: %s",
+                    task_id,
+                    exc,
+                    extra={"task_id": task_id, "error": str(exc)},
+                )
+            # ========== 润色结束 ==========
+
+            await _update_task(session, task, "summarizing", 82, "summarizing", request_id)
 
             # 提取content_style和LLM配置
             options = task.options or {}
@@ -790,11 +857,31 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                 },
             )
 
+            # 从 DB 读取最新转写内容（可能已被润色修改）
+            summarize_query = (
+                select(Transcript)
+                .where(Transcript.task_id == task_id)
+                .order_by(Transcript.sequence)
+            )
+            summarize_result = await session.execute(summarize_query)
+            latest_transcripts = summarize_result.scalars().all()
+            latest_segments = [
+                TranscriptSegment(
+                    content=t.content,
+                    start_time=float(t.start_time),
+                    end_time=float(t.end_time),
+                    speaker_id=t.speaker_id,
+                    confidence=float(t.confidence) if t.confidence else None,
+                    words=[],
+                )
+                for t in latest_transcripts
+            ]
+
             # 使用新的质量感知摘要生成函数
             try:
                 summaries, summary_metadata = await generate_summaries_with_quality_awareness(
                     task_id=str(task.id),
-                    segments=segments,
+                    segments=latest_segments,
                     content_style=content_style,
                     session=session,
                     user_id=str(task.user_id),
