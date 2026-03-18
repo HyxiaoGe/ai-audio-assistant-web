@@ -16,7 +16,6 @@ if "auth" not in sys.modules:
 import pytest  # noqa: E402
 
 from app.services.transcript_polish import (  # noqa: E402
-    PolishResult,
     build_polish_user_prompt,
     group_segments_by_time,
     parse_polish_response,

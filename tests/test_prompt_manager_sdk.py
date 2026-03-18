@@ -79,7 +79,7 @@ def _create_manager_with_mock() -> tuple[Any, MagicMock]:
             # Clear _initialized so __init__ runs
             if hasattr(manager, "_initialized"):
                 delattr(manager, "_initialized")
-            manager.__init__()
+            manager.__init__()  # type: ignore[misc]
 
     return manager, mock_client
 
@@ -107,7 +107,7 @@ class TestInit:
             manager = PromptManager.__new__(PromptManager)
             if hasattr(manager, "_initialized"):
                 delattr(manager, "_initialized")
-            manager.__init__()
+            manager.__init__()  # type: ignore[misc]
 
         assert manager._client is None
 
@@ -153,7 +153,7 @@ class TestGetPrompt:
             manager = PromptManager.__new__(PromptManager)
             if hasattr(manager, "_initialized"):
                 delattr(manager, "_initialized")
-            manager.__init__()
+            manager.__init__()  # type: ignore[misc]
 
         from app.core.exceptions import BusinessError
 
@@ -308,7 +308,7 @@ class TestResolveSharedVars:
             manager = PromptManager.__new__(PromptManager)
             if hasattr(manager, "_initialized"):
                 delattr(manager, "_initialized")
-            manager.__init__()
+            manager.__init__()  # type: ignore[misc]
 
         assert manager._resolve_shared_vars("zh-CN") == {}
 
@@ -361,7 +361,7 @@ class TestGetImagePrompt:
             manager = PromptManager.__new__(PromptManager)
             if hasattr(manager, "_initialized"):
                 delattr(manager, "_initialized")
-            manager.__init__()
+            manager.__init__()  # type: ignore[misc]
 
         from app.core.exceptions import BusinessError
 

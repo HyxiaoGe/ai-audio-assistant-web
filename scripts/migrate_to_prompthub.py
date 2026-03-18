@@ -160,6 +160,7 @@ def locale_short(locale: str) -> str:
 # Shared prompt builders
 # ===================================================================
 
+
 def build_system_role_template(system_data: Dict, locale: str) -> str:
     """Build a Jinja2 conditional system role template from system config.
 
@@ -269,6 +270,7 @@ def extract_format_rules_en() -> str:
 # Template processors for each category
 # ===================================================================
 
+
 def remove_image_req_section_zh(text: str) -> str:
     """Remove the image requirements section from Chinese template and replace with variable."""
     pattern = r"\n*## 配图要求（必须）.*"
@@ -359,6 +361,7 @@ def process_images_template(text: str) -> str:
 # API client
 # ===================================================================
 
+
 class PromptHubClient:
     """Simple HTTP client for PromptHub API."""
 
@@ -432,7 +435,9 @@ class PromptHubClient:
     def create_project(self, slug: str, name: str, description: str) -> Optional[str]:
         """Create a project. Returns project ID or None."""
         if slug in self._project_ids:
-            log.info("  Project '%s' already exists (id=%s), skipping", slug, self._project_ids[slug])
+            log.info(
+                "  Project '%s' already exists (id=%s), skipping", slug, self._project_ids[slug]
+            )
             return self._project_ids[slug]
 
         payload = {"slug": slug, "name": name, "description": description}
@@ -452,7 +457,12 @@ class PromptHubClient:
             log.info("  Created project '%s' (id=%s)", slug, pid)
             return pid
         except httpx.HTTPStatusError as e:
-            log.error("  Failed to create project '%s': %s - %s", slug, e.response.status_code, e.response.text)
+            log.error(
+                "  Failed to create project '%s': %s - %s",
+                slug,
+                e.response.status_code,
+                e.response.text,
+            )
             return None
         except Exception as e:
             log.error("  Failed to create project '%s': %s", slug, e)
@@ -515,7 +525,12 @@ class PromptHubClient:
             existing.add(slug)
             return pid
         except httpx.HTTPStatusError as e:
-            log.error("    Failed to create prompt '%s': %s - %s", slug, e.response.status_code, e.response.text)
+            log.error(
+                "    Failed to create prompt '%s': %s - %s",
+                slug,
+                e.response.status_code,
+                e.response.text,
+            )
             return None
         except Exception as e:
             log.error("    Failed to create prompt '%s': %s", slug, e)
@@ -548,6 +563,7 @@ class PromptHubClient:
 # ===================================================================
 # Migration steps
 # ===================================================================
+
 
 def step_create_projects(client: PromptHubClient) -> bool:
     """Step 3: Create all 5 projects."""
@@ -692,11 +708,29 @@ def step_create_summary(client: PromptHubClient) -> int:
     # Common variables for summary templates
     base_variables = [
         {"name": "transcript", "type": "string", "required": True, "description": "转写文本"},
-        {"name": "quality_notice", "type": "string", "required": False, "default": "", "description": "音频质量提示"},
-        {"name": "format_rules", "type": "string", "required": False, "default": "", "description": "格式要求"},
+        {
+            "name": "quality_notice",
+            "type": "string",
+            "required": False,
+            "default": "",
+            "description": "音频质量提示",
+        },
+        {
+            "name": "format_rules",
+            "type": "string",
+            "required": False,
+            "default": "",
+            "description": "格式要求",
+        },
     ]
     overview_variables = base_variables + [
-        {"name": "image_requirements", "type": "string", "required": False, "default": "", "description": "配图要求"},
+        {
+            "name": "image_requirements",
+            "type": "string",
+            "required": False,
+            "default": "",
+            "description": "配图要求",
+        },
     ]
 
     for locale, data in locales.items():
@@ -717,7 +751,10 @@ def step_create_summary(client: PromptHubClient) -> int:
             name = f"Summary Overview ({style}, {loc_short})"
 
             if client.create_prompt(
-                project_slug, slug, name, content,
+                project_slug,
+                slug,
+                name,
+                content,
                 description=overview_cfg.get("description", ""),
                 variables=overview_variables,
                 tags=tags,
@@ -744,7 +781,10 @@ def step_create_summary(client: PromptHubClient) -> int:
             name = f"Summary Key Points ({style}, {loc_short})"
 
             if client.create_prompt(
-                project_slug, slug, name, content,
+                project_slug,
+                slug,
+                name,
+                content,
                 description=kp_cfg.get("description", ""),
                 variables=base_variables,
                 tags=tags,
@@ -769,7 +809,10 @@ def step_create_summary(client: PromptHubClient) -> int:
             name = f"Summary Action Items ({loc_short})"
 
             if client.create_prompt(
-                project_slug, slug, name, content,
+                project_slug,
+                slug,
+                name,
+                content,
                 description=ai_cfg.get("description", ""),
                 variables=base_variables,
                 tags=tags,
@@ -798,7 +841,13 @@ def step_create_segmentation(client: PromptHubClient) -> int:
 
     variables = [
         {"name": "transcript", "type": "string", "required": True, "description": "转写文本"},
-        {"name": "quality_notice", "type": "string", "required": False, "default": "", "description": "音频质量提示"},
+        {
+            "name": "quality_notice",
+            "type": "string",
+            "required": False,
+            "default": "",
+            "description": "音频质量提示",
+        },
     ]
 
     segment_cfg = data["prompts"].get("segment", {})
@@ -811,7 +860,10 @@ def step_create_segmentation(client: PromptHubClient) -> int:
         name = f"Segmentation ({style}, zh)"
 
         if client.create_prompt(
-            project_slug, slug, name, content,
+            project_slug,
+            slug,
+            name,
+            content,
             description=segment_cfg.get("description", ""),
             variables=variables,
             tags=tags,
@@ -836,7 +888,13 @@ def step_create_visual(client: PromptHubClient) -> int:
 
     variables = [
         {"name": "transcript", "type": "string", "required": True, "description": "转写文本"},
-        {"name": "quality_notice", "type": "string", "required": False, "default": "", "description": "音频质量提示"},
+        {
+            "name": "quality_notice",
+            "type": "string",
+            "required": False,
+            "default": "",
+            "description": "音频质量提示",
+        },
     ]
 
     prompt_types = config.get("prompt_types", {})
@@ -856,7 +914,10 @@ def step_create_visual(client: PromptHubClient) -> int:
             name = f"Visual {visual_type.title()} ({style}, zh)"
 
             if client.create_prompt(
-                project_slug, slug, name, content,
+                project_slug,
+                slug,
+                name,
+                content,
                 description=type_cfg.get("description", ""),
                 variables=variables,
                 tags=tags,
@@ -878,14 +939,34 @@ def step_create_images(client: PromptHubClient) -> int:
 
     variables = [
         {"name": "image_type", "type": "string", "required": True, "description": "图片类型名称"},
-        {"name": "content_style_name", "type": "string", "required": True, "description": "内容风格名称"},
-        {"name": "visual_style_prompt", "type": "string", "required": True, "description": "视觉风格描述"},
+        {
+            "name": "content_style_name",
+            "type": "string",
+            "required": True,
+            "description": "内容风格名称",
+        },
+        {
+            "name": "visual_style_prompt",
+            "type": "string",
+            "required": True,
+            "description": "视觉风格描述",
+        },
         {"name": "primary_color", "type": "string", "required": True, "description": "主色调"},
         {"name": "secondary_color", "type": "string", "required": True, "description": "强调色"},
         {"name": "background_color", "type": "string", "required": True, "description": "背景色"},
         {"name": "description", "type": "string", "required": True, "description": "图片描述"},
-        {"name": "key_texts_formatted", "type": "string", "required": True, "description": "关键文字"},
-        {"name": "layout_instructions", "type": "string", "required": True, "description": "布局要求"},
+        {
+            "name": "key_texts_formatted",
+            "type": "string",
+            "required": True,
+            "description": "关键文字",
+        },
+        {
+            "name": "layout_instructions",
+            "type": "string",
+            "required": True,
+            "description": "布局要求",
+        },
     ]
 
     for locale in ["zh-CN", "en-US"]:
@@ -901,7 +982,10 @@ def step_create_images(client: PromptHubClient) -> int:
         name = f"Image Base Prompt ({loc_short})"
 
         if client.create_prompt(
-            project_slug, slug, name, content,
+            project_slug,
+            slug,
+            name,
+            content,
             description="AI 配图生成基础提示词模板",
             variables=variables,
             tags=tags,
@@ -950,6 +1034,7 @@ def step_verify(client: PromptHubClient, counts: Dict[str, int]) -> None:
 # ===================================================================
 # Main
 # ===================================================================
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Migrate local prompts to PromptHub")

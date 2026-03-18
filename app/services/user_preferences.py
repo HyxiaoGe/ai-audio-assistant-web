@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import logging
-from uuid import UUID
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.api.deps import CurrentUser
 from app.config import settings
 from app.models.user import UserProfile
 from app.schemas.user import UserPreferencesUpdateRequest
