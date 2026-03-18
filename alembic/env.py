@@ -3,6 +3,8 @@ from __future__ import annotations
 from logging.config import fileConfig
 from typing import Any
 
+from sqlalchemy import engine_from_config, pool
+
 from alembic import context  # type: ignore[attr-defined]
 from app.config import settings
 from app.models import asr_pricing_config as _asr_pricing_config  # noqa: F401
@@ -16,7 +18,6 @@ from app.models import task as _task  # noqa: F401
 from app.models import transcript as _transcript  # noqa: F401
 from app.models import user as _user  # noqa: F401
 from app.models.base import Base
-from sqlalchemy import engine_from_config, pool
 
 config: Any = context.config
 if config.config_file_name is not None:
