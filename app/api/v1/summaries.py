@@ -66,6 +66,7 @@ async def get_summaries(
             created_at=s.created_at,
             visual_format=s.visual_format,
             image_url=f"/api/v1/media/{s.image_key}" if s.image_key else None,
+            image_model_used=s.image_model_used,
         )
         for s in summaries
     ]

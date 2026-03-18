@@ -19,6 +19,7 @@ class SummaryItem(BaseModel):
     # Visual summary fields
     visual_format: Optional[str] = None
     image_url: Optional[str] = None
+    image_model_used: Optional[str] = None
 
 
 class SummaryListResponse(BaseModel):

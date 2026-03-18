@@ -40,3 +40,4 @@ class Summary(BaseRecord):
     visual_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     image_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     image_format: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    image_model_used: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)

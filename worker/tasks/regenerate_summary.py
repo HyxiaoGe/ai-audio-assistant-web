@@ -338,12 +338,22 @@ def _regenerate_summary(
 
                 # 更新摘要内容
                 if image_results:
+                    image_model = next(
+                        (
+                            r["model_id"]
+                            for r in image_results
+                            if r.get("status") == "success" and r.get("model_id")
+                        ),
+                        None,
+                    )
                     with get_sync_db_session() as session:
                         summary_to_update = (
                             session.query(Summary).filter(Summary.id == summary_id).first()
                         )
                         if summary_to_update:
                             summary_to_update.content = final_content
+                            if image_model:
+                                summary_to_update.image_model_used = image_model
                             session.commit()
                             logger.info(
                                 f"[{request_id}] Updated summary {summary_id} with "

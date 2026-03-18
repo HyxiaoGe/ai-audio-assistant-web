@@ -1333,8 +1333,19 @@ def _process_youtube(
                                             "total_count": len(image_results),
                                         },
                                     )
-                                    # 更新摘要内容
+                                    # 提取图片模型名
+                                    image_model = next(
+                                        (
+                                            r["model_id"]
+                                            for r in image_results
+                                            if r.get("status") == "success" and r.get("model_id")
+                                        ),
+                                        None,
+                                    )
+                                    # 更新摘要内容和图片模型
                                     summary.content = final_content
+                                    if image_model:
+                                        summary.image_model_used = image_model
                                     session.commit()
                             except Exception as img_err:
                                 logger.warning(

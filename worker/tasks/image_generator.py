@@ -294,6 +294,7 @@ async def generate_single_image(
     Returns:
         {"placeholder": "...", "url": "...", "status": "success|failed"}
     """
+    model_id = None
     try:
         # 1. 获取提示词管理器
         prompt_manager = get_prompt_manager()
@@ -354,6 +355,7 @@ async def generate_single_image(
             "placeholder": item["placeholder"],
             "url": image_url,
             "status": "success",
+            "model_id": model_id,
         }
 
     except asyncio.TimeoutError:
@@ -363,6 +365,7 @@ async def generate_single_image(
             "url": None,
             "status": "failed",
             "error": "timeout",
+            "model_id": model_id,
         }
     except Exception as e:
         logger.warning(f"Image generation failed for '{item['description']}': {e}")
@@ -371,6 +374,7 @@ async def generate_single_image(
             "url": None,
             "status": "failed",
             "error": str(e),
+            "model_id": model_id,
         }
 
 
@@ -569,6 +573,7 @@ async def process_summary_images(
                             "status": result["status"],
                             "current": current,
                             "total": total,
+                            "model_id": result.get("model_id"),
                         },
                     },
                     ensure_ascii=False,
@@ -600,6 +605,14 @@ async def process_summary_images(
                     "data": {
                         "total": len(image_results),
                         "success": sum(1 for r in image_results if r["status"] == "success"),
+                        "image_model": next(
+                            (
+                                r["model_id"]
+                                for r in image_results
+                                if r.get("status") == "success" and r.get("model_id")
+                            ),
+                            None,
+                        ),
                     },
                 },
                 ensure_ascii=False,
