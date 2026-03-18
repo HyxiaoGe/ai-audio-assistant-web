@@ -9,14 +9,13 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
-from app.services.llm.base import LLMService
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from app.services.llm.base import LLMService
 
 
 # ============================================================
