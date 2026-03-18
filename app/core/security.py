@@ -15,7 +15,9 @@ _validator: JWTValidator | None = None
 def get_jwt_validator() -> JWTValidator:
     global _validator
     if _validator is None:
-        jwks_url = settings.AUTH_SERVICE_JWKS_URL or f"{settings.AUTH_SERVICE_URL}/.well-known/jwks.json"
+        jwks_url = (
+            settings.AUTH_SERVICE_JWKS_URL or f"{settings.AUTH_SERVICE_URL}/.well-known/jwks.json"
+        )
         _validator = JWTValidator(jwks_url=jwks_url, cache_ttl=300)
     return _validator
 

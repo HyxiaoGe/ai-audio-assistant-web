@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 # 新格式图片占位符正则：{{IMAGE: 类型 | 描述 | 关键文字}} 或 {IMAGE: 类型 | 描述 | 关键文字}
 IMAGE_PLACEHOLDER_PATTERN_NEW_DOUBLE = r"\{\{IMAGE:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^}]+)\}\}"
-IMAGE_PLACEHOLDER_PATTERN_NEW_SINGLE = r"(?<!\{)\{IMAGE:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^}]+)\}(?!\})"
+IMAGE_PLACEHOLDER_PATTERN_NEW_SINGLE = (
+    r"(?<!\{)\{IMAGE:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^}]+)\}(?!\})"
+)
 
 # 旧格式图片占位符正则（向后兼容）：{{IMAGE: 描述}} 或 {IMAGE: 描述}
 IMAGE_PLACEHOLDER_PATTERN_OLD = r"\{?\{IMAGE:\s*([^}|]+)\}?\}"
@@ -191,7 +193,9 @@ def is_auto_images_enabled(summary_type: str, content_style: str | None = None) 
             )
             return False
 
-    logger.debug(f"Auto images enabled for summary_type={summary_type}, content_style={content_style}")
+    logger.debug(
+        f"Auto images enabled for summary_type={summary_type}, content_style={content_style}"
+    )
     return True
 
 

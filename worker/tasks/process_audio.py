@@ -33,8 +33,8 @@ from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp
 from app.services.asr_quota_service import record_usage
 from app.services.llm.base import LLMService
 from app.services.rag import ingest_task_chunks_async
-from app.services.transcript_polish import polish_transcripts
 from app.services.storage.base import StorageService
+from app.services.transcript_polish import polish_transcripts
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_message_sync, publish_task_update_sync
@@ -790,9 +790,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     for t in transcript_rows
                 ]
 
-                polish_provider, polish_model_id = _resolve_llm_selection(
-                    task, str(task.user_id)
-                )
+                polish_provider, polish_model_id = _resolve_llm_selection(task, str(task.user_id))
                 polish_llm: LLMService = await _maybe_await(
                     get_llm_service(polish_provider, polish_model_id, str(task.user_id))
                 )

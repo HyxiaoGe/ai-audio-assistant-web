@@ -1084,9 +1084,7 @@ def _process_youtube(
                         )
                     )
 
-                    polish_results = asyncio.run(
-                        polish_transcripts(polish_llm, seg_dicts)
-                    )
+                    polish_results = asyncio.run(polish_transcripts(polish_llm, seg_dicts))
 
                     changed_count = 0
                     for pr in polish_results:

@@ -214,12 +214,17 @@ def sync_channel_videos(
 
                     # Check if this is an invalid_grant error (refresh token expired/revoked)
                     error_str = str(e).lower()
-                    if "invalid_grant" in error_str or "token has been expired or revoked" in error_str:
+                    if (
+                        "invalid_grant" in error_str
+                        or "token has been expired or revoked" in error_str
+                    ):
                         # Only mark and notify if not already marked (avoid duplicate notifications)
                         if not account.needs_reauth:
                             account.needs_reauth = True
                             session.commit()
-                            logger.warning(f"Marked account for user {user_id} as needs_reauth=True")
+                            logger.warning(
+                                f"Marked account for user {user_id} as needs_reauth=True"
+                            )
 
                             # Send WebSocket notification to frontend (only once)
                             import json
@@ -547,7 +552,9 @@ def sync_all_subscriptions_videos(
             )
             subscriptions = result.all()
 
-            logger.info(f"Found {len(subscriptions)} subscriptions to sync (sync_enabled, valid auth)")
+            logger.info(
+                f"Found {len(subscriptions)} subscriptions to sync (sync_enabled, valid auth)"
+            )
 
             for user_id, channel_id in subscriptions:
                 try:

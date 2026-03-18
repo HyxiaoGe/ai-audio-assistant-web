@@ -6,6 +6,7 @@ Covers:
 - UserProfile model structure
 - user_preferences layered logic (app-level only)
 """
+
 from __future__ import annotations
 
 import sys
@@ -26,7 +27,6 @@ from app.services.user_preferences import (  # noqa: E402
     DEFAULT_TASK_DEFAULTS,
     get_app_preferences,
 )
-
 
 # ── CurrentUser dataclass ──
 
@@ -98,6 +98,7 @@ class TestAppPreferences:
     def _make_profile(self, app_settings):
         """Create a duck-typed profile with app_settings attribute."""
         from types import SimpleNamespace
+
         return SimpleNamespace(app_settings=app_settings)
 
     def test_defaults_when_empty(self):
@@ -107,12 +108,14 @@ class TestAppPreferences:
         assert prefs["notifications"] == DEFAULT_NOTIFICATIONS
 
     def test_merge_with_stored(self):
-        profile = self._make_profile({
-            "preferences": {
-                "task_defaults": {"language": "en", "summary_style": "brief"},
-                "notifications": {"task_completed": False},
+        profile = self._make_profile(
+            {
+                "preferences": {
+                    "task_defaults": {"language": "en", "summary_style": "brief"},
+                    "notifications": {"task_completed": False},
+                }
             }
-        })
+        )
         prefs = get_app_preferences(profile)
         assert prefs["task_defaults"]["language"] == "en"
         assert prefs["task_defaults"]["summary_style"] == "brief"

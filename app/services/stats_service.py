@@ -8,12 +8,12 @@ from typing import Any, Dict, Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import CurrentUser
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
 from app.models.llm_usage import LLMUsage
 from app.models.task import Task
 from app.models.task_stage import TaskStage
-from app.api.deps import CurrentUser
 
 _TIME_RANGE_VALUES = {"today", "week", "month", "all"}
 _SERVICE_TYPES = ("asr", "llm")

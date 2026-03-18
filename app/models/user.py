@@ -14,9 +14,7 @@ if TYPE_CHECKING:
 
 class UserProfile(BaseModel):
     __tablename__ = "user_profiles"
-    __table_args__ = (
-        Index("idx_user_profiles_status", "status"),
-    )
+    __table_args__ = (Index("idx_user_profiles_status", "status"),)
 
     # id = auth-service user_id (set explicitly, not auto-generated)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)

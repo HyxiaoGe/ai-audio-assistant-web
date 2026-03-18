@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
-
 from prompthub import NotFoundError, PromptHubError
 from prompthub.types import Prompt, RenderResult
 
@@ -131,9 +130,7 @@ class TestBuildPromptSlug:
 
     def test_action_items_no_style(self) -> None:
         manager, _ = _create_manager_with_mock()
-        slug = manager._build_prompt_slug(
-            "summary", "action_items", "zh-CN", "meeting"
-        )
+        slug = manager._build_prompt_slug("summary", "action_items", "zh-CN", "meeting")
         assert slug == "summary-actionitems-zh"
 
 
@@ -168,9 +165,7 @@ class TestGetPrompt:
 
         # Setup mocks
         user_prompt_obj = _make_prompt("summary-overview-meeting-zh")
-        system_prompt_obj = _make_prompt(
-            "shared-system-role-zh", "You are an assistant"
-        )
+        system_prompt_obj = _make_prompt("shared-system-role-zh", "You are an assistant")
         format_rules_obj = _make_prompt("shared-format-rules-zh", "format rules text")
         image_req_obj = _make_prompt("shared-image-req-zh", "image req text")
 
@@ -188,9 +183,7 @@ class TestGetPrompt:
         mock_client.prompts.get_by_slug.side_effect = get_by_slug_side_effect
 
         # render() returns different content based on prompt_id
-        def render_side_effect(
-            prompt_id: Any, variables: Any = None
-        ) -> RenderResult:
+        def render_side_effect(prompt_id: Any, variables: Any = None) -> RenderResult:
             if prompt_id == user_prompt_obj.id:
                 return _make_render_result("Rendered user prompt")
             elif prompt_id == system_prompt_obj.id:
@@ -217,9 +210,7 @@ class TestGetPrompt:
         assert result["metadata"]["content_style"] == "meeting"
 
         # Verify SDK was called correctly
-        mock_client.prompts.get_by_slug.assert_any_call(
-            "summary-overview-meeting-zh"
-        )
+        mock_client.prompts.get_by_slug.assert_any_call("summary-overview-meeting-zh")
         mock_client.prompts.render.assert_any_call(
             user_prompt_obj.id,
             variables={
@@ -231,9 +222,7 @@ class TestGetPrompt:
 
     def test_raises_business_error_on_not_found(self) -> None:
         manager, mock_client = _create_manager_with_mock()
-        mock_client.prompts.get_by_slug.side_effect = NotFoundError(
-            code=40400, message="Not found"
-        )
+        mock_client.prompts.get_by_slug.side_effect = NotFoundError(code=40400, message="Not found")
 
         from app.core.exceptions import BusinessError
 
@@ -270,9 +259,7 @@ class TestGetPrompt:
         )
 
         # Should have used "lecture" from variables
-        mock_client.prompts.get_by_slug.assert_any_call(
-            "summary-overview-lecture-zh"
-        )
+        mock_client.prompts.get_by_slug.assert_any_call("summary-overview-lecture-zh")
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +290,7 @@ class TestResolveSharedVars:
 
     def test_returns_empty_when_not_found(self) -> None:
         manager, mock_client = _create_manager_with_mock()
-        mock_client.prompts.get_by_slug.side_effect = NotFoundError(
-            code=40400, message="Not found"
-        )
+        mock_client.prompts.get_by_slug.side_effect = NotFoundError(code=40400, message="Not found")
 
         shared = manager._resolve_shared_vars("zh-CN")
         assert shared == {}
@@ -339,25 +324,19 @@ class TestGetSystemFromHub:
 
         system_prompt = _make_prompt("shared-system-role-zh", "system template")
         mock_client.prompts.get_by_slug.return_value = system_prompt
-        mock_client.prompts.render.return_value = _make_render_result(
-            "You are a meeting assistant"
-        )
+        mock_client.prompts.render.return_value = _make_render_result("You are a meeting assistant")
 
         result = manager._get_system_from_hub("summary", "zh-CN", "meeting")
 
         assert result == "You are a meeting assistant"
-        mock_client.prompts.get_by_slug.assert_called_once_with(
-            "shared-system-role-zh"
-        )
+        mock_client.prompts.get_by_slug.assert_called_once_with("shared-system-role-zh")
         mock_client.prompts.render.assert_called_once_with(
             system_prompt.id, variables={"content_style": "meeting"}
         )
 
     def test_returns_none_on_error(self) -> None:
         manager, mock_client = _create_manager_with_mock()
-        mock_client.prompts.get_by_slug.side_effect = PromptHubError(
-            code=50000, message="error"
-        )
+        mock_client.prompts.get_by_slug.side_effect = PromptHubError(code=50000, message="error")
 
         result = manager._get_system_from_hub("summary", "zh-CN", "meeting")
         assert result is None
@@ -394,9 +373,7 @@ class TestGetImagePrompt:
 
         img_prompt = _make_prompt("images-baseprompt-zh", "image template")
         mock_client.prompts.get_by_slug.return_value = img_prompt
-        mock_client.prompts.render.return_value = _make_render_result(
-            "Generate a cover image..."
-        )
+        mock_client.prompts.render.return_value = _make_render_result("Generate a cover image...")
 
         result = manager.get_image_prompt(
             content_style="meeting",
@@ -407,9 +384,7 @@ class TestGetImagePrompt:
         )
 
         assert result == "Generate a cover image..."
-        mock_client.prompts.get_by_slug.assert_called_once_with(
-            "images-baseprompt-zh"
-        )
+        mock_client.prompts.get_by_slug.assert_called_once_with("images-baseprompt-zh")
         # Verify render was called with template vars
         render_call = mock_client.prompts.render.call_args
         assert render_call[0][0] == img_prompt.id
@@ -420,9 +395,7 @@ class TestGetImagePrompt:
 
     def test_raises_on_sdk_error(self) -> None:
         manager, mock_client = _create_manager_with_mock()
-        mock_client.prompts.get_by_slug.side_effect = PromptHubError(
-            code=50000, message="fail"
-        )
+        mock_client.prompts.get_by_slug.side_effect = PromptHubError(code=50000, message="fail")
 
         from app.core.exceptions import BusinessError
 

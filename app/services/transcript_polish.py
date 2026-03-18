@@ -17,10 +17,10 @@ from loguru import logger
 
 from app.services.llm.base import LLMService
 
-
 # ============================================================
 # 数据结构
 # ============================================================
+
 
 @dataclass
 class PolishResult:
@@ -85,9 +85,7 @@ def group_segments_by_time(
 
     for seg in segments:
         elapsed = seg["start_time"] - group_start
-        if current_group and (
-            elapsed >= window_seconds or len(current_group) >= max_per_group
-        ):
+        if current_group and (elapsed >= window_seconds or len(current_group) >= max_per_group):
             groups.append(current_group)
             current_group = [seg]
             group_start = seg["start_time"]

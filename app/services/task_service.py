@@ -14,13 +14,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from yt_dlp import YoutubeDL
 
-from app.api.deps import is_admin_user
+from app.api.deps import CurrentUser, is_admin_user
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.registry import ServiceRegistry
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
-from app.api.deps import CurrentUser
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem
 from app.services.asr_quota_service import check_any_provider_available
 
@@ -442,7 +441,9 @@ class TaskService:
         return items, total
 
     @staticmethod
-    async def get_task_detail(db: AsyncSession, user: CurrentUser, task_id: str) -> TaskDetailResponse:
+    async def get_task_detail(
+        db: AsyncSession, user: CurrentUser, task_id: str
+    ) -> TaskDetailResponse:
         result = await db.execute(
             select(Task).where(
                 Task.id == task_id,
