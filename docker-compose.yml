@@ -24,6 +24,7 @@ services:
     ports:
       - "8088:8000"
     restart: unless-stopped
+    mem_limit: 256m
     networks:
       - ai-audio-network
 
@@ -43,6 +44,7 @@ services:
       - .:/app
       - ./data:/app/data
     restart: unless-stopped
+    mem_limit: 768m
     networks:
       - ai-audio-network
 
@@ -61,6 +63,7 @@ services:
     volumes:
       - .:/app
     restart: unless-stopped
+    mem_limit: 128m
     networks:
       - ai-audio-network
 
