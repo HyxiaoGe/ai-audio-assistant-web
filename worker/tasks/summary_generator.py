@@ -85,19 +85,14 @@ async def generate_summaries_with_quality_awareness(
                 "llm", provider="openrouter", model_id="anthropic/claude-3.5-sonnet"
             )
         except Exception as e:
-            logger.warning(
-                f"Task {task_id}: Failed to get premium model, " f"fallback to standard: {e}"
-            )
-            llm_service = await SmartFactory.get_service(
-                "llm", provider=provider, model_id=model_id
-            )
+            logger.warning(f"Task {task_id}: Failed to get premium model, fallback to standard: {e}")
+            llm_service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
     else:
         # 正常质量：使用用户指定或自动选择的服务
         llm_service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
 
     logger.info(
-        f"Task {task_id}: Using LLM service - "
-        f"provider: {llm_service.provider}, model: {llm_service.model_name}"
+        f"Task {task_id}: Using LLM service - provider: {llm_service.provider}, model: {llm_service.model_name}"
     )
 
     # ===== Step 4: 章节划分（可选，仅对长内容） =====
@@ -138,8 +133,7 @@ async def generate_summaries_with_quality_awareness(
             chapters_data = None
     else:
         logger.info(
-            f"Task {task_id}: Content too short ({len(preprocessed_text)} chars), "
-            "skipping chapter segmentation"
+            f"Task {task_id}: Content too short ({len(preprocessed_text)} chars), skipping chapter segmentation"
         )
 
     # ===== Step 5: 生成各类摘要 =====
@@ -169,9 +163,7 @@ async def generate_summaries_with_quality_awareness(
             )
             summaries.append(summary)
 
-            logger.info(
-                f"Task {task_id}: Generated {summary_type} summary " f"({len(content)} characters)"
-            )
+            logger.info(f"Task {task_id}: Generated {summary_type} summary ({len(content)} characters)")
 
         except Exception as e:
             logger.error(

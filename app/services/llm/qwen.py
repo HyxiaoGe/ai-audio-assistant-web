@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -47,7 +48,7 @@ class QwenLLMService(LLMService):
         ),
     )
 
-    def __init__(self, config: Optional[object] = None) -> None:
+    def __init__(self, config: object | None = None) -> None:
         api_key = get_config_value(config, "api_key", settings.QWEN_API_KEY)
         model = get_config_value(config, "model", settings.QWEN_MODEL or "qwen2.5-72b-instruct")
 
@@ -180,31 +181,31 @@ class QwenLLMService(LLMService):
         headers = {"Authorization": f"Bearer {self._api_key}"}
 
         try:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client:
-                async with client.stream(
-                    "POST", "/chat/completions", json=payload, headers=headers
-                ) as response:
-                    response.raise_for_status()
+            async with (
+                httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client,
+                client.stream("POST", "/chat/completions", json=payload, headers=headers) as response,
+            ):
+                response.raise_for_status()
 
-                    async for line in response.aiter_lines():
-                        if not line or line.startswith(":"):
-                            continue
+                async for line in response.aiter_lines():
+                    if not line or line.startswith(":"):
+                        continue
 
-                        if line.startswith("data: "):
-                            line = line[6:]
+                    if line.startswith("data: "):
+                        line = line[6:]
 
-                        if line == "[DONE]":
-                            break
+                    if line == "[DONE]":
+                        break
 
-                        try:
-                            chunk_data = json.loads(line)
-                            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                            content = delta.get("content", "")
+                    try:
+                        chunk_data = json.loads(line)
+                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
 
-                            if content:
-                                yield content
-                        except json.JSONDecodeError:
-                            continue
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
 
         except httpx.TimeoutException as exc:
             raise BusinessError(
@@ -259,9 +260,7 @@ class QwenLLMService(LLMService):
         return await self._call_llm_api(payload, headers)
 
     @monitor("llm", "qwen")
-    async def chat_stream(
-        self, messages: list[dict[str, str]], **kwargs: Any
-    ) -> AsyncIterator[str]:
+    async def chat_stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
         """流式对话功能
 
         Args:
@@ -284,31 +283,31 @@ class QwenLLMService(LLMService):
         headers = {"Authorization": f"Bearer {self._api_key}"}
 
         try:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client:
-                async with client.stream(
-                    "POST", "/chat/completions", json=payload, headers=headers
-                ) as response:
-                    response.raise_for_status()
+            async with (
+                httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client,
+                client.stream("POST", "/chat/completions", json=payload, headers=headers) as response,
+            ):
+                response.raise_for_status()
 
-                    async for line in response.aiter_lines():
-                        if not line or line.startswith(":"):
-                            continue
+                async for line in response.aiter_lines():
+                    if not line or line.startswith(":"):
+                        continue
 
-                        if line.startswith("data: "):
-                            line = line[6:]
+                    if line.startswith("data: "):
+                        line = line[6:]
 
-                        if line == "[DONE]":
-                            break
+                    if line == "[DONE]":
+                        break
 
-                        try:
-                            chunk_data = json.loads(line)
-                            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                            content = delta.get("content", "")
+                    try:
+                        chunk_data = json.loads(line)
+                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
 
-                            if content:
-                                yield content
-                        except json.JSONDecodeError:
-                            continue
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
 
         except httpx.HTTPError as exc:
             raise BusinessError(
@@ -323,9 +322,7 @@ class QwenLLMService(LLMService):
             True 如果服务健康，否则 False
         """
         try:
-            if not self._api_key or not self._model:
-                return False
-            return True
+            return not (not self._api_key or not self._model)
         except Exception:
             return False
 

@@ -5,15 +5,16 @@ Revises: b5d8ec2b7fed
 Create Date: 2026-03-16 12:00:00.000000
 
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "c6d7e8f9a0b1"
-down_revision: Union[str, None] = "b5d8ec2b7fed"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "b5d8ec2b7fed"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # User ID mapping: old local ID → auth-service ID
 USER_ID_MAP = {
@@ -54,19 +55,13 @@ def upgrade() -> None:
     # ── Step 2: Update user_ids in all referencing tables ──
     for old_id, new_id in USER_ID_MAP.items():
         for table in FK_TABLES_CASCADE:
-            op.execute(
-                f"UPDATE {table} SET user_id = '{new_id}' WHERE user_id = '{old_id}'"
-            )
+            op.execute(f"UPDATE {table} SET user_id = '{new_id}' WHERE user_id = '{old_id}'")
         for table, column in FK_TABLES_SET_NULL:
-            op.execute(
-                f"UPDATE {table} SET {column} = '{new_id}' WHERE {column} = '{old_id}'"
-            )
+            op.execute(f"UPDATE {table} SET {column} = '{new_id}' WHERE {column} = '{old_id}'")
 
     # ── Step 3: Update users table primary keys ──
     for old_id, new_id in USER_ID_MAP.items():
-        op.execute(
-            f"UPDATE users SET id = '{new_id}' WHERE id = '{old_id}'"
-        )
+        op.execute(f"UPDATE users SET id = '{new_id}' WHERE id = '{old_id}'")
 
     # ── Step 4: Drop identity columns from users ──
     op.drop_column("users", "email")
@@ -131,6 +126,7 @@ def downgrade() -> None:
 
     # Restore dropped columns
     import sqlalchemy as sa
+
     op.add_column("users", sa.Column("email", sa.String(255), nullable=True))
     op.add_column("users", sa.Column("name", sa.String(255), nullable=True))
     op.add_column("users", sa.Column("avatar_url", sa.Text(), nullable=True))
@@ -148,10 +144,6 @@ def downgrade() -> None:
 
     # Recreate FK constraints to users
     for table in FK_TABLES_CASCADE:
-        op.create_foreign_key(
-            f"{table}_user_id_fkey", table, "users", ["user_id"], ["id"], ondelete="CASCADE"
-        )
+        op.create_foreign_key(f"{table}_user_id_fkey", table, "users", ["user_id"], ["id"], ondelete="CASCADE")
     for table, column in FK_TABLES_SET_NULL:
-        op.create_foreign_key(
-            f"{table}_{column}_fkey", table, "users", [column], ["id"], ondelete="SET NULL"
-        )
+        op.create_foreign_key(f"{table}_{column}_fkey", table, "users", [column], ["id"], ondelete="SET NULL")

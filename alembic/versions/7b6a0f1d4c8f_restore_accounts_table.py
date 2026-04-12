@@ -5,8 +5,8 @@ Revises: aa2b7f8c1e23
 Create Date: 2026-01-06 11:40:00.000000
 
 """
-from alembic import op
 
+from alembic import op
 
 revision = "7b6a0f1d4c8f"
 down_revision = "aa2b7f8c1e23"

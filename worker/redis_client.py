@@ -7,13 +7,11 @@ The FastAPI app continues to use async Redis (app/core/redis.py).
 
 from __future__ import annotations
 
-from typing import Optional
-
 from redis import Redis
 
 from app.config import settings
 
-_sync_redis_client: Optional[Redis] = None
+_sync_redis_client: Redis | None = None
 
 
 def _get_redis_url() -> str:

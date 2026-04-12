@@ -4,8 +4,8 @@ import asyncio
 import hashlib
 import logging
 import re
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.schemas.task import YouTubeVideoInfo
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class TaskService:
     @staticmethod
-    def _extract_youtube_video_id(url: str) -> Optional[str]:
+    def _extract_youtube_video_id(url: str) -> str | None:
         """从 YouTube URL 中提取视频ID.
 
         支持的格式：
@@ -51,7 +51,7 @@ class TaskService:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _validate_youtube_video_sync(url: str) -> Optional[str]:
+    def _validate_youtube_video_sync(url: str) -> str | None:
         """同步验证 YouTube 视频是否可访问（用于在异步上下文中通过 asyncio.to_thread 调用）.
 
         Args:
@@ -115,9 +115,7 @@ class TaskService:
 
             # 网络超时
             if "timeout" in error_msg or "timed out" in error_msg:
-                raise BusinessError(
-                    ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="网络超时，请稍后重试"
-                )
+                raise BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="网络超时，请稍后重试")
 
             # 地域限制
             if any(
@@ -128,9 +126,7 @@ class TaskService:
                     "region",
                 ]
             ):
-                raise BusinessError(
-                    ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="该视频存在地域限制，当前地区无法访问"
-                )
+                raise BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="该视频存在地域限制，当前地区无法访问")
 
             # 需要登录
             if any(
@@ -153,9 +149,7 @@ class TaskService:
                     clean_msg = parts[1].strip().split("\n")[0][:100]
                     # 移除技术前缀如 [youtube:truncated_id]
                     clean_msg = re.sub(r"\[[\w:]+\]\s+\w+:\s+", "", clean_msg)
-                    raise BusinessError(
-                        ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason=f"视频解析失败：{clean_msg}"
-                    )
+                    raise BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason=f"视频解析失败：{clean_msg}")
 
             # 完全未知的错误，返回通用提示
             raise BusinessError(
@@ -164,7 +158,7 @@ class TaskService:
             )
 
     @staticmethod
-    async def _validate_youtube_video(url: str) -> Optional[str]:
+    async def _validate_youtube_video(url: str) -> str | None:
         """异步验证 YouTube 视频是否可访问.
 
         Args:
@@ -182,16 +176,12 @@ class TaskService:
                 asyncio.to_thread(TaskService._validate_youtube_video_sync, url), timeout=20.0
             )
             return title
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(f"YouTube video validation timeout: {url}")
-            raise BusinessError(
-                ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="视频验证超时，请检查网络连接或稍后重试"
-            )
+            raise BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="视频验证超时，请检查网络连接或稍后重试")
 
     @staticmethod
-    async def _check_asr_quota_precheck(
-        db: AsyncSession, user: CurrentUser, data: TaskCreateRequest
-    ) -> None:
+    async def _check_asr_quota_precheck(db: AsyncSession, user: CurrentUser, data: TaskCreateRequest) -> None:
         """ASR 配额预检
 
         在任务创建前检查是否有可用的 ASR 配额，避免创建注定失败的任务。
@@ -232,9 +222,7 @@ class TaskService:
                 # 检查指定的提供商是否在可用列表中
                 from app.services.asr_quota_service import select_available_provider
 
-                available = await select_available_provider(
-                    db, [asr_provider], str(user.id), variant=asr_variant
-                )
+                available = await select_available_provider(db, [asr_provider], str(user.id), variant=asr_variant)
                 if not available:
                     raise BusinessError(
                         ErrorCode.ASR_QUOTA_EXCEEDED,
@@ -242,9 +230,7 @@ class TaskService:
                     )
         else:
             # 没有指定提供商，检查是否有任意可用提供商
-            has_quota, available_providers = await check_any_provider_available(
-                db, str(user.id), variant=asr_variant
-            )
+            has_quota, available_providers = await check_any_provider_available(db, str(user.id), variant=asr_variant)
             if not has_quota:
                 raise BusinessError(
                     ErrorCode.ALL_ASR_QUOTAS_EXCEEDED,
@@ -256,9 +242,7 @@ class TaskService:
             )
 
     @staticmethod
-    async def create_task(
-        db: AsyncSession, user: CurrentUser, data: TaskCreateRequest, trace_id: Optional[str]
-    ) -> Task:
+    async def create_task(db: AsyncSession, user: CurrentUser, data: TaskCreateRequest, trace_id: str | None) -> Task:
         if data.source_type not in {"upload", "youtube"}:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_type")
 
@@ -352,7 +336,7 @@ class TaskService:
             progress=1,
             stage="queued",
             request_id=trace_id,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         db.add(task)
         await db.commit()
@@ -419,11 +403,7 @@ class TaskService:
         count_query = select(func.count()).select_from(base_query.subquery())
         total = int((await db.execute(count_query)).scalar_one())
 
-        items_query = (
-            base_query.order_by(Task.created_at.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        )
+        items_query = base_query.order_by(Task.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
         rows = (await db.execute(items_query)).scalars().all()
         items = [
             TaskListItem(
@@ -441,9 +421,7 @@ class TaskService:
         return items, total
 
     @staticmethod
-    async def get_task_detail(
-        db: AsyncSession, user: CurrentUser, task_id: str
-    ) -> TaskDetailResponse:
+    async def get_task_detail(db: AsyncSession, user: CurrentUser, task_id: str) -> TaskDetailResponse:
         result = await db.execute(
             select(Task).where(
                 Task.id == task_id,
@@ -504,9 +482,7 @@ class TaskService:
         )
 
     @staticmethod
-    async def _get_youtube_video_info(
-        db: AsyncSession, user_id: str, source_url: str
-    ) -> Optional["YouTubeVideoInfo"]:
+    async def _get_youtube_video_info(db: AsyncSession, user_id: str, source_url: str) -> YouTubeVideoInfo | None:
         """获取 YouTube 视频信息.
 
         优先从本地缓存获取，缓存未命中时尝试从 YouTube API 获取。
@@ -623,7 +599,7 @@ class TaskService:
         task = result.scalar_one_or_none()
         if task is None:
             raise BusinessError(ErrorCode.TASK_NOT_FOUND)
-        task.deleted_at = datetime.now(timezone.utc)
+        task.deleted_at = datetime.now(UTC)
         await db.commit()
 
         from worker.celery_app import celery_app
@@ -756,9 +732,7 @@ class TaskService:
         }
 
     @staticmethod
-    async def batch_delete_tasks(
-        db: AsyncSession, user: CurrentUser, task_ids: list[str]
-    ) -> dict[str, object]:
+    async def batch_delete_tasks(db: AsyncSession, user: CurrentUser, task_ids: list[str]) -> dict[str, object]:
         """批量删除任务.
 
         Args:
@@ -789,7 +763,7 @@ class TaskService:
                     failed_ids.append(task_id)
                     continue
 
-                task.deleted_at = datetime.now(timezone.utc)
+                task.deleted_at = datetime.now(UTC)
                 deleted_count += 1
             except Exception:
                 failed_ids.append(task_id)

@@ -5,9 +5,10 @@ Revises: 30ade5c26128
 Create Date: 2025-01-09 10:15:00.000000
 
 """
-from alembic import op
+
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "4f6d9b8c2f1a"
 down_revision = "30ade5c26128"

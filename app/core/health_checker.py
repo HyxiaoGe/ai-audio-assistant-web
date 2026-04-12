@@ -22,9 +22,8 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from threading import Lock
-from typing import Dict, List, Optional
 
 from app.core.config_manager import ConfigManager
 from app.core.registry import ServiceRegistry
@@ -32,7 +31,7 @@ from app.core.registry import ServiceRegistry
 logger = logging.getLogger(__name__)
 
 
-class HealthStatus(str, Enum):
+class HealthStatus(StrEnum):
     """健康状态枚举"""
 
     HEALTHY = "healthy"  # 健康
@@ -59,13 +58,13 @@ class HealthCheckResult:
     service_type: str
     service_name: str
     status: HealthStatus = HealthStatus.UNKNOWN
-    last_check_time: Optional[datetime] = None
+    last_check_time: datetime | None = None
     consecutive_failures: int = 0
     total_checks: int = 0
     total_failures: int = 0
     error_message: str = ""
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """转换为字典"""
         return {
             "service_type": self.service_type,
@@ -113,7 +112,7 @@ class HealthChecker:
 
     # 类变量：存储健康检查结果
     # 格式: {service_type: {name: HealthCheckResult}}
-    _results: Dict[str, Dict[str, HealthCheckResult]] = {
+    _results: dict[str, dict[str, HealthCheckResult]] = {
         "llm": {},
         "asr": {},
         "storage": {},
@@ -198,7 +197,7 @@ class HealthChecker:
                 timeout=cls.check_timeout,
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             error_msg = f"Health check timeout ({cls.check_timeout}s)"
             logger.warning(f"Health check timeout for {service_type}/{name}")
 
@@ -259,7 +258,7 @@ class HealthChecker:
         return result
 
     @classmethod
-    async def check_all(cls) -> Dict[str, Dict[str, HealthCheckResult]]:
+    async def check_all(cls) -> dict[str, dict[str, HealthCheckResult]]:
         """检查所有已注册服务的健康状态
 
         Returns:
@@ -304,7 +303,7 @@ class HealthChecker:
             return result.status == HealthStatus.HEALTHY
 
     @classmethod
-    def get_status(cls, service_type: str, name: str) -> Optional[HealthCheckResult]:
+    def get_status(cls, service_type: str, name: str) -> HealthCheckResult | None:
         """获取服务的健康检查结果
 
         Args:
@@ -318,7 +317,7 @@ class HealthChecker:
             return cls._results[service_type].get(name)
 
     @classmethod
-    def get_all_results(cls) -> Dict[str, Dict[str, HealthCheckResult]]:
+    def get_all_results(cls) -> dict[str, dict[str, HealthCheckResult]]:
         """获取所有服务的健康检查结果
 
         Returns:
@@ -328,7 +327,7 @@ class HealthChecker:
             return {service_type: dict(services) for service_type, services in cls._results.items()}
 
     @classmethod
-    def get_healthy_services(cls, service_type: str) -> List[str]:
+    def get_healthy_services(cls, service_type: str) -> list[str]:
         """获取所有健康的服务名称
 
         Args:
@@ -343,13 +342,11 @@ class HealthChecker:
         """
         with cls._lock:
             return [
-                name
-                for name, result in cls._results[service_type].items()
-                if result.status == HealthStatus.HEALTHY
+                name for name, result in cls._results[service_type].items() if result.status == HealthStatus.HEALTHY
             ]
 
     @classmethod
-    def get_unhealthy_services(cls, service_type: str) -> List[str]:
+    def get_unhealthy_services(cls, service_type: str) -> list[str]:
         """获取所有不健康的服务名称
 
         Args:
@@ -360,9 +357,7 @@ class HealthChecker:
         """
         with cls._lock:
             return [
-                name
-                for name, result in cls._results[service_type].items()
-                if result.status == HealthStatus.UNHEALTHY
+                name for name, result in cls._results[service_type].items() if result.status == HealthStatus.UNHEALTHY
             ]
 
     @classmethod

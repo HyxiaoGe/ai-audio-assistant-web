@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Body, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -35,9 +35,7 @@ async def get_summaries(
     user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     # Verify task exists and belongs to user
-    task_stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
 
@@ -87,9 +85,7 @@ async def regenerate_summary(
     from worker.celery_app import celery_app
 
     # Verify task exists and belongs to user
-    task_stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
 
@@ -138,9 +134,7 @@ async def stream_summary_regeneration(
 ) -> StreamingResponse:
 
     # Verify task belongs to user
-    task_stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
 
@@ -294,9 +288,7 @@ async def activate_summary(
         更新后的摘要信息
     """
     # Verify task belongs to user
-    task_stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
 
@@ -368,9 +360,7 @@ async def compare_models(
     from worker.celery_app import celery_app
 
     # Verify task exists and belongs to user
-    task_stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
 
@@ -435,9 +425,7 @@ async def get_comparison_results(
         对比结果列表
     """
     # Verify task belongs to user
-    task_stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
 
@@ -498,9 +486,7 @@ async def stream_comparison(
     同时监听多个模型的生成流，实时返回每个模型的进度
     """
     # Verify task belongs to user
-    task_stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
 
@@ -672,9 +658,7 @@ async def generate_visual_summary(
     from worker.celery_app import celery_app
 
     # Verify task exists and belongs to user
-    task_stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
 
@@ -689,9 +673,7 @@ async def generate_visual_summary(
     has_transcripts = transcript_result.scalar_one_or_none() is not None
 
     if not has_transcripts:
-        raise BusinessError(
-            ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成可视化摘要"
-        )
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成可视化摘要")
 
     # Check if visual summary already exists (unless regenerate=True)
     summary_type = f"visual_{data.visual_type}"
@@ -763,9 +745,7 @@ async def get_visual_summary(
     """获取已生成的可视化摘要"""
 
     # Verify task exists and belongs to user
-    task_stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
 
@@ -787,9 +767,7 @@ async def get_visual_summary(
     summary = summary_result.scalar_one_or_none()
 
     if not summary:
-        raise BusinessError(
-            ErrorCode.SUMMARY_NOT_FOUND, reason=f"未找到 {visual_type} 类型的可视化摘要"
-        )
+        raise BusinessError(ErrorCode.SUMMARY_NOT_FOUND, reason=f"未找到 {visual_type} 类型的可视化摘要")
 
     response = VisualSummaryResponse(
         id=str(summary.id),
@@ -810,7 +788,7 @@ async def get_visual_summary(
 
 
 @router.get("/images/{path:path}")
-async def get_summary_image(path: str) -> "Response":
+async def get_summary_image(path: str) -> Response:
     """获取摘要配图（直接代理返回图片内容）
 
     path 格式: {user_id}/{task_id}/{image_id}.png

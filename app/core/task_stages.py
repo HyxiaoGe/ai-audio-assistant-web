@@ -1,9 +1,9 @@
 """任务处理阶段定义和状态机"""
 
-from enum import Enum
+from enum import StrEnum
 
 
-class StageType(str, Enum):
+class StageType(StrEnum):
     """阶段类型枚举"""
 
     RESOLVE_YOUTUBE = "resolve_youtube"  # YouTube 信息解析
@@ -15,7 +15,7 @@ class StageType(str, Enum):
     SUMMARIZE = "summarize"  # LLM 摘要
 
 
-class StageStatus(str, Enum):
+class StageStatus(StrEnum):
     """阶段状态枚举"""
 
     PENDING = "pending"
@@ -25,7 +25,7 @@ class StageStatus(str, Enum):
     SKIPPED = "skipped"  # 跳过（复用之前结果）
 
 
-class RetryMode(str, Enum):
+class RetryMode(StrEnum):
     """重试模式枚举"""
 
     FULL = "full"  # 完整重试（清空所有阶段，从头开始）

@@ -109,11 +109,7 @@ def process_visual_summary(
                 # ===== Step 1: 获取转写片段 =====
                 logger.info(f"[{request_id}] Fetching transcripts for task {task_id}")
 
-                transcript_stmt = (
-                    select(Transcript)
-                    .where(Transcript.task_id == task_id)
-                    .order_by(Transcript.sequence)
-                )
+                transcript_stmt = select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
                 transcript_result = await session.execute(transcript_stmt)
                 transcripts = transcript_result.scalars().all()
 
@@ -175,9 +171,7 @@ def process_visual_summary(
 
                 # ===== Step 4: 如果是重新生成，deactivate 旧记录 =====
                 if regenerate:
-                    logger.info(
-                        f"[{request_id}] Deactivating old summaries, new summary.id: {summary.id}"
-                    )
+                    logger.info(f"[{request_id}] Deactivating old summaries, new summary.id: {summary.id}")
                     deactivate_stmt = (
                         update(Summary)
                         .where(Summary.task_id == task_id)
@@ -187,9 +181,7 @@ def process_visual_summary(
                         .values(is_active=False)
                     )
                     await session.execute(deactivate_stmt)
-                    logger.info(
-                        f"[{request_id}] Deactivated old visual summaries for task {task_id}"
-                    )
+                    logger.info(f"[{request_id}] Deactivated old visual summaries for task {task_id}")
 
                 # ===== Step 5: 提交数据库事务 =====
                 await session.commit()

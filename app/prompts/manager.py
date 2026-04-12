@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from prompthub import NotFoundError, PromptHubClient, PromptHubError
 
@@ -21,7 +21,7 @@ class PromptManager:
     通过 PromptHub SDK 获取提示词模板，配置数据从本地 config.json 读取。
     """
 
-    _instance: Optional[PromptManager] = None
+    _instance: PromptManager | None = None
 
     def __new__(cls) -> PromptManager:
         if cls._instance is None:
@@ -37,17 +37,17 @@ class PromptManager:
         self.prompts_dir = Path(__file__).parent / "templates"
 
         # Config cache (permanent)
-        self._config_cache: Dict[str, Dict] = {}
+        self._config_cache: dict[str, dict] = {}
 
         # PromptHub SDK client (lazy import settings to avoid circular import)
         from app.config import settings
 
-        hub_url: Optional[str] = getattr(settings, "PROMPTHUB_BASE_URL", None)
-        hub_key: Optional[str] = getattr(settings, "PROMPTHUB_API_KEY", None)
+        hub_url: str | None = getattr(settings, "PROMPTHUB_BASE_URL", None)
+        hub_key: str | None = getattr(settings, "PROMPTHUB_API_KEY", None)
         hub_ttl: int = getattr(settings, "PROMPTHUB_CACHE_TTL", 300)
 
         if not hub_url or not hub_key:
-            self._client: Optional[PromptHubClient] = None
+            self._client: PromptHubClient | None = None
             log.warning("PromptHub not configured — prompts will not be available")
             return
 
@@ -67,9 +67,9 @@ class PromptManager:
         category: str,
         prompt_type: str,
         locale: str = "zh-CN",
-        variables: Optional[Dict[str, Any]] = None,
-        content_style: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        variables: dict[str, Any] | None = None,
+        content_style: str | None = None,
+    ) -> dict[str, Any]:
         """获取提示词
 
         Args:
@@ -144,7 +144,7 @@ class PromptManager:
         self._config_cache.clear()
         # SDK cache is managed internally by TTLCache
 
-    def get_visual_config(self, visual_type: str) -> Dict[str, Any]:
+    def get_visual_config(self, visual_type: str) -> dict[str, Any]:
         """获取可视化类型的配置（从本地 config.json 读取）"""
         config = self._load_config("visual")
         prompt_types = config.get("prompt_types", {})
@@ -152,7 +152,7 @@ class PromptManager:
             return {}
         return prompt_types[visual_type]
 
-    def get_image_config(self, content_style: str) -> Dict[str, Any]:
+    def get_image_config(self, content_style: str) -> dict[str, Any]:
         """获取内容风格对应的图片配置（从本地 config.json 读取）"""
         config = self._load_config("images")
         mapping = config.get("content_style_mapping", {})
@@ -202,9 +202,7 @@ class PromptManager:
     # PromptHub SDK helpers
     # ====================================================================
 
-    def _build_prompt_slug(
-        self, category: str, prompt_type: str, locale: str, content_style: str
-    ) -> str:
+    def _build_prompt_slug(self, category: str, prompt_type: str, locale: str, content_style: str) -> str:
         """Build the PromptHub slug from parameters."""
         loc_short = locale.split("-")[0]
         type_slug = prompt_type.replace("_", "")  # key_points -> keypoints
@@ -215,13 +213,13 @@ class PromptManager:
 
         return f"{category}-{type_slug}-{content_style}-{loc_short}"
 
-    def _resolve_shared_vars(self, locale: str) -> Dict[str, str]:
+    def _resolve_shared_vars(self, locale: str) -> dict[str, str]:
         """Fetch shared modules (format_rules, image_requirements) from PromptHub."""
         if self._client is None:
             return {}
 
         loc_short = locale.split("-")[0]
-        shared: Dict[str, str] = {}
+        shared: dict[str, str] = {}
 
         try:
             fmt = self._client.prompts.get_by_slug(f"shared-format-rules-{loc_short}")
@@ -237,7 +235,7 @@ class PromptManager:
 
         return shared
 
-    def _get_system_from_hub(self, category: str, locale: str, content_style: str) -> Optional[str]:
+    def _get_system_from_hub(self, category: str, locale: str, content_style: str) -> str | None:
         """Fetch and render system role from PromptHub."""
         if self._client is None:
             return None
@@ -247,23 +245,21 @@ class PromptManager:
 
         try:
             prompt = self._client.prompts.get_by_slug(slug)
-            rendered = self._client.prompts.render(
-                prompt.id, variables={"content_style": content_style}
-            )
+            rendered = self._client.prompts.render(prompt.id, variables={"content_style": content_style})
             return rendered.rendered_content
         except PromptHubError:
             return None
 
     def _build_image_template_vars(
         self,
-        config: Dict,
-        style_config: Dict,
+        config: dict,
+        style_config: dict,
         lang: str,
         image_type: str,
         content_style: str,
         description: str,
         key_texts: list[str],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Build template variables for image prompt rendering."""
         visual_style_key = style_config.get("visual_style", "flat_vector")
         visual_styles = config.get("visual_styles", {})
@@ -278,12 +274,8 @@ class PromptManager:
 
         colors = style_config.get("color_scheme", {})
 
-        image_type_name = (
-            config.get("image_type_names", {}).get(lang, {}).get(image_type, image_type)
-        )
-        content_style_name = (
-            config.get("content_style_names", {}).get(lang, {}).get(content_style, content_style)
-        )
+        image_type_name = config.get("image_type_names", {}).get(lang, {}).get(image_type, image_type)
+        content_style_name = config.get("content_style_names", {}).get(lang, {}).get(content_style, content_style)
 
         if key_texts:
             key_texts_formatted = "\n".join([f"- {text}" for text in key_texts])
@@ -309,7 +301,7 @@ class PromptManager:
     # Local config.json (model params, visual/image configs)
     # ====================================================================
 
-    def _load_config(self, category: str) -> Dict:
+    def _load_config(self, category: str) -> dict:
         """加载配置文件（带缓存）"""
         cache_key = f"{category}:config"
 
@@ -324,7 +316,7 @@ class PromptManager:
                 "model_params": {},
             }
 
-        with open(config_file, "r", encoding="utf-8") as f:
+        with open(config_file, encoding="utf-8") as f:
             data = json.load(f)
 
         self._config_cache[cache_key] = data

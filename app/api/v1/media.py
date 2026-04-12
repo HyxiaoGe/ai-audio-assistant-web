@@ -68,8 +68,7 @@ async def stream_media(file_path: str, request: Request) -> StreamingResponse:
 
             def iter_content():
                 try:
-                    for chunk in response.stream(8192):
-                        yield chunk
+                    yield from response.stream(8192)
                 finally:
                     response.close()
                     response.release_conn()
@@ -93,8 +92,7 @@ async def stream_media(file_path: str, request: Request) -> StreamingResponse:
 
             def iter_content():
                 try:
-                    for chunk in response.stream(8192):
-                        yield chunk
+                    yield from response.stream(8192)
                 finally:
                     response.close()
                     response.release_conn()

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 from yt_dlp import YoutubeDL
 
@@ -77,5 +76,5 @@ def _download(url: str) -> str:
     autoretry_for=(Exception,),
     retry_backoff=True,
 )
-def download_youtube(self, url: str, request_id: Optional[str] = None) -> str:
+def download_youtube(self, url: str, request_id: str | None = None) -> str:
     return _download(url)

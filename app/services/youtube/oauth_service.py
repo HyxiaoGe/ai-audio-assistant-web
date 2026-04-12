@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
+from datetime import UTC, datetime, timedelta
 
 # Allow scope changes (Google may return additional scopes like openid, profile, email)
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"  # nosec B105
@@ -68,7 +67,7 @@ class YouTubeOAuthService:
         logger.info(f"Generated YouTube OAuth URL for state={state[:8]}...")
         return authorization_url
 
-    def exchange_code(self, code: str) -> Tuple[str, str, datetime]:
+    def exchange_code(self, code: str) -> tuple[str, str, datetime]:
         """Exchange authorization code for tokens.
 
         Args:
@@ -102,7 +101,7 @@ class YouTubeOAuthService:
             access_token = tokens["access_token"]
             refresh_token = tokens.get("refresh_token", "")
             expires_in = tokens.get("expires_in", 3600)
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            expires_at = datetime.now(UTC) + timedelta(seconds=expires_in)
 
             if not refresh_token:
                 logger.warning("No refresh_token received from Google")
@@ -117,7 +116,7 @@ class YouTubeOAuthService:
                 reason=str(e),
             )
 
-    def refresh_access_token(self, refresh_token: str) -> Tuple[str, datetime]:
+    def refresh_access_token(self, refresh_token: str) -> tuple[str, datetime]:
         """Refresh an expired access token.
 
         Args:
@@ -145,10 +144,10 @@ class YouTubeOAuthService:
 
             expires_at = credentials.expiry
             if expires_at and expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
+                expires_at = expires_at.replace(tzinfo=UTC)
 
             logger.info("Successfully refreshed access token")
-            return credentials.token, expires_at or datetime.now(timezone.utc)
+            return credentials.token, expires_at or datetime.now(UTC)
 
         except Exception as e:
             logger.exception(f"Failed to refresh token: {e}")
@@ -160,8 +159,8 @@ class YouTubeOAuthService:
     def build_credentials(
         self,
         access_token: str,
-        refresh_token: Optional[str],
-        expires_at: Optional[datetime] = None,
+        refresh_token: str | None,
+        expires_at: datetime | None = None,
     ) -> Credentials:
         """Build a Google Credentials object.
 
@@ -178,7 +177,7 @@ class YouTubeOAuthService:
         if expires_at:
             if expires_at.tzinfo is not None:
                 # Convert to UTC and remove timezone info
-                expiry = expires_at.astimezone(timezone.utc).replace(tzinfo=None)
+                expiry = expires_at.astimezone(UTC).replace(tzinfo=None)
             else:
                 expiry = expires_at
 
@@ -193,7 +192,7 @@ class YouTubeOAuthService:
 
     def is_token_expired(
         self,
-        expires_at: Optional[datetime],
+        expires_at: datetime | None,
         buffer_minutes: int = 5,
     ) -> bool:
         """Check if token is expired or will expire soon.
@@ -210,10 +209,10 @@ class YouTubeOAuthService:
 
         # Ensure timezone aware
         if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
+            expires_at = expires_at.replace(tzinfo=UTC)
 
         buffer = timedelta(minutes=buffer_minutes)
-        return datetime.now(timezone.utc) >= (expires_at - buffer)
+        return datetime.now(UTC) >= (expires_at - buffer)
 
     def _create_flow(self) -> Flow:
         """Create a Google OAuth flow.

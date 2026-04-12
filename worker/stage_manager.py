@@ -4,8 +4,8 @@
 """
 
 import logging
+from collections.abc import Callable
 from contextlib import contextmanager
-from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class StageManager:
     """阶段管理器"""
 
-    def __init__(self, task_id: str, request_id: Optional[str] = None):
+    def __init__(self, task_id: str, request_id: str | None = None):
         self.task_id = task_id
         self.request_id = request_id
 
@@ -63,17 +63,13 @@ class StageManager:
         session.commit()
         logger.info(f"[{self.request_id}] Stage {stage_type.value} started for task {self.task_id}")
 
-    def complete_stage(
-        self, session: Session, stage_type: StageType, metadata: Optional[dict] = None
-    ) -> None:
+    def complete_stage(self, session: Session, stage_type: StageType, metadata: dict | None = None) -> None:
         """标记阶段为完成"""
         from datetime import datetime
 
         stage = self._get_stage(session, stage_type)
         if not stage:
-            logger.warning(
-                f"[{self.request_id}] Stage {stage_type.value} not found for task {self.task_id}"
-            )
+            logger.warning(f"[{self.request_id}] Stage {stage_type.value} not found for task {self.task_id}")
             return
 
         stage.status = StageStatus.COMPLETED.value
@@ -82,21 +78,15 @@ class StageManager:
             stage.stage_metadata = {**stage.stage_metadata, **metadata}
 
         session.commit()
-        logger.info(
-            f"[{self.request_id}] Stage {stage_type.value} completed for task {self.task_id}"
-        )
+        logger.info(f"[{self.request_id}] Stage {stage_type.value} completed for task {self.task_id}")
 
-    def fail_stage(
-        self, session: Session, stage_type: StageType, error_code: int, error_message: str
-    ) -> None:
+    def fail_stage(self, session: Session, stage_type: StageType, error_code: int, error_message: str) -> None:
         """标记阶段为失败"""
         from datetime import datetime
 
         stage = self._get_stage(session, stage_type)
         if not stage:
-            logger.warning(
-                f"[{self.request_id}] Stage {stage_type.value} not found for task {self.task_id}"
-            )
+            logger.warning(f"[{self.request_id}] Stage {stage_type.value} not found for task {self.task_id}")
             return
 
         stage.status = StageStatus.FAILED.value
@@ -113,9 +103,7 @@ class StageManager:
             error_message,
         )
 
-    def skip_stage(
-        self, session: Session, stage_type: StageType, reason: str = "Reusing previous result"
-    ) -> None:
+    def skip_stage(self, session: Session, stage_type: StageType, reason: str = "Reusing previous result") -> None:
         """跳过阶段（复用之前的结果）"""
         from datetime import datetime
 
@@ -147,7 +135,7 @@ class StageManager:
         self,
         stage_type: StageType,
         task: Task,
-        check_artifacts: Optional[Callable[[Task], bool]] = None,
+        check_artifacts: Callable[[Task], bool] | None = None,
     ):
         """
         执行阶段的上下文管理器
@@ -167,9 +155,7 @@ class StageManager:
         with get_sync_db_session() as session:
             # 检查是否应该执行
             if not self.should_execute(session, stage_type):
-                logger.info(
-                    f"[{self.request_id}] Stage {stage_type.value} already completed, skipping"
-                )
+                logger.info(f"[{self.request_id}] Stage {stage_type.value} already completed, skipping")
                 yield False
                 return
 
@@ -197,7 +183,7 @@ class StageManager:
 
         # 成功完成（由调用方调用 complete_stage）
 
-    def _get_stage(self, session: Session, stage_type: StageType) -> Optional[TaskStage]:
+    def _get_stage(self, session: Session, stage_type: StageType) -> TaskStage | None:
         """获取指定类型的活跃阶段"""
         return (
             session.query(TaskStage)

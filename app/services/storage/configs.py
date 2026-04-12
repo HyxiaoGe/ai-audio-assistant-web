@@ -71,8 +71,7 @@ class MinioConfig(ServiceConfig):
         """验证 endpoint 格式（不应包含协议前缀）"""
         if v.startswith(("http://", "https://")):
             raise ValueError(
-                "endpoint should not include http:// or https:// prefix. "
-                "Use use_ssl=True for HTTPS connections."
+                "endpoint should not include http:// or https:// prefix. Use use_ssl=True for HTTPS connections."
             )
         return v
 

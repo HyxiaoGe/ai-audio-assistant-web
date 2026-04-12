@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -22,16 +21,14 @@ from worker.db import get_sync_db_session
 logger = logging.getLogger("worker.cleanup_task")
 
 
-def _load_task(session: Session, task_id: str, user_id: str) -> Optional[Task]:
+def _load_task(session: Session, task_id: str, user_id: str) -> Task | None:
     result = session.execute(select(Task).where(Task.id == task_id, Task.user_id == user_id))
     return result.scalar_one_or_none()
 
 
-def _delete_storage_object(provider: Optional[str], source_key: str, user_id: str) -> None:
+def _delete_storage_object(provider: str | None, source_key: str, user_id: str) -> None:
     try:
-        storage: StorageService = asyncio.run(
-            SmartFactory.get_service("storage", provider=provider, user_id=user_id)
-        )
+        storage: StorageService = asyncio.run(SmartFactory.get_service("storage", provider=provider, user_id=user_id))
     except Exception as exc:
         logger.warning(
             "Cleanup storage init failed for provider=%s: %s",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 import httpx
 
@@ -13,10 +13,10 @@ logger = logging.getLogger("rag.embedder")
 class EmbeddingClient:
     def __init__(
         self,
-        provider: Optional[str] = None,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
+        provider: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
     ) -> None:
         self._provider = (provider or settings.RAG_EMBEDDING_PROVIDER or "openai").lower()
         self._model = model or settings.RAG_EMBEDDING_MODEL or "text-embedding-3-small"
@@ -25,14 +25,10 @@ class EmbeddingClient:
 
         if self._provider == "openrouter":
             self._api_key = api_key or settings.OPENROUTER_API_KEY
-            self._base_url = (
-                base_url or settings.OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1"
-            ).rstrip("/")
+            self._base_url = (base_url or settings.OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1").rstrip("/")
         else:
             self._api_key = api_key or settings.OPENAI_API_KEY
-            self._base_url = (
-                base_url or settings.OPENAI_BASE_URL or "https://api.openai.com/v1"
-            ).rstrip("/")
+            self._base_url = (base_url or settings.OPENAI_BASE_URL or "https://api.openai.com/v1").rstrip("/")
 
     @property
     def provider(self) -> str:

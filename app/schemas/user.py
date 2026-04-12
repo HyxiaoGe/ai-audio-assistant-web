@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -14,25 +12,25 @@ class UserProfileResponse(BaseModel):
 
 
 class TaskDefaultsPreferences(BaseModel):
-    language: Optional[str] = Field(default=None)
-    summary_style: Optional[str] = Field(default=None)
-    enable_speaker_diarization: Optional[bool] = Field(default=None)
-    enable_visual_summary: Optional[bool] = Field(default=None)
-    visual_types: Optional[list[str]] = Field(default=None)
-    asr_provider: Optional[str] = Field(default=None)
-    asr_variant: Optional[str] = Field(default=None)
-    llm_provider: Optional[str] = Field(default=None)
-    llm_model_id: Optional[str] = Field(default=None)
+    language: str | None = Field(default=None)
+    summary_style: str | None = Field(default=None)
+    enable_speaker_diarization: bool | None = Field(default=None)
+    enable_visual_summary: bool | None = Field(default=None)
+    visual_types: list[str] | None = Field(default=None)
+    asr_provider: str | None = Field(default=None)
+    asr_variant: str | None = Field(default=None)
+    llm_provider: str | None = Field(default=None)
+    llm_model_id: str | None = Field(default=None)
 
 
 class UiPreferences(BaseModel):
-    locale: Optional[str] = Field(default=None)
-    timezone: Optional[str] = Field(default=None)
+    locale: str | None = Field(default=None)
+    timezone: str | None = Field(default=None)
 
 
 class NotificationPreferences(BaseModel):
-    task_completed: Optional[bool] = Field(default=None)
-    task_failed: Optional[bool] = Field(default=None)
+    task_completed: bool | None = Field(default=None)
+    task_failed: bool | None = Field(default=None)
 
 
 class UserPreferencesResponse(BaseModel):
@@ -42,6 +40,6 @@ class UserPreferencesResponse(BaseModel):
 
 
 class UserPreferencesUpdateRequest(BaseModel):
-    task_defaults: Optional[TaskDefaultsPreferences] = Field(default=None)
-    ui: Optional[UiPreferences] = Field(default=None)
-    notifications: Optional[NotificationPreferences] = Field(default=None)
+    task_defaults: TaskDefaultsPreferences | None = Field(default=None)
+    ui: UiPreferences | None = Field(default=None)
+    notifications: NotificationPreferences | None = Field(default=None)

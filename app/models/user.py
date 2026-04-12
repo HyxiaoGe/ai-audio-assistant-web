@@ -23,6 +23,6 @@ class UserProfile(BaseModel):
     )
 
     # Relationships
-    notifications: Mapped[list["Notification"]] = relationship(
+    notifications: Mapped[list[Notification]] = relationship(
         "Notification", back_populates="user", cascade="all, delete-orphan"
     )

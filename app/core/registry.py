@@ -17,9 +17,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ class ServiceRegistry:
 
     # 类变量：存储所有已注册的服务
     # 格式: {service_type: {name: (service_class, metadata, instance)}}
-    _services: Dict[str, Dict[str, tuple[Type[Any], ServiceMetadata, Optional[Any]]]] = {
+    _services: dict[str, dict[str, tuple[type[Any], ServiceMetadata, Any | None]]] = {
         "llm": {},
         "asr": {},
         "storage": {},
@@ -108,8 +109,8 @@ class ServiceRegistry:
         cls,
         service_type: str,
         name: str,
-        service_class: Type[Any],
-        metadata: Optional[ServiceMetadata] = None,
+        service_class: type[Any],
+        metadata: ServiceMetadata | None = None,
     ) -> None:
         """注册服务
 
@@ -131,10 +132,7 @@ class ServiceRegistry:
             )
         """
         if service_type not in cls._services:
-            raise ValueError(
-                f"Unsupported service_type: {service_type}. "
-                f"Supported types: {list(cls._services.keys())}"
-            )
+            raise ValueError(f"Unsupported service_type: {service_type}. Supported types: {list(cls._services.keys())}")
 
         # 如果没有提供元数据，创建默认元数据
         if metadata is None:
@@ -154,8 +152,8 @@ class ServiceRegistry:
         service_type: str,
         name: str,
         force_new: bool = False,
-        model_id: Optional[str] = None,
-        config: Optional[Any] = None,
+        model_id: str | None = None,
+        config: Any | None = None,
     ) -> Any:
         """获取服务实例（单例模式）
 
@@ -185,8 +183,7 @@ class ServiceRegistry:
         if name not in cls._services[service_type]:
             available = list(cls._services[service_type].keys())
             raise ValueError(
-                f"Service '{name}' not registered for type '{service_type}'. "
-                f"Available services: {available}"
+                f"Service '{name}' not registered for type '{service_type}'. Available services: {available}"
             )
 
         with cls._lock:
@@ -221,14 +218,12 @@ class ServiceRegistry:
                         f"Failed to instantiate {service_type} service '{name}': {exc}",
                         exc_info=True,
                     )
-                    raise RuntimeError(
-                        f"Failed to instantiate {service_type} service '{name}': {exc}"
-                    ) from exc
+                    raise RuntimeError(f"Failed to instantiate {service_type} service '{name}': {exc}") from exc
 
             return cached_instance
 
     @classmethod
-    def list_services(cls, service_type: str) -> List[str]:
+    def list_services(cls, service_type: str) -> list[str]:
         """列出指定类型的所有已注册服务名称
 
         Args:
@@ -286,7 +281,7 @@ class ServiceRegistry:
         return service_type in cls._services and name in cls._services[service_type]
 
     @classmethod
-    def clear(cls, service_type: Optional[str] = None) -> None:
+    def clear(cls, service_type: str | None = None) -> None:
         """清空注册表（主要用于测试）
 
         Args:
@@ -306,8 +301,8 @@ class ServiceRegistry:
 def register_service(
     service_type: str,
     name: str,
-    metadata: Optional[ServiceMetadata] = None,
-) -> Callable[[Type[Any]], Type[Any]]:
+    metadata: ServiceMetadata | None = None,
+) -> Callable[[type[Any]], type[Any]]:
     """服务注册装饰器
 
     自动将服务类注册到 ServiceRegistry，简化注册流程。
@@ -340,7 +335,7 @@ def register_service(
             ...
     """
 
-    def decorator(cls: Type[Any]) -> Type[Any]:
+    def decorator(cls: type[Any]) -> type[Any]:
         # 注册服务
         ServiceRegistry.register(service_type, name, cls, metadata)
         return cls

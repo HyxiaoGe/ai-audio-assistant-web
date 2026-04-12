@@ -20,12 +20,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from functools import wraps
 from threading import Lock, RLock
-from typing import Any, Callable, Dict, Optional, TypeVar
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class RetryConfig:
 
 
 def retry(
-    config: Optional[RetryConfig] = None,
+    config: RetryConfig | None = None,
     exceptions: tuple = (Exception,),
 ) -> Callable:
     """重试装饰器（支持同步和异步函数，指数退避）
@@ -120,8 +121,7 @@ def retry(
                             delay = delay * (0.5 + random.random() * 0.5)  # nosec
 
                         logger.warning(
-                            f"Retry {attempt}/{config.max_attempts} for {func.__name__} "
-                            f"after {delay:.2f}s: {exc}"
+                            f"Retry {attempt}/{config.max_attempts} for {func.__name__} after {delay:.2f}s: {exc}"
                         )
 
                         await asyncio.sleep(delay)
@@ -165,8 +165,7 @@ def retry(
                             delay = delay * (0.5 + random.random() * 0.5)  # nosec
 
                         logger.warning(
-                            f"Retry {attempt}/{config.max_attempts} for {func.__name__} "
-                            f"after {delay:.2f}s: {exc}"
+                            f"Retry {attempt}/{config.max_attempts} for {func.__name__} after {delay:.2f}s: {exc}"
                         )
 
                         import time
@@ -184,7 +183,7 @@ def retry(
 # ==================== 熔断器 ====================
 
 
-class CircuitState(str, Enum):
+class CircuitState(StrEnum):
     """熔断器状态"""
 
     CLOSED = "closed"  # 关闭（正常）
@@ -229,16 +228,16 @@ class CircuitBreaker:
     """
 
     # 全局熔断器注册表
-    _breakers: Dict[str, CircuitBreaker] = {}
+    _breakers: dict[str, CircuitBreaker] = {}
     _lock = RLock()
 
-    def __init__(self, name: str, config: Optional[CircuitBreakerConfig] = None):
+    def __init__(self, name: str, config: CircuitBreakerConfig | None = None):
         self.name = name
         self.config = config or CircuitBreakerConfig()
         self.state = CircuitState.CLOSED
         self.failure_count = 0
         self.success_count = 0
-        self.last_failure_time: Optional[datetime] = None
+        self.last_failure_time: datetime | None = None
         self._state_lock = Lock()
 
         # 注册到全局注册表
@@ -246,9 +245,7 @@ class CircuitBreaker:
             CircuitBreaker._breakers[name] = self
 
     @classmethod
-    def get_or_create(
-        cls, name: str, config: Optional[CircuitBreakerConfig] = None
-    ) -> CircuitBreaker:
+    def get_or_create(cls, name: str, config: CircuitBreakerConfig | None = None) -> CircuitBreaker:
         """获取或创建熔断器"""
         with cls._lock:
             if name not in cls._breakers:
@@ -322,9 +319,7 @@ class CircuitBreaker:
 
             # 如果熔断器打开，快速失败
             if self.state == CircuitState.OPEN:
-                raise CircuitBreakerOpenError(
-                    f"Circuit breaker '{self.name}' is OPEN, failing fast"
-                )
+                raise CircuitBreakerOpenError(f"Circuit breaker '{self.name}' is OPEN, failing fast")
 
             # 尝试调用
             try:
@@ -361,7 +356,7 @@ class CircuitBreakerOpenError(Exception):
 # ==================== 降级机制 ====================
 
 
-def fallback(fallback_func: Optional[Callable] = None, default_value: Any = None) -> Callable:
+def fallback(fallback_func: Callable | None = None, default_value: Any = None) -> Callable:
     """降级装饰器
 
     当主函数失败时，自动调用降级函数或返回默认值。
@@ -422,10 +417,10 @@ def fallback(fallback_func: Optional[Callable] = None, default_value: Any = None
 
 
 def resilient(
-    retry_config: Optional[RetryConfig] = None,
-    circuit_breaker_name: Optional[str] = None,
-    circuit_config: Optional[CircuitBreakerConfig] = None,
-    fallback_func: Optional[Callable] = None,
+    retry_config: RetryConfig | None = None,
+    circuit_breaker_name: str | None = None,
+    circuit_config: CircuitBreakerConfig | None = None,
+    fallback_func: Callable | None = None,
     default_value: Any = None,
 ) -> Callable:
     """韧性装饰器（组合重试、熔断、降级）

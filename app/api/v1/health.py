@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from app.api.deps import CurrentUser, get_current_user

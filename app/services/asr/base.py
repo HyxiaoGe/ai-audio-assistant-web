@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Awaitable, Callable, List, Optional
 
 
 @dataclass(frozen=True)
@@ -12,7 +12,7 @@ class WordTimestamp:
     word: str
     start_time: float
     end_time: float
-    confidence: Optional[float] = None
+    confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -28,12 +28,12 @@ class TranscriptSegment:
         words: 词级时间戳（可选）
     """
 
-    speaker_id: Optional[str]
+    speaker_id: str | None
     start_time: float
     end_time: float
     content: str
-    confidence: Optional[float]
-    words: Optional[List[WordTimestamp]] = None
+    confidence: float | None
+    words: list[WordTimestamp] | None = None
 
 
 class ASRService(ABC):
@@ -56,8 +56,8 @@ class ASRService(ABC):
     async def transcribe(
         self,
         audio_url: str,
-        status_callback: Optional[Callable[[str], Awaitable[None]]] = None,
-    ) -> List[TranscriptSegment]:
+        status_callback: Callable[[str], Awaitable[None]] | None = None,
+    ) -> list[TranscriptSegment]:
         """转写音频（单个文件）
 
         Args:
@@ -114,9 +114,9 @@ class ASRService(ABC):
     @abstractmethod
     async def batch_transcribe(
         self,
-        audio_urls: List[str],
-        status_callback: Optional[Callable[[str, int, int], Awaitable[None]]] = None,
-    ) -> List[List[TranscriptSegment]]:
+        audio_urls: list[str],
+        status_callback: Callable[[str, int, int], Awaitable[None]] | None = None,
+    ) -> list[list[TranscriptSegment]]:
         """批量转写音频
 
         Args:

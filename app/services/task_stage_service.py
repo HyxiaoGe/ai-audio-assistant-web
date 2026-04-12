@@ -1,7 +1,6 @@
 """任务阶段管理服务"""
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,9 +55,7 @@ class TaskStageService:
         return list(result.scalars().all())
 
     @staticmethod
-    async def get_stage(
-        db: AsyncSession, task_id: str, stage_type: StageType
-    ) -> Optional[TaskStage]:
+    async def get_stage(db: AsyncSession, task_id: str, stage_type: StageType) -> TaskStage | None:
         """获取指定类型的活跃阶段"""
         result = await db.execute(
             select(TaskStage).where(
@@ -98,7 +95,7 @@ class TaskStageService:
         db: AsyncSession,
         task_id: str,
         stage_type: StageType,
-        metadata: Optional[dict] = None,
+        metadata: dict | None = None,
     ) -> TaskStage:
         """标记阶段为完成"""
         stage = await TaskStageService.get_stage(db, task_id, stage_type)

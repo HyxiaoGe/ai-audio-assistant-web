@@ -27,7 +27,7 @@ def _build_client(response: _FakeResponse | None, error: Exception | None):
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
 
-        async def __aenter__(self) -> "_Client":
+        async def __aenter__(self) -> _Client:
             return self
 
         async def __aexit__(
@@ -35,9 +35,7 @@ def _build_client(response: _FakeResponse | None, error: Exception | None):
         ) -> bool:
             return False
 
-        async def post(
-            self, url: str, json: dict[str, object], headers: dict[str, str]
-        ) -> _FakeResponse:
+        async def post(self, url: str, json: dict[str, object], headers: dict[str, str]) -> _FakeResponse:
             if error is not None:
                 raise error
             if response is None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class StorageService(ABC):
@@ -53,9 +53,7 @@ class StorageService(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def upload_file(
-        self, object_name: str, file_path: str, content_type: Optional[str] = None
-    ) -> None:
+    def upload_file(self, object_name: str, file_path: str, content_type: str | None = None) -> None:
         """上传文件
 
         Args:
@@ -97,7 +95,7 @@ class StorageService(ABC):
         raise NotImplementedError("检查文件存在功能待实现")
 
     @abstractmethod
-    def get_file_info(self, object_name: str) -> Dict[str, Any]:
+    def get_file_info(self, object_name: str) -> dict[str, Any]:
         """获取文件元数据
 
         Args:
@@ -119,7 +117,7 @@ class StorageService(ABC):
         raise NotImplementedError("获取文件信息功能待实现")
 
     @abstractmethod
-    def list_files(self, prefix: str = "", limit: int = 1000) -> List[str]:
+    def list_files(self, prefix: str = "", limit: int = 1000) -> list[str]:
         """列出文件
 
         Args:

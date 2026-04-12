@@ -130,7 +130,7 @@ async def test_transcript_processor():
         # 评估质量
         quality = TranscriptProcessor.assess_quality(test_segments)
         confidence = quality.avg_confidence
-        print(f"  ✅ 质量评估: {quality.quality_score} " f"(置信度: {confidence:.2f})")
+        print(f"  ✅ 质量评估: {quality.quality_score} (置信度: {confidence:.2f})")
 
         # 预处理文本
         preprocessed = TranscriptProcessor.preprocess(test_segments)

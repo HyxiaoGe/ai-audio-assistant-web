@@ -117,11 +117,7 @@ async def _fetch_openrouter_latest_models() -> list[str]:
                     latest_by_prefix[prefix] = (created, model_id)
                 break
 
-    return [
-        latest_by_prefix[prefix][1]
-        for prefix in OPENROUTER_PROVIDER_PREFIXES
-        if prefix in latest_by_prefix
-    ]
+    return [latest_by_prefix[prefix][1] for prefix in OPENROUTER_PROVIDER_PREFIXES if prefix in latest_by_prefix]
 
 
 @router.get("/models")
@@ -211,9 +207,7 @@ async def get_available_models(request: Request) -> JSONResponse:
         if not display_name:
             display_name = DISPLAY_NAMES_I18N.get(provider, {}).get(
                 lang,
-                DISPLAY_NAMES_I18N.get(provider, {}).get(
-                    "zh", metadata.display_name or provider.capitalize()
-                ),
+                DISPLAY_NAMES_I18N.get(provider, {}).get("zh", metadata.display_name or provider.capitalize()),
             )
 
         models.append(
@@ -235,9 +229,7 @@ async def get_available_models(request: Request) -> JSONResponse:
         min_priority = min(cast(int, m["priority"]) for m in healthy_models)
         for model in models:
             # 只有优先级最高且可用的模型才推荐
-            model["is_recommended"] = (
-                model["is_available"] and cast(int, model["priority"]) == min_priority
-            )
+            model["is_recommended"] = model["is_available"] and cast(int, model["priority"]) == min_priority
     else:
         # 如果没有健康的模型，都不推荐
         for model in models:

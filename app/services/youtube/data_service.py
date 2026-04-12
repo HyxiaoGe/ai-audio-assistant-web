@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, NoReturn, Optional, Tuple
+from typing import Any, NoReturn
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -27,7 +27,7 @@ class YouTubeDataService:
         """
         self._youtube = build("youtube", "v3", credentials=credentials)
 
-    def get_my_channel(self) -> Dict[str, Any]:
+    def get_my_channel(self) -> dict[str, Any]:
         """Get the authenticated user's channel information.
 
         Returns:
@@ -68,9 +68,9 @@ class YouTubeDataService:
 
     def get_subscriptions(
         self,
-        page_token: Optional[str] = None,
+        page_token: str | None = None,
         max_results: int = 50,
-    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    ) -> tuple[list[dict[str, Any]], str | None]:
         """Get user's subscriptions (paginated).
 
         Args:
@@ -100,19 +100,14 @@ class YouTubeDataService:
                         "channel_id": resource_id.get("channelId"),
                         "channel_title": snippet.get("title"),
                         "channel_description": snippet.get("description"),
-                        "channel_thumbnail": snippet.get("thumbnails", {})
-                        .get("default", {})
-                        .get("url"),
+                        "channel_thumbnail": snippet.get("thumbnails", {}).get("default", {}).get("url"),
                         "subscribed_at": self._parse_datetime(snippet.get("publishedAt")),
                     }
                 )
 
             next_page_token = response.get("nextPageToken")
 
-            logger.debug(
-                f"Fetched {len(subscriptions)} subscriptions, "
-                f"has_more={next_page_token is not None}"
-            )
+            logger.debug(f"Fetched {len(subscriptions)} subscriptions, has_more={next_page_token is not None}")
 
             return subscriptions, next_page_token
 
@@ -128,7 +123,7 @@ class YouTubeDataService:
                 reason=str(e),
             )
 
-    def get_all_subscriptions(self) -> List[Dict[str, Any]]:
+    def get_all_subscriptions(self) -> list[dict[str, Any]]:
         """Get all user's subscriptions (handles pagination).
 
         Returns:
@@ -182,7 +177,7 @@ class YouTubeDataService:
                 reason=f"YouTube API error (HTTP {status}): {content}",
             )
 
-    def get_channel_uploads_playlist_id(self, channel_id: str) -> Optional[str]:
+    def get_channel_uploads_playlist_id(self, channel_id: str) -> str | None:
         """Get the uploads playlist ID for a channel.
 
         The uploads playlist contains all videos uploaded by the channel.
@@ -226,9 +221,9 @@ class YouTubeDataService:
     def get_playlist_videos(
         self,
         playlist_id: str,
-        page_token: Optional[str] = None,
+        page_token: str | None = None,
         max_results: int = 50,
-    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    ) -> tuple[list[dict[str, Any]], str | None]:
         """Get videos from a playlist (paginated).
 
         Args:
@@ -275,8 +270,7 @@ class YouTubeDataService:
             next_page_token = response.get("nextPageToken")
 
             logger.debug(
-                f"Fetched {len(videos)} videos from playlist {playlist_id}, "
-                f"has_more={next_page_token is not None}"
+                f"Fetched {len(videos)} videos from playlist {playlist_id}, has_more={next_page_token is not None}"
             )
 
             return videos, next_page_token
@@ -293,8 +287,8 @@ class YouTubeDataService:
 
     def get_videos_details(
         self,
-        video_ids: List[str],
-    ) -> Dict[str, Dict[str, Any]]:
+        video_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
         """Batch fetch video details (duration, statistics).
 
         Args:
@@ -342,7 +336,7 @@ class YouTubeDataService:
                 reason=str(e),
             )
 
-    def get_video_full_info(self, video_id: str) -> Optional[Dict[str, Any]]:
+    def get_video_full_info(self, video_id: str) -> dict[str, Any] | None:
         """Fetch complete video info including snippet, details, and statistics.
 
         Args:
@@ -399,7 +393,7 @@ class YouTubeDataService:
             logger.warning(f"Unexpected error getting video info: {e}")
             return None
 
-    def _parse_datetime(self, dt_str: Optional[str]) -> Optional[datetime]:
+    def _parse_datetime(self, dt_str: str | None) -> datetime | None:
         """Parse ISO datetime string from YouTube API.
 
         Args:
@@ -417,7 +411,7 @@ class YouTubeDataService:
         except (ValueError, AttributeError):
             return None
 
-    def _parse_duration(self, duration_str: Optional[str]) -> Optional[int]:
+    def _parse_duration(self, duration_str: str | None) -> int | None:
         """Parse ISO 8601 duration string to seconds.
 
         Args:
@@ -448,7 +442,7 @@ class YouTubeDataService:
         except (ValueError, AttributeError):
             return None
 
-    def _parse_int(self, value: Optional[str]) -> Optional[int]:
+    def _parse_int(self, value: str | None) -> int | None:
         """Parse string to int, returning None on failure.
 
         Args:
@@ -465,7 +459,7 @@ class YouTubeDataService:
         except (ValueError, TypeError):
             return None
 
-    def _get_best_thumbnail(self, thumbnails: Dict[str, Any]) -> Optional[str]:
+    def _get_best_thumbnail(self, thumbnails: dict[str, Any]) -> str | None:
         """Get the best available thumbnail URL.
 
         Args:

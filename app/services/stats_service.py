@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import statistics
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,8 +22,8 @@ _SERVICE_STAGE = {"asr": "transcribe", "llm": "summarize"}
 
 def _ensure_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _format_duration(total_seconds: float) -> str:
@@ -41,14 +41,14 @@ class StatsService:
 
     async def _parse_time_range(
         self,
-        time_range: Optional[str],
-        start_date: Optional[datetime],
-        end_date: Optional[datetime],
+        time_range: str | None,
+        start_date: datetime | None,
+        end_date: datetime | None,
     ) -> tuple[datetime, datetime]:
         if time_range and time_range not in _TIME_RANGE_VALUES:
             raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="invalid time_range")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         if time_range == "today":
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -81,18 +81,18 @@ class StatsService:
 
     async def get_service_usage_overview(
         self,
-        time_range: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+        time_range: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> dict[str, Any]:
         start, end = await self._parse_time_range(time_range, start_date, end_date)
 
-        usage_by_provider: list[Dict[str, Any]] = []
-        usage_by_service_type: list[Dict[str, Any]] = []
+        usage_by_provider: list[dict[str, Any]] = []
+        usage_by_service_type: list[dict[str, Any]] = []
 
         for service_type in _SERVICE_TYPES:
             stage_type = _SERVICE_STAGE[service_type]
-            provider_stats: dict[str, Dict[str, Any]] = defaultdict(
+            provider_stats: dict[str, dict[str, Any]] = defaultdict(
                 lambda: {
                     "total": 0,
                     "completed": 0,
@@ -119,9 +119,7 @@ class StatsService:
                     Task.deleted_at.is_(None),
                     Task.asr_provider.is_not(None),
                 )
-                status_rows = (
-                    await self.db.execute(status_query.group_by(provider_field, Task.status))
-                ).all()
+                status_rows = (await self.db.execute(status_query.group_by(provider_field, Task.status))).all()
 
                 for row in status_rows:
                     provider = row.provider
@@ -175,9 +173,7 @@ class StatsService:
                     provider = row.provider
                     if not provider:
                         continue
-                    durations_by_provider[provider].append(
-                        (row.completed_at - row.started_at).total_seconds()
-                    )
+                    durations_by_provider[provider].append((row.completed_at - row.started_at).total_seconds())
             else:
                 provider_field = LLMUsage.model_id.label("provider")
                 time_field = LLMUsage.created_at
@@ -250,9 +246,7 @@ class StatsService:
                     provider = row.provider
                     if not provider:
                         continue
-                    durations_by_provider[provider].append(
-                        (row.completed_at - row.started_at).total_seconds()
-                    )
+                    durations_by_provider[provider].append((row.completed_at - row.started_at).total_seconds())
 
             service_durations: list[float] = []
             for provider, stats in provider_stats.items():
@@ -289,9 +283,7 @@ class StatsService:
             total_processing = sum(stats["processing"] for stats in provider_stats.values())
             success_rate = (total_completed / total_calls * 100) if total_calls > 0 else 0.0
             failure_rate = (total_failed / total_calls * 100) if total_calls > 0 else 0.0
-            avg_stage = (
-                sum(service_durations) / len(service_durations) if service_durations else 0.0
-            )
+            avg_stage = sum(service_durations) / len(service_durations) if service_durations else 0.0
             median_stage = statistics.median(service_durations) if service_durations else 0.0
             total_audio_duration = sum(duration_map.values()) if service_type == "asr" else 0.0
 
@@ -312,16 +304,10 @@ class StatsService:
                 }
             )
 
-        usage_by_provider.sort(
-            key=lambda item: (item["service_type"], item["call_count"]), reverse=True
-        )
+        usage_by_provider.sort(key=lambda item: (item["service_type"], item["call_count"]), reverse=True)
 
-        asr_usage_by_provider = [
-            item for item in usage_by_provider if item["service_type"] == "asr"
-        ]
-        llm_usage_by_provider = [
-            item for item in usage_by_provider if item["service_type"] == "llm"
-        ]
+        asr_usage_by_provider = [item for item in usage_by_provider if item["service_type"] == "asr"]
+        llm_usage_by_provider = [item for item in usage_by_provider if item["service_type"] == "llm"]
 
         return {
             "time_range": {"start": start, "end": end},
@@ -333,10 +319,10 @@ class StatsService:
 
     async def get_task_overview(
         self,
-        time_range: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+        time_range: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> dict[str, Any]:
         start, end = await self._parse_time_range(time_range, start_date, end_date)
 
         status_stmt = (
@@ -390,9 +376,7 @@ class StatsService:
         stage_stmt = (
             select(
                 TaskStage.stage_type,
-                func.avg(
-                    func.extract("epoch", TaskStage.completed_at - TaskStage.started_at)
-                ).label("avg_seconds"),
+                func.avg(func.extract("epoch", TaskStage.completed_at - TaskStage.started_at)).label("avg_seconds"),
             )
             .where(
                 TaskStage.task_id.in_(
@@ -411,9 +395,7 @@ class StatsService:
         stage_result = await self.db.execute(stage_stmt)
         stage_rows = stage_result.all()
 
-        processing_time_by_stage = {
-            row.stage_type: round(row.avg_seconds or 0.0, 1) for row in stage_rows
-        }
+        processing_time_by_stage = {row.stage_type: round(row.avg_seconds or 0.0, 1) for row in stage_rows}
 
         duration_stmt = select(func.sum(Task.duration_seconds)).where(
             Task.user_id == self.user.id,

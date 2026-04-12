@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import oss2
 from oss2.exceptions import NoSuchKey, OssError
@@ -39,20 +39,17 @@ class OSSStorageService(StorageService):
     def provider(self) -> str:
         return "oss"
 
-    def __init__(self, config: Optional[object] = None) -> None:
+    def __init__(self, config: object | None = None) -> None:
         endpoint = get_config_value(config, "endpoint", settings.OSS_ENDPOINT)
         region = get_config_value(config, "region", settings.OSS_REGION)
         access_key_id = get_config_value(config, "access_key_id", settings.ALIYUN_ACCESS_KEY_ID)
-        access_key_secret = get_config_value(
-            config, "access_key_secret", settings.ALIYUN_ACCESS_KEY_SECRET
-        )
+        access_key_secret = get_config_value(config, "access_key_secret", settings.ALIYUN_ACCESS_KEY_SECRET)
         bucket_name = get_config_value(config, "bucket", settings.OSS_BUCKET)
         use_ssl = get_config_value(config, "use_ssl", settings.OSS_USE_SSL)
 
         if not endpoint or not access_key_id or not access_key_secret or not bucket_name:
             raise RuntimeError(
-                "OSS settings are not set "
-                "(需要配置 OSS_ENDPOINT, OSS_BUCKET 和 ALIYUN_ACCESS_KEY_ID/SECRET)"
+                "OSS settings are not set (需要配置 OSS_ENDPOINT, OSS_BUCKET 和 ALIYUN_ACCESS_KEY_ID/SECRET)"
             )
 
         # 创建认证对象
@@ -107,9 +104,7 @@ class OSSStorageService(StorageService):
         RetryConfig(max_attempts=3, initial_delay=1.0, max_delay=10.0),
         exceptions=(OssError, ConnectionError, TimeoutError),
     )
-    def upload_file(
-        self, object_name: str, file_path: str, content_type: str | None = None
-    ) -> None:
+    def upload_file(self, object_name: str, file_path: str, content_type: str | None = None) -> None:
         """上传文件
 
         Args:
@@ -160,7 +155,7 @@ class OSSStorageService(StorageService):
                 return False
             raise
 
-    def get_file_info(self, object_name: str) -> Dict[str, Any]:
+    def get_file_info(self, object_name: str) -> dict[str, Any]:
         """获取文件元数据
 
         Args:
@@ -181,7 +176,7 @@ class OSSStorageService(StorageService):
             "metadata": result.headers,
         }
 
-    def list_files(self, prefix: str = "", limit: int = 1000) -> List[str]:
+    def list_files(self, prefix: str = "", limit: int = 1000) -> list[str]:
         """列出文件
 
         Args:

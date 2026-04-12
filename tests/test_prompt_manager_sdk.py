@@ -6,8 +6,8 @@ instead of making raw HTTP calls.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Dict
+from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
@@ -21,7 +21,7 @@ from prompthub.types import Prompt, RenderResult
 
 FAKE_UUID = UUID("11111111-1111-1111-1111-111111111111")
 FAKE_PROJECT_ID = UUID("22222222-2222-2222-2222-222222222222")
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 def _make_prompt(slug: str, content: str = "template content") -> Prompt:
@@ -170,7 +170,7 @@ class TestGetPrompt:
         image_req_obj = _make_prompt("shared-image-req-zh", "image req text")
 
         def get_by_slug_side_effect(slug: str, **kwargs: Any) -> Prompt:
-            mapping: Dict[str, Prompt] = {
+            mapping: dict[str, Prompt] = {
                 "summary-overview-meeting-zh": user_prompt_obj,
                 "shared-system-role-zh": system_prompt_obj,
                 "shared-format-rules-zh": format_rules_obj,
@@ -233,9 +233,7 @@ class TestGetPrompt:
 
     def test_raises_business_error_on_sdk_error(self) -> None:
         manager, mock_client = _create_manager_with_mock()
-        mock_client.prompts.get_by_slug.side_effect = PromptHubError(
-            code=50000, message="Internal error"
-        )
+        mock_client.prompts.get_by_slug.side_effect = PromptHubError(code=50000, message="Internal error")
 
         from app.core.exceptions import BusinessError
 
@@ -330,9 +328,7 @@ class TestGetSystemFromHub:
 
         assert result == "You are a meeting assistant"
         mock_client.prompts.get_by_slug.assert_called_once_with("shared-system-role-zh")
-        mock_client.prompts.render.assert_called_once_with(
-            system_prompt.id, variables={"content_style": "meeting"}
-        )
+        mock_client.prompts.render.assert_called_once_with(system_prompt.id, variables={"content_style": "meeting"})
 
     def test_returns_none_on_error(self) -> None:
         manager, mock_client = _create_manager_with_mock()

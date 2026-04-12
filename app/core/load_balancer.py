@@ -11,8 +11,8 @@ import threading
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from enum import Enum
-from typing import TYPE_CHECKING, Dict, List, Optional
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from app.core.health_checker import HealthChecker
 from app.core.registry import ServiceMetadata, ServiceRegistry
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class BalancingStrategy(str, Enum):
+class BalancingStrategy(StrEnum):
     """负载均衡策略枚举"""
 
     ROUND_ROBIN = "round_robin"
@@ -51,19 +51,19 @@ class LoadBalancer(ABC):
     def select_service(
         self,
         service_type: str,
-        available_services: List[str],
-    ) -> Optional[str]:
+        available_services: list[str],
+    ) -> str | None:
         """从可用服务中选择一个服务"""
 
-    def get_healthy_services(self, service_type: str) -> List[str]:
+    def get_healthy_services(self, service_type: str) -> list[str]:
         """获取健康的服务列表"""
         return HealthChecker.get_healthy_services(service_type)
 
-    def _get_all_registered_services(self, service_type: str) -> List[str]:
+    def _get_all_registered_services(self, service_type: str) -> list[str]:
         """获取所有已注册的服务列表"""
         return ServiceRegistry.list_services(service_type)
 
-    def select(self, service_type: str) -> Optional[str]:
+    def select(self, service_type: str) -> str | None:
         """公共入口：选择一个服务"""
         if self.config.enable_health_check:
             available = self.get_healthy_services(service_type)
@@ -85,14 +85,14 @@ class RoundRobinBalancer(LoadBalancer):
 
     def __init__(self, config: LoadBalancerConfig):
         super().__init__(config)
-        self._counters: Dict[str, int] = {}
+        self._counters: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def select_service(
         self,
         service_type: str,
-        available_services: List[str],
-    ) -> Optional[str]:
+        available_services: list[str],
+    ) -> str | None:
         if not available_services:
             return None
 
@@ -108,14 +108,14 @@ class WeightedRoundRobinBalancer(LoadBalancer):
 
     def __init__(self, config: LoadBalancerConfig):
         super().__init__(config)
-        self._current_weights: Dict[str, Dict[str, int]] = {}
+        self._current_weights: dict[str, dict[str, int]] = {}
         self._lock = threading.Lock()
 
     def select_service(
         self,
         service_type: str,
-        available_services: List[str],
-    ) -> Optional[str]:
+        available_services: list[str],
+    ) -> str | None:
         if not available_services:
             return None
 
@@ -163,8 +163,8 @@ class RandomBalancer(LoadBalancer):
     def select_service(
         self,
         service_type: str,
-        available_services: List[str],
-    ) -> Optional[str]:
+        available_services: list[str],
+    ) -> str | None:
         if not available_services:
             return None
         return random.choice(available_services)  # nosec B311
@@ -174,7 +174,7 @@ class ConnectionTracker:
     """连接数跟踪器"""
 
     def __init__(self) -> None:
-        self._connections: Dict[str, Dict[str, int]] = {}
+        self._connections: dict[str, dict[str, int]] = {}
         self._lock = threading.Lock()
 
     def increment(self, service_type: str, service_name: str) -> None:
@@ -195,7 +195,7 @@ class ConnectionTracker:
         with self._lock:
             return self._connections.get(service_type, {}).get(service_name, 0)
 
-    def get_all_counts(self, service_type: str) -> Dict[str, int]:
+    def get_all_counts(self, service_type: str) -> dict[str, int]:
         with self._lock:
             return dict(self._connections.get(service_type, {}))
 
@@ -210,8 +210,8 @@ class LeastConnectionsBalancer(LoadBalancer):
     def select_service(
         self,
         service_type: str,
-        available_services: List[str],
-    ) -> Optional[str]:
+        available_services: list[str],
+    ) -> str | None:
         if not available_services:
             return None
 
@@ -233,14 +233,14 @@ class LeastConnectionsBalancer(LoadBalancer):
 class LoadBalancerFactory:
     """负载均衡器工厂"""
 
-    _instances: Dict[BalancingStrategy, LoadBalancer] = {}
+    _instances: dict[BalancingStrategy, LoadBalancer] = {}
     _lock = threading.Lock()
 
     @classmethod
     def create(
         cls,
         strategy: BalancingStrategy,
-        config: Optional[LoadBalancerConfig] = None,
+        config: LoadBalancerConfig | None = None,
     ) -> LoadBalancer:
         if strategy not in cls._instances:
             with cls._lock:
@@ -270,22 +270,20 @@ class CostAwareBalancer(LoadBalancer):
     def __init__(
         self,
         config: LoadBalancerConfig,
-        cost_optimizer: Optional["CostOptimizer"] = None,
+        cost_optimizer: CostOptimizer | None = None,
     ) -> None:
         super().__init__(config)
         if cost_optimizer is None:
             from app.core.cost_optimizer import CostOptimizer, CostOptimizerConfig
 
-            cost_optimizer = CostOptimizer(
-                CostOptimizerConfig(enable_health_filter=config.enable_health_check)
-            )
+            cost_optimizer = CostOptimizer(CostOptimizerConfig(enable_health_filter=config.enable_health_check))
         self.cost_optimizer = cost_optimizer
 
     def select_service(
         self,
         service_type: str,
-        available_services: List[str],
-    ) -> Optional[str]:
+        available_services: list[str],
+    ) -> str | None:
         if not available_services:
             return None
         return random.choice(available_services)  # nosec B311
@@ -293,8 +291,8 @@ class CostAwareBalancer(LoadBalancer):
     def select_with_params(
         self,
         service_type: str,
-        request_params: Dict[str, object],
-    ) -> Optional[str]:
+        request_params: dict[str, object],
+    ) -> str | None:
         if self.config.enable_health_check:
             available = self.get_healthy_services(service_type)
         else:

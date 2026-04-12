@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -56,9 +56,7 @@ class TaskStage(BaseModel):
     """
 
     # 阶段状态
-    status: Mapped[str] = mapped_column(
-        String(20), server_default=text("'pending'"), nullable=False
-    )
+    status: Mapped[str] = mapped_column(String(20), server_default=text("'pending'"), nullable=False)
     """
     - 'pending': 等待执行
     - 'processing': 执行中
@@ -71,12 +69,12 @@ class TaskStage(BaseModel):
     is_active: Mapped[bool] = mapped_column(server_default=text("true"), nullable=False)
 
     # 执行时间
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # 错误信息
-    error_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # 重试次数（这个阶段重试了几次）
     attempt: Mapped[int] = mapped_column(Integer, server_default=text("1"), nullable=False)
@@ -94,4 +92,4 @@ class TaskStage(BaseModel):
     """
 
     # Relationship
-    task: Mapped["Task"] = relationship("Task", back_populates="stages")
+    task: Mapped[Task] = relationship("Task", back_populates="stages")

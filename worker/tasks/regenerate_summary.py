@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import time
-from typing import Optional
 
 from sqlalchemy import select
 
@@ -29,7 +28,7 @@ from worker.tasks.image_generator import (
 logger = logging.getLogger("worker.regenerate_summary")
 
 
-def _load_llm_model_id(provider: str, user_id: Optional[str]) -> Optional[str]:
+def _load_llm_model_id(provider: str, user_id: str | None) -> str | None:
     try:
         config = ConfigManager.get_config("llm", provider, user_id=user_id)
     except Exception:
@@ -48,9 +47,9 @@ def _select_default_llm_provider() -> str:
 
 
 def _resolve_llm_selection(
-    provider: Optional[str],
-    model_id: Optional[str],
-    user_id: Optional[str],
+    provider: str | None,
+    model_id: str | None,
+    user_id: str | None,
 ) -> tuple[str, str]:
     if provider:
         model_id = model_id or _load_llm_model_id(provider, user_id) or provider
@@ -65,10 +64,10 @@ def regenerate_summary(
     self,
     task_id: str,
     summary_type: str,
-    model: Optional[str] = None,
-    model_id: Optional[str] = None,
-    request_id: Optional[str] = None,
-    comparison_id: Optional[str] = None,
+    model: str | None = None,
+    model_id: str | None = None,
+    request_id: str | None = None,
+    comparison_id: str | None = None,
 ) -> None:
     """重新生成指定类型的摘要
 
@@ -81,8 +80,7 @@ def regenerate_summary(
         comparison_id: 对比 ID（用于多模型对比功能）
     """
     logger.info(
-        "[%s] Starting summary regeneration for task %s, type: %s, provider: %s, "
-        "model_id: %s, comparison_id: %s",
+        "[%s] Starting summary regeneration for task %s, type: %s, provider: %s, model_id: %s, comparison_id: %s",
         request_id,
         task_id,
         summary_type,
@@ -110,21 +108,19 @@ def regenerate_summary(
 def _regenerate_summary(
     task_id: str,
     summary_type: str,
-    model: Optional[str],
-    model_id: Optional[str],
-    request_id: Optional[str],
-    comparison_id: Optional[str],
+    model: str | None,
+    model_id: str | None,
+    request_id: str | None,
+    comparison_id: str | None,
 ) -> None:
 
     redis_client = get_sync_redis_client()
     stream_key = f"summary_stream:{task_id}:{summary_type}"
 
-    user_id: Optional[str] = None
+    user_id: str | None = None
     content_style: str = "meeting"  # 默认风格
     with get_sync_db_session() as session:
-        transcript_stmt = (
-            select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
-        )
+        transcript_stmt = select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
         transcript_result = session.execute(transcript_stmt)
         transcripts = transcript_result.scalars().all()
 
@@ -132,9 +128,7 @@ def _regenerate_summary(
             raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要")
 
         # 获取 user_id 和 content_style
-        task_result = session.execute(
-            select(Task.user_id, Task.options).where(Task.id == task_id)
-        ).first()
+        task_result = session.execute(select(Task.user_id, Task.options).where(Task.id == task_id)).first()
         if task_result:
             user_id = task_result[0]
             options = task_result[1] or {}
@@ -172,14 +166,10 @@ def _regenerate_summary(
     # 使用 SmartFactory 获取 LLM 服务
     provider, resolved_model_id = _resolve_llm_selection(model, model_id, user_id)
     llm_service = asyncio.run(
-        SmartFactory.get_service(
-            "llm", provider=provider, model_id=resolved_model_id, user_id=user_id
-        )
+        SmartFactory.get_service("llm", provider=provider, model_id=resolved_model_id, user_id=user_id)
     )
     used_provider = provider
-    used_model_id = resolved_model_id or (
-        llm_service.model_name if hasattr(llm_service, "model_name") else provider
-    )
+    used_model_id = resolved_model_id or (llm_service.model_name if hasattr(llm_service, "model_name") else provider)
     with get_sync_db_session() as session:
         task = session.query(Task).filter(Task.id == task_id).first()
         if task is not None and used_provider:
@@ -215,9 +205,7 @@ def _regenerate_summary(
         ),
     )
 
-    transcript_text = "\n".join(
-        [f"[{t.speaker_label or t.speaker_id or 'Unknown'}] {t.content}" for t in transcripts]
-    )
+    transcript_text = "\n".join([f"[{t.speaker_label or t.speaker_id or 'Unknown'}] {t.content}" for t in transcripts])
 
     full_content = ""
 
@@ -225,12 +213,8 @@ def _regenerate_summary(
 
         async def _generate():
             nonlocal full_content
-            logger.info(
-                f"[{request_id}] Starting stream generation for {stream_key} (style: {content_style})"
-            )
-            async for chunk in llm_service.summarize_stream(
-                transcript_text, summary_type, content_style
-            ):
+            logger.info(f"[{request_id}] Starting stream generation for {stream_key} (style: {content_style})")
+            async for chunk in llm_service.summarize_stream(transcript_text, summary_type, content_style):
                 full_content += chunk
                 redis_client.publish(
                     stream_key,
@@ -318,9 +302,7 @@ def _regenerate_summary(
 
         # 处理图片占位符（如果启用且有占位符）
         if has_images and is_auto_images_enabled(summary_type):
-            logger.info(
-                f"[{request_id}] Processing {len(placeholders)} image placeholders for task {task_id}"
-            )
+            logger.info(f"[{request_id}] Processing {len(placeholders)} image placeholders for task {task_id}")
 
             async def _process_images():
                 return await process_summary_images(
@@ -339,17 +321,11 @@ def _regenerate_summary(
                 # 更新摘要内容
                 if image_results:
                     image_model = next(
-                        (
-                            r["model_id"]
-                            for r in image_results
-                            if r.get("status") == "success" and r.get("model_id")
-                        ),
+                        (r["model_id"] for r in image_results if r.get("status") == "success" and r.get("model_id")),
                         None,
                     )
                     with get_sync_db_session() as session:
-                        summary_to_update = (
-                            session.query(Summary).filter(Summary.id == summary_id).first()
-                        )
+                        summary_to_update = session.query(Summary).filter(Summary.id == summary_id).first()
                         if summary_to_update:
                             summary_to_update.content = final_content
                             if image_model:
@@ -361,9 +337,7 @@ def _regenerate_summary(
                             )
             except Exception as img_err:
                 # 图片生成失败不影响摘要，只记录日志
-                logger.warning(
-                    f"[{request_id}] Image processing failed for task {task_id}: {img_err}"
-                )
+                logger.warning(f"[{request_id}] Image processing failed for task {task_id}: {img_err}")
 
     except Exception as e:
         error_code = getattr(e, "code", "UNKNOWN_ERROR")

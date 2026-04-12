@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -67,14 +67,12 @@ def _build_chunks(transcripts: Iterable[Transcript]) -> list[RagChunkPayload]:
 
 async def _embed_chunks_async(
     embedder: EmbeddingClient, chunks: list[RagChunkPayload]
-) -> tuple[list[list[float]] | None, Optional[str], Optional[int], str]:
+) -> tuple[list[list[float]] | None, str | None, int | None, str]:
     if not embedder.is_configured():
         logger.warning("Embedding is enabled but API key is missing, skipping vectors")
         return None, None, None, "failed"
     if embedder.provider not in {"openai", "openrouter"}:
-        logger.warning(
-            "Embedding provider %s not supported yet, skipping vectors", embedder.provider
-        )
+        logger.warning("Embedding provider %s not supported yet, skipping vectors", embedder.provider)
         return None, None, None, "failed"
 
     try:
@@ -89,14 +87,12 @@ async def _embed_chunks_async(
 
 def _embed_chunks_sync(
     embedder: EmbeddingClient, chunks: list[RagChunkPayload]
-) -> tuple[list[list[float]] | None, Optional[str], Optional[int], str]:
+) -> tuple[list[list[float]] | None, str | None, int | None, str]:
     if not embedder.is_configured():
         logger.warning("Embedding is enabled but API key is missing, skipping vectors")
         return None, None, None, "failed"
     if embedder.provider not in {"openai", "openrouter"}:
-        logger.warning(
-            "Embedding provider %s not supported yet, skipping vectors", embedder.provider
-        )
+        logger.warning("Embedding provider %s not supported yet, skipping vectors", embedder.provider)
         return None, None, None, "failed"
 
     try:
@@ -109,9 +105,7 @@ def _embed_chunks_sync(
     return embeddings, embedder.model, embedding_dim, "success"
 
 
-async def _embed_in_batches_async(
-    embedder: EmbeddingClient, chunks: list[RagChunkPayload]
-) -> list[list[float]]:
+async def _embed_in_batches_async(embedder: EmbeddingClient, chunks: list[RagChunkPayload]) -> list[list[float]]:
     batch_size = max(settings.RAG_EMBED_BATCH_SIZE, 1)
     embeddings: list[list[float]] = []
 
@@ -125,9 +119,7 @@ async def _embed_in_batches_async(
     return embeddings
 
 
-def _embed_in_batches_sync(
-    embedder: EmbeddingClient, chunks: list[RagChunkPayload]
-) -> list[list[float]]:
+def _embed_in_batches_sync(embedder: EmbeddingClient, chunks: list[RagChunkPayload]) -> list[list[float]]:
     batch_size = max(settings.RAG_EMBED_BATCH_SIZE, 1)
     embeddings: list[list[float]] = []
 
@@ -147,8 +139,8 @@ def _add_rag_chunks(
     user_id: str,
     chunks: list[RagChunkPayload],
     embeddings: list[list[float]] | None,
-    embedding_model: Optional[str],
-    embedding_dim: Optional[int],
+    embedding_model: str | None,
+    embedding_dim: int | None,
 ) -> None:
     records: list[RagChunk] = []
     for idx, chunk in enumerate(chunks, start=1):

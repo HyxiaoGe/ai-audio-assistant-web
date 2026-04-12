@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +17,7 @@ class NotificationListRequest(BaseModel):
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
     unread_only: bool = Field(default=False)
-    category: Optional[str] = Field(default=None)  # task, system
+    category: str | None = Field(default=None)  # task, system
 
 
 # ============================================================================
@@ -31,23 +30,23 @@ class NotificationResponse(BaseModel):
 
     id: str
     user_id: str
-    task_id: Optional[str] = None
+    task_id: str | None = None
 
     # Core fields
     category: str  # task, system
     action: str  # completed, failed, progress
     title: str
     message: str
-    action_url: Optional[str] = None
+    action_url: str | None = None
 
     # Status fields
-    read_at: Optional[datetime] = None
-    dismissed_at: Optional[datetime] = None
+    read_at: datetime | None = None
+    dismissed_at: datetime | None = None
 
     # Extension fields
     extra_data: dict = Field(default_factory=dict)
     priority: str = "normal"
-    expires_at: Optional[datetime] = None
+    expires_at: datetime | None = None
 
     # Timestamps
     created_at: datetime

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 
@@ -42,7 +42,7 @@ class _FakeResult:
     def scalar_one_or_none(self) -> Any:
         return self._data
 
-    def scalars(self) -> "_FakeScalars":
+    def scalars(self) -> _FakeScalars:
         return _FakeScalars(self._data if isinstance(self._data, list) else [])
 
 
@@ -55,7 +55,7 @@ class _FakeScalars:
 
 
 class _FakeSession:
-    def __init__(self, task: Optional[Task]) -> None:
+    def __init__(self, task: Task | None) -> None:
         self.task = task
         self.transcripts: list[Transcript] = []
         self.summaries: list[Summary] = []
@@ -99,9 +99,7 @@ class _FakeSessionContext:
 
 
 class _FakeASRService:
-    def __init__(
-        self, segments: list[TranscriptSegment] | None = None, error: Exception | None = None
-    ) -> None:
+    def __init__(self, segments: list[TranscriptSegment] | None = None, error: Exception | None = None) -> None:
         self._segments = segments or []
         self._error = error
 
@@ -139,7 +137,7 @@ async def _noop_publish_message(channel: str, message: str) -> None:
     return None
 
 
-def _build_task(source_type: str, source_url: Optional[str], source_key: Optional[str]) -> Task:
+def _build_task(source_type: str, source_url: str | None, source_key: str | None) -> Task:
     return Task(
         user_id="user-1",
         content_hash="hash-1",
@@ -209,9 +207,7 @@ async def test_process_audio_success_upload(monkeypatch: pytest.MonkeyPatch) -> 
     llm = _FakeLLMService()
     storage = _FakeStorageService()
 
-    monkeypatch.setattr(
-        process_audio, "async_session_factory", lambda: _FakeSessionContext(session)
-    )
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
     monkeypatch.setattr(process_audio, "get_asr_service", lambda: asr)
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
@@ -259,9 +255,7 @@ async def test_process_audio_success_youtube(monkeypatch: pytest.MonkeyPatch) ->
     llm = _FakeLLMService()
     storage = _FakeStorageService()
 
-    monkeypatch.setattr(
-        process_audio, "async_session_factory", lambda: _FakeSessionContext(session)
-    )
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
     monkeypatch.setattr(process_audio, "get_asr_service", lambda: asr)
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
@@ -298,9 +292,7 @@ async def test_process_audio_asr_failed(monkeypatch: pytest.MonkeyPatch) -> None
     storage = _FakeStorageService()
     settings.UPLOAD_PRESIGN_EXPIRES = 60
 
-    monkeypatch.setattr(
-        process_audio, "async_session_factory", lambda: _FakeSessionContext(session)
-    )
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
     monkeypatch.setattr(process_audio, "get_asr_service", lambda: asr)
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
@@ -336,9 +328,7 @@ async def test_process_audio_llm_failed(monkeypatch: pytest.MonkeyPatch) -> None
     storage = _FakeStorageService()
     settings.UPLOAD_PRESIGN_EXPIRES = 60
 
-    monkeypatch.setattr(
-        process_audio, "async_session_factory", lambda: _FakeSessionContext(session)
-    )
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
     monkeypatch.setattr(process_audio, "get_asr_service", lambda: asr)
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
@@ -371,9 +361,7 @@ async def test_process_audio_llm_failed(monkeypatch: pytest.MonkeyPatch) -> None
 async def test_process_audio_task_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession(None)
 
-    monkeypatch.setattr(
-        process_audio, "async_session_factory", lambda: _FakeSessionContext(session)
-    )
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
 
     await process_audio._process_task("missing-task", None)

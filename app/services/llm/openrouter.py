@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -44,11 +45,9 @@ class OpenRouterLLMService(LLMService):
         ),
     )
 
-    def __init__(self, model_id: Optional[str] = None, config: Optional[object] = None) -> None:
+    def __init__(self, model_id: str | None = None, config: object | None = None) -> None:
         api_key = get_config_value(config, "api_key", settings.OPENROUTER_API_KEY)
-        base_url = get_config_value(
-            config, "base_url", settings.OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1"
-        )
+        base_url = get_config_value(config, "base_url", settings.OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1")
         model = model_id or get_config_value(config, "model", settings.OPENROUTER_MODEL)
         max_tokens = get_config_value(config, "max_tokens", settings.OPENROUTER_MAX_TOKENS or 4096)
         http_referer = get_config_value(
@@ -203,37 +202,37 @@ class OpenRouterLLMService(LLMService):
         headers = self._build_headers()
 
         try:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client:
-                async with client.stream(
-                    "POST", "/chat/completions", json=payload, headers=headers
-                ) as response:
-                    response.raise_for_status()
+            async with (
+                httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client,
+                client.stream("POST", "/chat/completions", json=payload, headers=headers) as response,
+            ):
+                response.raise_for_status()
 
-                    async for line in response.aiter_lines():
-                        if not line or line.startswith(":"):
-                            continue
+                async for line in response.aiter_lines():
+                    if not line or line.startswith(":"):
+                        continue
 
-                        if line.startswith("data: "):
-                            line = line[6:]
+                    if line.startswith("data: "):
+                        line = line[6:]
 
-                        if line == "[DONE]":
-                            break
+                    if line == "[DONE]":
+                        break
 
-                        try:
-                            chunk_data = json.loads(line)
-                            if "error" in chunk_data:
-                                raise BusinessError(
-                                    ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                                    reason=str(chunk_data.get("error")),
-                                )
+                    try:
+                        chunk_data = json.loads(line)
+                        if "error" in chunk_data:
+                            raise BusinessError(
+                                ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                                reason=str(chunk_data.get("error")),
+                            )
 
-                            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                            content = delta.get("content", "")
+                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
 
-                            if content:
-                                yield content
-                        except json.JSONDecodeError:
-                            continue
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
 
         except httpx.TimeoutException as exc:
             raise BusinessError(
@@ -279,9 +278,7 @@ class OpenRouterLLMService(LLMService):
         return await self._call_llm_api(payload, self._build_headers())
 
     @monitor("llm", "openrouter")
-    async def chat_stream(
-        self, messages: list[dict[str, str]], **kwargs: Any
-    ) -> AsyncIterator[str]:
+    async def chat_stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
         """流式对话功能"""
         if not messages:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="messages")
@@ -297,37 +294,37 @@ class OpenRouterLLMService(LLMService):
         headers = self._build_headers()
 
         try:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client:
-                async with client.stream(
-                    "POST", "/chat/completions", json=payload, headers=headers
-                ) as response:
-                    response.raise_for_status()
+            async with (
+                httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client,
+                client.stream("POST", "/chat/completions", json=payload, headers=headers) as response,
+            ):
+                response.raise_for_status()
 
-                    async for line in response.aiter_lines():
-                        if not line or line.startswith(":"):
-                            continue
+                async for line in response.aiter_lines():
+                    if not line or line.startswith(":"):
+                        continue
 
-                        if line.startswith("data: "):
-                            line = line[6:]
+                    if line.startswith("data: "):
+                        line = line[6:]
 
-                        if line == "[DONE]":
-                            break
+                    if line == "[DONE]":
+                        break
 
-                        try:
-                            chunk_data = json.loads(line)
-                            if "error" in chunk_data:
-                                raise BusinessError(
-                                    ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                                    reason=str(chunk_data.get("error")),
-                                )
+                    try:
+                        chunk_data = json.loads(line)
+                        if "error" in chunk_data:
+                            raise BusinessError(
+                                ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                                reason=str(chunk_data.get("error")),
+                            )
 
-                            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                            content = delta.get("content", "")
+                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
 
-                            if content:
-                                yield content
-                        except json.JSONDecodeError:
-                            continue
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
 
         except httpx.HTTPError as exc:
             raise BusinessError(

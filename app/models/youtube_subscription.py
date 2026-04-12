@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import (
     Boolean,
@@ -37,19 +36,15 @@ class YouTubeSubscription(BaseRecord):
     )
     channel_id: Mapped[str] = mapped_column(String(100), nullable=False)
     channel_title: Mapped[str] = mapped_column(String(255), nullable=False)
-    channel_thumbnail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    channel_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    subscribed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    channel_thumbnail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    channel_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subscribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     # Cached uploads playlist ID (for fetching channel videos)
-    uploads_playlist_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    uploads_playlist_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Last time videos were synced for this channel
-    videos_synced_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    videos_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Channel visibility and sync control
     is_hidden: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
@@ -57,24 +52,22 @@ class YouTubeSubscription(BaseRecord):
     is_starred: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
 
     # Auto-transcription settings
-    auto_transcribe: Mapped[bool] = mapped_column(
-        Boolean, server_default=text("false"), nullable=False
-    )
-    auto_transcribe_max_duration: Mapped[Optional[int]] = mapped_column(
+    auto_transcribe: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
+    auto_transcribe_max_duration: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )  # Max video duration in seconds (default 7200 = 2 hours)
-    auto_transcribe_language: Mapped[Optional[str]] = mapped_column(
+    auto_transcribe_language: Mapped[str | None] = mapped_column(
         String(10), nullable=True
     )  # Preferred language for transcription
 
     # Intelligent sync frequency
-    avg_publish_interval_hours: Mapped[Optional[float]] = mapped_column(
+    avg_publish_interval_hours: Mapped[float | None] = mapped_column(
         Float, nullable=True
     )  # Calculated average publish interval
-    last_publish_at: Mapped[Optional[datetime]] = mapped_column(
+    last_publish_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )  # Most recent video publish time
-    next_sync_at: Mapped[Optional[datetime]] = mapped_column(
+    next_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )  # Calculated next optimal sync time
 

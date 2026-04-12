@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -118,7 +120,7 @@ async def mark_notification_read(
 ) -> JSONResponse:
     """Mark a notification as read."""
 
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     query = select(Notification).where(
         and_(
@@ -136,7 +138,7 @@ async def mark_notification_read(
         raise BusinessError(ErrorCode.NOTIFICATION_NOT_FOUND)
 
     # Set read_at to current time
-    notification.read_at = datetime.now(timezone.utc)
+    notification.read_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(notification)
 
@@ -152,7 +154,7 @@ async def mark_all_read(
 ) -> JSONResponse:
     """Mark all notifications as read."""
 
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from sqlalchemy import update
 
@@ -165,7 +167,7 @@ async def mark_all_read(
                 Notification.dismissed_at.is_(None),
             )
         )
-        .values(read_at=datetime.now(timezone.utc))
+        .values(read_at=datetime.now(UTC))
     )
 
     await db.execute(stmt)
@@ -183,7 +185,7 @@ async def delete_notification(
 ) -> JSONResponse:
     """Dismiss a notification (soft delete)."""
 
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     query = select(Notification).where(
         and_(
@@ -201,7 +203,7 @@ async def delete_notification(
         raise BusinessError(ErrorCode.NOTIFICATION_NOT_FOUND)
 
     # Soft delete: set dismissed_at
-    notification.dismissed_at = datetime.now(timezone.utc)
+    notification.dismissed_at = datetime.now(UTC)
     await db.commit()
 
     return success(data={"message": "Notification dismissed"})
@@ -215,7 +217,7 @@ async def clear_all_notifications(
 ) -> JSONResponse:
     """Dismiss all notifications for the current user (soft delete)."""
 
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from sqlalchemy import update
 
@@ -227,7 +229,7 @@ async def clear_all_notifications(
                 Notification.dismissed_at.is_(None),
             )
         )
-        .values(dismissed_at=datetime.now(timezone.utc))
+        .values(dismissed_at=datetime.now(UTC))
     )
 
     await db.execute(stmt)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from typing import AsyncGenerator, Optional
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Query
@@ -47,7 +47,7 @@ async def _resolve_user(db: AsyncSession, token: str) -> CurrentUser:
 
 async def get_current_user(
     db: AsyncSession = Depends(get_db),
-    authorization: Optional[str] = Header(default=None),
+    authorization: str | None = Header(default=None),
 ) -> CurrentUser:
     token = extract_bearer_token(authorization)
     return await _resolve_user(db, token)
@@ -66,8 +66,8 @@ async def get_admin_user(user: CurrentUser = Depends(get_current_user)) -> Curre
 
 async def get_current_user_optional(
     db: AsyncSession = Depends(get_db),
-    authorization: Optional[str] = Header(default=None),
-) -> Optional[CurrentUser]:
+    authorization: str | None = Header(default=None),
+) -> CurrentUser | None:
     if not authorization:
         return None
     return await get_current_user(db, authorization)
@@ -75,8 +75,8 @@ async def get_current_user_optional(
 
 async def get_current_user_from_query(
     db: AsyncSession = Depends(get_db),
-    token: Optional[str] = Query(default=None, description="JWT token"),
-    authorization: Optional[str] = Header(default=None),
+    token: str | None = Query(default=None, description="JWT token"),
+    authorization: str | None = Header(default=None),
 ) -> CurrentUser:
     """Support token from query or header (for SSE)."""
     if authorization:

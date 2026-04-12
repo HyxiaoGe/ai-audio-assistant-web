@@ -6,8 +6,8 @@ and calculating optimal sync intervals.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Optional
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,10 +24,10 @@ MAX_SYNC_HOURS = 48
 
 
 def calculate_next_sync_time(
-    avg_interval_hours: Optional[float],
-    last_publish_at: Optional[datetime],
-    last_sync_at: Optional[datetime],
-    now: Optional[datetime] = None,
+    avg_interval_hours: float | None,
+    last_publish_at: datetime | None,
+    last_sync_at: datetime | None,
+    now: datetime | None = None,
 ) -> datetime:
     """Calculate optimal next sync time based on channel publishing patterns.
 
@@ -48,7 +48,7 @@ def calculate_next_sync_time(
     Returns:
         Next optimal sync time
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     # No history, use default
     if not avg_interval_hours:
@@ -72,7 +72,7 @@ def calculate_next_sync_time(
     if last_publish_at:
         # Ensure timezone aware
         if last_publish_at.tzinfo is None:
-            last_publish_at = last_publish_at.replace(tzinfo=timezone.utc)
+            last_publish_at = last_publish_at.replace(tzinfo=UTC)
 
         hours_since_publish = (now - last_publish_at).total_seconds() / 3600
 
@@ -84,7 +84,7 @@ def calculate_next_sync_time(
 
 
 def update_publish_stats(
-    subscription: "YouTubeSubscription",
+    subscription: YouTubeSubscription,
     session: Session,
 ) -> None:
     """Update subscription's publishing statistics after syncing videos.
@@ -121,9 +121,9 @@ def update_publish_stats(
 
         # Ensure timezone aware
         if time1.tzinfo is None:
-            time1 = time1.replace(tzinfo=timezone.utc)
+            time1 = time1.replace(tzinfo=UTC)
         if time2.tzinfo is None:
-            time2 = time2.replace(tzinfo=timezone.utc)
+            time2 = time2.replace(tzinfo=UTC)
 
         interval_hours = (time1 - time2).total_seconds() / 3600
         if interval_hours > 0:
@@ -133,7 +133,7 @@ def update_publish_stats(
         return
 
     # Update subscription stats
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     subscription.avg_publish_interval_hours = sum(intervals) / len(intervals)
     subscription.last_publish_at = publish_times[0]
     subscription.next_sync_at = calculate_next_sync_time(

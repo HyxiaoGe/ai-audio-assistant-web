@@ -5,9 +5,10 @@ Syncs user's YouTube subscriptions from YouTube Data API to local database.
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from celery import shared_task
 from google.oauth2.credentials import Credentials
@@ -43,8 +44,8 @@ SYNC_LOCK_DURATION = 30
 def sync_youtube_subscriptions(
     self,
     user_id: str,
-    request_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    request_id: str | None = None,
+) -> dict[str, Any]:
     """Sync YouTube subscriptions for a user.
 
     This task:
@@ -108,7 +109,7 @@ def sync_youtube_subscriptions(
                     if credentials.expiry:
                         expires_at = credentials.expiry
                         if expires_at.tzinfo is None:
-                            expires_at = expires_at.replace(tzinfo=timezone.utc)
+                            expires_at = expires_at.replace(tzinfo=UTC)
                         account.token_expires_at = expires_at
 
                     session.commit()
@@ -142,7 +143,7 @@ def sync_youtube_subscriptions(
                 }
 
             # Sync to database
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             synced_count = _sync_subscriptions_to_db(session, user_id, subscriptions, now)
 
             logger.info(f"Synced {synced_count} subscriptions for user {user_id}")
@@ -199,7 +200,7 @@ def _build_credentials(account: Account) -> Credentials:
     # Google auth library expects naive datetime (no timezone)
     expiry = account.token_expires_at
     if expiry and expiry.tzinfo is not None:
-        expiry = expiry.astimezone(timezone.utc).replace(tzinfo=None)
+        expiry = expiry.astimezone(UTC).replace(tzinfo=None)
 
     return Credentials(  # nosec B106 - not a password
         token=account.access_token,
@@ -211,22 +212,22 @@ def _build_credentials(account: Account) -> Credentials:
     )
 
 
-def _is_token_expired(expires_at: Optional[datetime], buffer_minutes: int = 5) -> bool:
+def _is_token_expired(expires_at: datetime | None, buffer_minutes: int = 5) -> bool:
     """Check if token is expired or will expire soon."""
     if not expires_at:
         return True
 
     # Ensure timezone aware
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = expires_at.replace(tzinfo=UTC)
 
     from datetime import timedelta
 
     buffer = timedelta(minutes=buffer_minutes)
-    return datetime.now(timezone.utc) >= (expires_at - buffer)
+    return datetime.now(UTC) >= (expires_at - buffer)
 
 
-def _fetch_all_subscriptions(credentials: Credentials) -> List[Dict[str, Any]]:
+def _fetch_all_subscriptions(credentials: Credentials) -> list[dict[str, Any]]:
     """Fetch all subscriptions from YouTube API."""
     youtube = build("youtube", "v3", credentials=credentials)
 
@@ -250,19 +251,15 @@ def _fetch_all_subscriptions(credentials: Credentials) -> List[Dict[str, Any]]:
             subscribed_at = None
             published_at = snippet.get("publishedAt")
             if published_at:
-                try:
+                with contextlib.suppress(ValueError, AttributeError):
                     subscribed_at = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-                except (ValueError, AttributeError):
-                    pass
 
             all_subscriptions.append(
                 {
                     "channel_id": resource_id.get("channelId"),
                     "channel_title": snippet.get("title"),
                     "channel_description": snippet.get("description"),
-                    "channel_thumbnail": snippet.get("thumbnails", {})
-                    .get("default", {})
-                    .get("url"),
+                    "channel_thumbnail": snippet.get("thumbnails", {}).get("default", {}).get("url"),
                     "subscribed_at": subscribed_at,
                 }
             )
@@ -277,7 +274,7 @@ def _fetch_all_subscriptions(credentials: Credentials) -> List[Dict[str, Any]]:
 def _sync_subscriptions_to_db(
     session,
     user_id: str,
-    subscriptions: List[Dict[str, Any]],
+    subscriptions: list[dict[str, Any]],
     sync_time: datetime,
 ) -> int:
     """Sync subscriptions to database using upsert."""

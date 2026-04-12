@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -12,14 +12,14 @@ class SummaryItem(BaseModel):
     version: int
     is_active: bool
     content: str
-    model_used: Optional[str] = None
-    prompt_version: Optional[str] = None
-    token_count: Optional[int] = None
+    model_used: str | None = None
+    prompt_version: str | None = None
+    token_count: int | None = None
     created_at: datetime
     # Visual summary fields
-    visual_format: Optional[str] = None
-    image_url: Optional[str] = None
-    image_model_used: Optional[str] = None
+    visual_format: str | None = None
+    image_url: str | None = None
+    image_model_used: str | None = None
 
 
 class SummaryListResponse(BaseModel):
@@ -31,33 +31,25 @@ class SummaryListResponse(BaseModel):
 class SummaryRegenerateRequest(BaseModel):
     """重新生成摘要请求"""
 
-    summary_type: Literal["overview", "key_points", "action_items"] = Field(
-        description="要重新生成的摘要类型"
-    )
-    provider: Optional[str] = Field(
+    summary_type: Literal["overview", "key_points", "action_items"] = Field(description="要重新生成的摘要类型")
+    provider: str | None = Field(
         default=None,
         description="服务提供商（如 doubao, deepseek, openrouter），为 None 则自动选择",
     )
-    model_id: Optional[str] = Field(
-        default=None, description="模型ID（如 deepseek-chat, openai/gpt-4o）"
-    )
+    model_id: str | None = Field(default=None, description="模型ID（如 deepseek-chat, openai/gpt-4o）")
 
 
 class ModelSelection(BaseModel):
     """模型选择（provider + model_id）"""
 
     provider: str = Field(description="服务提供商（如 doubao, deepseek, openrouter）")
-    model_id: Optional[str] = Field(
-        default=None, description="模型ID（如 openai/gpt-4o），用于支持多模型的服务"
-    )
+    model_id: str | None = Field(default=None, description="模型ID（如 openai/gpt-4o），用于支持多模型的服务")
 
 
 class SummaryCompareRequest(BaseModel):
     """多模型对比请求"""
 
-    summary_type: Literal["overview", "key_points", "action_items"] = Field(
-        description="要对比的摘要类型"
-    )
+    summary_type: Literal["overview", "key_points", "action_items"] = Field(description="要对比的摘要类型")
     models: list[ModelSelection] = Field(
         min_length=2,
         max_length=5,
@@ -70,7 +62,7 @@ class SummaryComparisonItem(BaseModel):
 
     model: str
     content: str
-    token_count: Optional[int] = None
+    token_count: int | None = None
     created_at: datetime
     status: str = "completed"  # completed, generating, failed
 
@@ -94,22 +86,20 @@ class VisualSummaryRequest(BaseModel):
     visual_type: Literal["mindmap", "timeline", "flowchart", "outline"] = Field(
         description="可视化类型：mindmap(思维导图), timeline(时间轴), flowchart(流程图), outline(大纲图)"
     )
-    content_style: Optional[str] = Field(
+    content_style: str | None = Field(
         default=None,
         description="内容风格 (meeting/lecture/podcast/video/general)，为 None 时自动检测",
     )
-    provider: Optional[str] = Field(
+    provider: str | None = Field(
         default=None,
         description="LLM 服务提供商。outline 类型默认使用 openrouter，其他类型为 None 则自动选择",
     )
-    model_id: Optional[str] = Field(
+    model_id: str | None = Field(
         default=None,
         description="模型 ID。outline 类型默认使用 google/gemini-3-pro-image-preview",
     )
     generate_image: bool = Field(default=True, description="是否生成 PNG/SVG 图片（后端渲染）")
-    image_format: Literal["png", "svg"] = Field(
-        default="png", description="图片格式（当 generate_image=True 时）"
-    )
+    image_format: Literal["png", "svg"] = Field(default="png", description="图片格式（当 generate_image=True 时）")
     regenerate: bool = Field(default=False, description="是否强制重新生成（即使已存在）")
 
 
@@ -120,8 +110,8 @@ class VisualSummaryResponse(BaseModel):
     task_id: str
     visual_type: str
     format: str  # "mermaid" 或 "image"（outline 类型）
-    content: Optional[str] = None  # Mermaid 语法代码（outline 类型为 None）
-    image_url: Optional[str] = None  # 生成的图片 URL
-    model_used: Optional[str] = None
-    token_count: Optional[int] = None
+    content: str | None = None  # Mermaid 语法代码（outline 类型为 None）
+    image_url: str | None = None  # 生成的图片 URL
+    model_used: str | None = None
+    token_count: int | None = None
     created_at: datetime

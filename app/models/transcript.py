@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -26,16 +24,16 @@ class Transcript(BaseRecord):
         UUID(as_uuid=False), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
     )
 
-    speaker_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    speaker_label: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    speaker_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    speaker_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     content: Mapped[str] = mapped_column(Text, nullable=False)
     start_time: Mapped[float] = mapped_column(Numeric(10, 3), nullable=False)
     end_time: Mapped[float] = mapped_column(Numeric(10, 3), nullable=False)
-    confidence: Mapped[Optional[float]] = mapped_column(Numeric(4, 3), nullable=True)
-    words: Mapped[Optional[list[dict[str, object]]]] = mapped_column(JSONB, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Numeric(4, 3), nullable=True)
+    words: Mapped[list[dict[str, object]] | None] = mapped_column(JSONB, nullable=True)
 
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
 
     is_edited: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
-    original_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    original_content: Mapped[str | None] = mapped_column(Text, nullable=True)

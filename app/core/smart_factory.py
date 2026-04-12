@@ -8,8 +8,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from enum import Enum
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -29,7 +30,7 @@ from app.core.user_context import get_current_user_id
 logger = logging.getLogger(__name__)
 
 
-class SelectionStrategy(str, Enum):
+class SelectionStrategy(StrEnum):
     """Service selection strategy."""
 
     HEALTH_FIRST = "health_first"
@@ -47,7 +48,7 @@ class SmartFactoryConfig(BaseModel):
     cost_strategy: CostStrategy = CostStrategy.LOWEST_COST
     enable_monitoring: bool = True
     enable_fault_tolerance: bool = True
-    balanced_weights: Dict[str, float] = Field(
+    balanced_weights: dict[str, float] = Field(
         default_factory=lambda: {
             "health": 0.4,
             "cost": 0.3,
@@ -61,17 +62,17 @@ class SmartFactoryConfig(BaseModel):
 class SmartFactory:
     """Smart service factory."""
 
-    _instance: Optional["SmartFactory"] = None
+    _instance: SmartFactory | None = None
     _lock = threading.Lock()
 
-    def __init__(self, config: Optional[SmartFactoryConfig] = None):
+    def __init__(self, config: SmartFactoryConfig | None = None):
         self._config = config or SmartFactoryConfig()
-        self._load_balancer: Optional[LoadBalancer] = None
-        self._cost_optimizer: Optional[CostOptimizer] = None
-        self._service_cache: Dict[str, Dict[str, tuple[Any, float]]] = {}
+        self._load_balancer: LoadBalancer | None = None
+        self._cost_optimizer: CostOptimizer | None = None
+        self._service_cache: dict[str, dict[str, tuple[Any, float]]] = {}
 
     @classmethod
-    def get_instance(cls, config: Optional[SmartFactoryConfig] = None) -> "SmartFactory":
+    def get_instance(cls, config: SmartFactoryConfig | None = None) -> SmartFactory:
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -82,13 +83,13 @@ class SmartFactory:
     async def get_service(
         cls,
         service_type: str,
-        strategy: Optional[SelectionStrategy] = None,
-        provider: Optional[str] = None,
+        strategy: SelectionStrategy | None = None,
+        provider: str | None = None,
         *,
-        model_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        request_params: Optional[Dict[str, Any]] = None,
-        custom_scorer: Optional[Callable[[Any, ServiceMetadata], float]] = None,
+        model_id: str | None = None,
+        user_id: str | None = None,
+        request_params: dict[str, Any] | None = None,
+        custom_scorer: Callable[[Any, ServiceMetadata], float] | None = None,
     ) -> Any:
         instance = cls.get_instance()
 
@@ -111,17 +112,15 @@ class SmartFactory:
         if not selected_provider:
             raise ValueError(f"No available {service_type} service found")
 
-        return await instance._get_specific_service(
-            service_type, selected_provider, model_id, user_id
-        )
+        return await instance._get_specific_service(service_type, selected_provider, model_id, user_id)
 
     async def _select_service(
         self,
         service_type: str,
         strategy: SelectionStrategy,
-        request_params: Optional[Dict[str, Any]],
-        custom_scorer: Optional[Callable[[Any, ServiceMetadata], float]],
-    ) -> Optional[str]:
+        request_params: dict[str, Any] | None,
+        custom_scorer: Callable[[Any, ServiceMetadata], float] | None,
+    ) -> str | None:
         all_services = ServiceRegistry.list_services(service_type)
         if not all_services:
             return None
@@ -138,8 +137,7 @@ class SmartFactory:
             healthy_services = HealthChecker.get_healthy_services(service_type)
             if not healthy_services:
                 logger.warning(
-                    "No healthy %s services available after health check; "
-                    "falling back to all services",
+                    "No healthy %s services available after health check; falling back to all services",
                     service_type,
                 )
                 healthy_services = all_services
@@ -159,7 +157,7 @@ class SmartFactory:
 
         return healthy_services[0] if healthy_services else None
 
-    def _select_by_health(self, service_type: str, healthy_services: list[str]) -> Optional[str]:
+    def _select_by_health(self, service_type: str, healthy_services: list[str]) -> str | None:
         if not self._load_balancer:
             self._load_balancer = LoadBalancerFactory.create(
                 self._config.load_balancing_strategy,
@@ -171,8 +169,8 @@ class SmartFactory:
         self,
         service_type: str,
         healthy_services: list[str],
-        request_params: Optional[Dict[str, Any]],
-    ) -> Optional[str]:
+        request_params: dict[str, Any] | None,
+    ) -> str | None:
         if not self._cost_optimizer:
             self._cost_optimizer = CostOptimizer(
                 CostOptimizerConfig(
@@ -192,7 +190,7 @@ class SmartFactory:
         self,
         service_type: str,
         healthy_services: list[str],
-    ) -> Optional[str]:
+    ) -> str | None:
         services_with_priority = []
         for name in healthy_services:
             metadata = ServiceRegistry.get_metadata(service_type, name)
@@ -205,11 +203,11 @@ class SmartFactory:
         self,
         service_type: str,
         healthy_services: list[str],
-        request_params: Optional[Dict[str, Any]],
-    ) -> Optional[str]:
+        request_params: dict[str, Any] | None,
+    ) -> str | None:
         weights = self._config.balanced_weights
         cost_scores = self._calculate_cost_scores(service_type, healthy_services, request_params)
-        scores: Dict[str, float] = {}
+        scores: dict[str, float] = {}
 
         for name in healthy_services:
             health_score = 1.0
@@ -230,8 +228,8 @@ class SmartFactory:
         self,
         service_type: str,
         healthy_services: list[str],
-        request_params: Optional[Dict[str, Any]],
-    ) -> Dict[str, float]:
+        request_params: dict[str, Any] | None,
+    ) -> dict[str, float]:
         if not request_params:
             return {name: 0.5 for name in healthy_services}
 
@@ -254,7 +252,7 @@ class SmartFactory:
         max_cost = max(costs.values()) if costs else 0.0
         min_cost = min(costs.values()) if costs else 0.0
 
-        scores: Dict[str, float] = {}
+        scores: dict[str, float] = {}
         for name, cost in costs.items():
             if max_cost == min_cost:
                 scores[name] = 1.0
@@ -268,8 +266,8 @@ class SmartFactory:
         service_type: str,
         healthy_services: list[str],
         custom_scorer: Callable[[Any, ServiceMetadata], float],
-    ) -> Optional[str]:
-        scores: Dict[str, float] = {}
+    ) -> str | None:
+        scores: dict[str, float] = {}
         for name in healthy_services:
             try:
                 service = ServiceRegistry.get(service_type, name)
@@ -283,8 +281,8 @@ class SmartFactory:
         self,
         service_type: str,
         provider: str,
-        model_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        model_id: str | None = None,
+        user_id: str | None = None,
     ) -> Any:
         # LLM/ASR 使用包含 model_id 的缓存键；用户配置需要区分 user_id
         cache_parts = [provider]
@@ -374,7 +372,7 @@ class SmartFactory:
     def _register_monitoring(self) -> None:
         MonitoringSystem.get_instance().start()
 
-    def _get_cached_service(self, service_type: str, provider: str) -> Optional[Any]:
+    def _get_cached_service(self, service_type: str, provider: str) -> Any | None:
         if not self._config.cache_instances:
             return None
 
@@ -383,10 +381,9 @@ class SmartFactory:
             return None
 
         instance, cached_at = cached
-        if self._config.cache_ttl > 0:
-            if (time.time() - cached_at) > self._config.cache_ttl:
-                self._service_cache[service_type].pop(provider, None)
-                return None
+        if self._config.cache_ttl > 0 and (time.time() - cached_at) > self._config.cache_ttl:
+            self._service_cache[service_type].pop(provider, None)
+            return None
         return instance
 
     def _cache_service(self, service_type: str, provider: str, service: Any) -> None:

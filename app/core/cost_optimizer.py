@@ -11,8 +11,8 @@ import threading
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
-from enum import Enum
-from typing import Any, Dict, List, Optional
+from enum import StrEnum
+from typing import Any
 
 from app.core.health_checker import HealthChecker
 from app.core.registry import ServiceMetadata, ServiceRegistry
@@ -20,7 +20,7 @@ from app.core.registry import ServiceMetadata, ServiceRegistry
 logger = logging.getLogger(__name__)
 
 
-class CostStrategy(str, Enum):
+class CostStrategy(StrEnum):
     """成本优化策略"""
 
     LOWEST_COST = "lowest_cost"
@@ -52,7 +52,7 @@ class ServiceCostInfo:
     estimated_cost: float
     performance_score: float
     combined_score: float
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
 
 class CostOptimizer:
@@ -70,21 +70,18 @@ class CostOptimizer:
     def select_service(
         self,
         service_type: str,
-        request_params: Dict[str, Any],
-        candidate_services: Optional[List[str]] = None,
-    ) -> Optional[str]:
+        request_params: dict[str, Any],
+        candidate_services: list[str] | None = None,
+    ) -> str | None:
         """选择成本最优的服务"""
         available_services = (
-            candidate_services
-            if candidate_services is not None
-            else self._get_available_services(service_type)
+            candidate_services if candidate_services is not None else self._get_available_services(service_type)
         )
         if not available_services:
             return None
 
         cost_infos = [
-            self._calculate_cost_info(service_type, service_name, request_params)
-            for service_name in available_services
+            self._calculate_cost_info(service_type, service_name, request_params) for service_name in available_services
         ]
 
         selected = self._apply_strategy(cost_infos)
@@ -101,7 +98,7 @@ class CostOptimizer:
 
         return selected.service_name
 
-    def _get_available_services(self, service_type: str) -> List[str]:
+    def _get_available_services(self, service_type: str) -> list[str]:
         if self.config.enable_health_filter:
             return HealthChecker.get_healthy_services(service_type)
         return ServiceRegistry.list_services(service_type)
@@ -110,7 +107,7 @@ class CostOptimizer:
         self,
         service_type: str,
         service_name: str,
-        request_params: Dict[str, Any],
+        request_params: dict[str, Any],
     ) -> ServiceCostInfo:
         service = ServiceRegistry.get(service_type, service_name)
         metadata = ServiceRegistry.get_metadata(service_type, service_name)
@@ -126,7 +123,7 @@ class CostOptimizer:
             metadata=dict(metadata.__dict__),
         )
 
-    def _estimate_cost(self, service: Any, request_params: Dict[str, Any]) -> float:
+    def _estimate_cost(self, service: Any, request_params: dict[str, Any]) -> float:
         if not hasattr(service, "estimate_cost"):
             return 0.0
 
@@ -155,7 +152,7 @@ class CostOptimizer:
         self,
         service_type: str,
         service_name: str,
-        request_params: Dict[str, Any],
+        request_params: dict[str, Any],
     ) -> float:
         service = ServiceRegistry.get(service_type, service_name)
         return self._estimate_cost(service, request_params)
@@ -173,13 +170,11 @@ class CostOptimizer:
 
         if self.config.strategy == CostStrategy.COST_PERFORMANCE_BALANCE:
             performance_term = 1 / max(performance, 0.1)
-            return (
-                cost * self.config.cost_weight + performance_term * self.config.performance_weight
-            )
+            return cost * self.config.cost_weight + performance_term * self.config.performance_weight
 
         return cost
 
-    def _apply_strategy(self, cost_infos: List[ServiceCostInfo]) -> Optional[ServiceCostInfo]:
+    def _apply_strategy(self, cost_infos: list[ServiceCostInfo]) -> ServiceCostInfo | None:
         if not cost_infos:
             return None
 
@@ -215,18 +210,13 @@ class CostOptimizer:
     def get_cost_ranking(
         self,
         service_type: str,
-        request_params: Dict[str, Any],
-        candidate_services: Optional[List[str]] = None,
-    ) -> List[ServiceCostInfo]:
+        request_params: dict[str, Any],
+        candidate_services: list[str] | None = None,
+    ) -> list[ServiceCostInfo]:
         available_services = (
-            candidate_services
-            if candidate_services is not None
-            else self._get_available_services(service_type)
+            candidate_services if candidate_services is not None else self._get_available_services(service_type)
         )
-        cost_infos = [
-            self._calculate_cost_info(service_type, name, request_params)
-            for name in available_services
-        ]
+        cost_infos = [self._calculate_cost_info(service_type, name, request_params) for name in available_services]
         return sorted(cost_infos, key=lambda info: info.estimated_cost)
 
 
@@ -237,9 +227,9 @@ class UsageRecord:
     timestamp: datetime
     service_type: str
     service_name: str
-    request_params: Dict[str, Any]
+    request_params: dict[str, Any]
     estimated_cost: float
-    actual_cost: Optional[float] = None
+    actual_cost: float | None = None
 
 
 class CostTracker:
@@ -256,8 +246,8 @@ class CostTracker:
     def __init__(self, use_redis: bool = True) -> None:
         self._use_redis = use_redis
         self._lock = threading.Lock()
-        self._records: List[UsageRecord] = []
-        self._daily_cache: Dict[date, float] = {}
+        self._records: list[UsageRecord] = []
+        self._daily_cache: dict[date, float] = {}
 
         # 内存模式（回退方案）
         if not use_redis:
@@ -272,9 +262,7 @@ class CostTracker:
             self._redis_client = get_sync_redis_client()
             logger.info("CostTracker initialized with Redis persistence")
         except Exception as exc:
-            logger.warning(
-                f"Failed to initialize Redis for CostTracker, falling back to memory mode: {exc}"
-            )
+            logger.warning(f"Failed to initialize Redis for CostTracker, falling back to memory mode: {exc}")
             self._use_redis = False
             self._records = []
             self._daily_cache = {}
@@ -284,7 +272,7 @@ class CostTracker:
         self,
         service_type: str,
         service_name: str,
-        request_params: Dict[str, Any],
+        request_params: dict[str, Any],
         estimated_cost: float,
     ) -> None:
         """记录使用情况
@@ -349,9 +337,9 @@ class CostTracker:
         self,
         start: datetime,
         end: datetime,
-        service_type: Optional[str] = None,
-        service_name: Optional[str] = None,
-    ) -> List[UsageRecord]:
+        service_type: str | None = None,
+        service_name: str | None = None,
+    ) -> list[UsageRecord]:
         """获取指定时间范围内的使用记录。"""
         with self._lock:
             if self._use_redis and self._redis_client:
@@ -369,9 +357,9 @@ class CostTracker:
         self,
         start: datetime,
         end: datetime,
-        service_type: Optional[str],
-        service_name: Optional[str],
-    ) -> List[UsageRecord]:
+        service_type: str | None,
+        service_name: str | None,
+    ) -> list[UsageRecord]:
         try:
             start_ts = start.timestamp()
             end_ts = end.timestamp()
@@ -383,7 +371,7 @@ class CostTracker:
             else:
                 pattern = "cost:records:*"
 
-            records: List[UsageRecord] = []
+            records: list[UsageRecord] = []
             for key in self._redis_client.scan_iter(match=pattern, count=100):
                 raw_records = self._redis_client.zrangebyscore(key, start_ts, end_ts)
                 for raw in raw_records:
@@ -401,30 +389,28 @@ class CostTracker:
         self,
         start_date: date,
         end_date: date,
-    ) -> Dict[date, Dict[str, float]]:
+    ) -> dict[date, dict[str, float]]:
         """获取每日成本汇总（按 service_type:service_name 聚合）。"""
         with self._lock:
             if self._use_redis and self._redis_client:
                 return self._get_daily_summary_from_redis(start_date, end_date)
 
-            summary: Dict[date, Dict[str, float]] = {}
+            summary: dict[date, dict[str, float]] = {}
             for record in self._records:
                 record_date = record.timestamp.date()
                 if record_date < start_date or record_date > end_date:
                     continue
                 summary.setdefault(record_date, {})
                 key = f"{record.service_type}:{record.service_name}"
-                summary[record_date][key] = (
-                    summary[record_date].get(key, 0.0) + record.estimated_cost
-                )
+                summary[record_date][key] = summary[record_date].get(key, 0.0) + record.estimated_cost
             return summary
 
     def _get_daily_summary_from_redis(
         self,
         start_date: date,
         end_date: date,
-    ) -> Dict[date, Dict[str, float]]:
-        result: Dict[date, Dict[str, float]] = {}
+    ) -> dict[date, dict[str, float]]:
+        result: dict[date, dict[str, float]] = {}
         current = start_date
 
         while current <= end_date:
@@ -437,9 +423,7 @@ class CostTracker:
                 break
 
             if daily_data:
-                result[current] = {
-                    key.decode(): float(value.decode()) for key, value in daily_data.items()
-                }
+                result[current] = {key.decode(): float(value.decode()) for key, value in daily_data.items()}
 
             current += timedelta(days=1)
 
@@ -459,11 +443,7 @@ class CostTracker:
             if target_date in self._daily_cache:
                 return self._daily_cache[target_date]
 
-            total = sum(
-                record.estimated_cost
-                for record in self._records
-                if record.timestamp.date() == target_date
-            )
+            total = sum(record.estimated_cost for record in self._records if record.timestamp.date() == target_date)
             self._daily_cache[target_date] = total
             return total
 
@@ -515,9 +495,9 @@ class CostTracker:
 
     def get_service_breakdown(
         self,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> Dict[str, Dict[str, float]]:
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> dict[str, dict[str, float]]:
         """获取服务成本明细
 
         Redis 模式：遍历日期范围内的每日汇总
@@ -528,7 +508,7 @@ class CostTracker:
                 return self._get_service_breakdown_from_redis(start_date, end_date)
 
             # 内存模式
-            breakdown: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+            breakdown: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
 
             for record in self._records:
                 record_date = record.timestamp.date()
@@ -542,12 +522,12 @@ class CostTracker:
 
     def _get_service_breakdown_from_redis(
         self,
-        start_date: Optional[date],
-        end_date: Optional[date],
-    ) -> Dict[str, Dict[str, float]]:
+        start_date: date | None,
+        end_date: date | None,
+    ) -> dict[str, dict[str, float]]:
         """从 Redis 获取服务成本明细（内部方法）"""
         try:
-            breakdown: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+            breakdown: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
 
             # 确定日期范围
             if not start_date:
@@ -575,14 +555,14 @@ class CostTracker:
             logger.error(f"Failed to get service breakdown from Redis: {exc}", exc_info=True)
             return {}
 
-    def generate_report(self, start_date: date, end_date: date) -> "CostReport":
+    def generate_report(self, start_date: date, end_date: date) -> CostReport:
         """生成成本报告
 
         Redis/内存模式：使用已实现的 get_daily_cost 和 get_service_breakdown
         """
         # 计算总成本
         total_cost = 0.0
-        daily_costs: Dict[date, float] = {}
+        daily_costs: dict[date, float] = {}
         current = start_date
 
         while current <= end_date:
@@ -613,10 +593,10 @@ class CostReport:
     start_date: date
     end_date: date
     total_cost: float
-    service_breakdown: Dict[str, Dict[str, float]]
-    daily_costs: Dict[date, float]
+    service_breakdown: dict[str, dict[str, float]]
+    daily_costs: dict[date, float]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "start_date": self.start_date.isoformat(),
             "end_date": self.end_date.isoformat(),

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -18,10 +17,10 @@ class YouTubeConnectionStatus(BaseModel):
     """Response for GET /youtube/status."""
 
     connected: bool
-    channel_id: Optional[str] = None
+    channel_id: str | None = None
     subscription_count: int = 0
-    last_synced_at: Optional[datetime] = None
-    token_expires_at: Optional[datetime] = None
+    last_synced_at: datetime | None = None
+    token_expires_at: datetime | None = None
     needs_reauth: bool = False  # True if refresh token expired and user needs to reconnect
 
 
@@ -36,9 +35,9 @@ class YouTubeSubscriptionItem(BaseModel):
 
     channel_id: str
     channel_title: str
-    channel_thumbnail: Optional[str] = None
-    channel_description: Optional[str] = None
-    subscribed_at: Optional[datetime] = None
+    channel_thumbnail: str | None = None
+    channel_description: str | None = None
+    subscribed_at: datetime | None = None
     # Customization fields
     is_hidden: bool = False
     sync_enabled: bool = True
@@ -62,16 +61,14 @@ class YouTubeSubscriptionListResponse(BaseModel):
 class SubscriptionSettingsUpdate(BaseModel):
     """Request for PATCH /youtube/subscriptions/{channel_id}/settings."""
 
-    is_hidden: Optional[bool] = None
-    sync_enabled: Optional[bool] = None
-    is_starred: Optional[bool] = None
-    auto_transcribe: Optional[bool] = None
-    auto_transcribe_max_duration: Optional[int] = Field(
+    is_hidden: bool | None = None
+    sync_enabled: bool | None = None
+    is_starred: bool | None = None
+    auto_transcribe: bool | None = None
+    auto_transcribe_max_duration: int | None = Field(
         None, ge=60, le=43200, description="Max duration in seconds (1min - 12hours)"
     )
-    auto_transcribe_language: Optional[str] = Field(
-        None, max_length=10, description="Language code for transcription"
-    )
+    auto_transcribe_language: str | None = Field(None, max_length=10, description="Language code for transcription")
 
 
 class SubscriptionSettingsResponse(BaseModel):
@@ -83,10 +80,10 @@ class SubscriptionSettingsResponse(BaseModel):
     sync_enabled: bool
     is_starred: bool
     auto_transcribe: bool
-    auto_transcribe_max_duration: Optional[int] = None
-    auto_transcribe_language: Optional[str] = None
-    avg_publish_interval_hours: Optional[float] = None
-    next_sync_at: Optional[datetime] = None
+    auto_transcribe_max_duration: int | None = None
+    auto_transcribe_language: str | None = None
+    avg_publish_interval_hours: float | None = None
+    next_sync_at: datetime | None = None
 
 
 class BatchStarRequest(BaseModel):
@@ -101,10 +98,8 @@ class BatchAutoTranscribeRequest(BaseModel):
 
     channel_ids: list[str] = Field(..., min_length=1, max_length=100)
     auto_transcribe: bool
-    max_duration: Optional[int] = Field(
-        None, ge=60, le=43200, description="Max duration in seconds"
-    )
-    language: Optional[str] = Field(None, max_length=10)
+    max_duration: int | None = Field(None, ge=60, le=43200, description="Max duration in seconds")
+    language: str | None = Field(None, max_length=10)
 
 
 class BatchUpdateResponse(BaseModel):
@@ -134,16 +129,16 @@ class YouTubeVideoItem(BaseModel):
     video_id: str
     channel_id: str
     title: str
-    description: Optional[str] = None
-    thumbnail_url: Optional[str] = None
+    description: str | None = None
+    thumbnail_url: str | None = None
     published_at: datetime
-    duration_seconds: Optional[int] = None
-    view_count: Optional[int] = None
-    like_count: Optional[int] = None
-    comment_count: Optional[int] = None
+    duration_seconds: int | None = None
+    view_count: int | None = None
+    like_count: int | None = None
+    comment_count: int | None = None
     # Transcription status (populated when querying)
     transcribed: bool = False
-    task_id: Optional[str] = None
+    task_id: str | None = None
 
     class Config:
         from_attributes = True
@@ -156,7 +151,7 @@ class YouTubeVideoListResponse(BaseModel):
     total: int
     page: int
     page_size: int
-    last_synced_at: Optional[datetime] = None
+    last_synced_at: datetime | None = None
     syncing: bool = False  # True if background sync was triggered
 
 
@@ -164,17 +159,17 @@ class YouTubeChannelSyncStatus(BaseModel):
     """Channel sync status."""
 
     subscribed: bool
-    channel_title: Optional[str] = None
+    channel_title: str | None = None
     video_count: int = 0
-    last_synced_at: Optional[datetime] = None
+    last_synced_at: datetime | None = None
 
 
 class YouTubeTranscribeRequest(BaseModel):
     """Request for POST /youtube/videos/{video_id}/transcribe."""
 
     # Optional parameters for task creation
-    language: Optional[str] = None
-    output_format: Optional[str] = None
+    language: str | None = None
+    output_format: str | None = None
 
 
 class YouTubeTaskStatusResponse(BaseModel):
@@ -182,8 +177,8 @@ class YouTubeTaskStatusResponse(BaseModel):
 
     task_id: str
     status: str  # pending, started, success, failure, revoked
-    result: Optional[dict] = None
-    error: Optional[str] = None
+    result: dict | None = None
+    error: str | None = None
 
 
 class YouTubeSyncOverview(BaseModel):
@@ -203,7 +198,7 @@ class YouTubeSyncOverview(BaseModel):
 
     # Status
     fully_synced: bool  # True if all subscriptions have been synced at least once
-    last_sync_at: Optional[datetime] = None  # most recent videos_synced_at
+    last_sync_at: datetime | None = None  # most recent videos_synced_at
 
 
 class StarredVideosResponse(BaseModel):

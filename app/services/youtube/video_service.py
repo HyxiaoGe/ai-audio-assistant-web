@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -33,7 +33,7 @@ class YouTubeVideoService:
         channel_id: str,
         page: int = 1,
         page_size: int = 20,
-    ) -> Tuple[List[YouTubeVideo], int]:
+    ) -> tuple[list[YouTubeVideo], int]:
         """Get cached videos for a channel.
 
         Args:
@@ -78,7 +78,7 @@ class YouTubeVideoService:
         page: int = 1,
         page_size: int = 20,
         exclude_hidden: bool = False,
-    ) -> Tuple[List[YouTubeVideo], int]:
+    ) -> tuple[list[YouTubeVideo], int]:
         """Get latest videos across all subscriptions.
 
         Args:
@@ -115,9 +115,7 @@ class YouTubeVideoService:
 
         # Get paginated results ordered by publish date descending
         offset = (page - 1) * page_size
-        result = await db.execute(
-            base_query.order_by(YouTubeVideo.published_at.desc()).offset(offset).limit(page_size)
-        )
+        result = await db.execute(base_query.order_by(YouTubeVideo.published_at.desc()).offset(offset).limit(page_size))
         videos = list(result.scalars().all())
 
         return videos, total
@@ -128,7 +126,7 @@ class YouTubeVideoService:
         user_id: str,
         page: int = 1,
         page_size: int = 20,
-    ) -> Tuple[List[YouTubeVideo], int]:
+    ) -> tuple[list[YouTubeVideo], int]:
         """Get latest videos from starred channels only.
 
         Args:
@@ -179,8 +177,8 @@ class YouTubeVideoService:
         self,
         db: AsyncSession,
         user_id: str,
-        channel_ids: List[str],
-    ) -> Dict[str, int]:
+        channel_ids: list[str],
+    ) -> dict[str, int]:
         """Get video counts for multiple channels.
 
         Args:
@@ -213,7 +211,7 @@ class YouTubeVideoService:
         db: AsyncSession,
         user_id: str,
         video_id: str,
-    ) -> Optional[YouTubeVideo]:
+    ) -> YouTubeVideo | None:
         """Get a single video by YouTube video ID.
 
         Args:
@@ -237,7 +235,7 @@ class YouTubeVideoService:
         db: AsyncSession,
         user_id: str,
         channel_id: str,
-    ) -> Optional[YouTubeSubscription]:
+    ) -> YouTubeSubscription | None:
         """Get subscription for a channel.
 
         Args:
@@ -316,8 +314,8 @@ class YouTubeVideoService:
             existing_video_ids = set(result.scalars().all())
 
         # Fetch videos from playlist
-        now = datetime.now(timezone.utc)
-        all_videos: List[Dict[str, Any]] = []
+        now = datetime.now(UTC)
+        all_videos: list[dict[str, Any]] = []
         page_token = None
         stop_fetching = False
 
@@ -410,7 +408,7 @@ class YouTubeVideoService:
         db: AsyncSession,
         user_id: str,
         channel_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get sync status for a channel.
 
         Args:
@@ -480,7 +478,7 @@ class YouTubeVideoService:
         self,
         db: AsyncSession,
         user_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get overall video sync status across all subscriptions.
 
         Args:

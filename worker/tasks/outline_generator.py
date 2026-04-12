@@ -89,8 +89,7 @@ async def generate_outline_summary(
         Summary: 生成的大纲摘要对象
     """
     logger.info(
-        f"Task {task_id}: Generating outline image - "
-        f"style: {content_style}, provider: {provider}, model: {model_id}"
+        f"Task {task_id}: Generating outline image - style: {content_style}, provider: {provider}, model: {model_id}"
     )
 
     # ===== Step 1: 评估转写质量 =====
@@ -98,15 +97,12 @@ async def generate_outline_summary(
     quality_notice = TranscriptProcessor.get_quality_notice(quality)
 
     logger.info(
-        f"Task {task_id}: Quality assessment - score: {quality.quality_score}, "
-        f"confidence: {quality.avg_confidence:.2f}"
+        f"Task {task_id}: Quality assessment - score: {quality.quality_score}, confidence: {quality.avg_confidence:.2f}"
     )
 
     # ===== Step 2: 预处理转写文本 =====
     # 为了让 AI 更好地理解内容，先生成摘要再生成图片
-    preprocessed_text = TranscriptProcessor.preprocess(
-        segments, filter_filler_words=True, merge_same_speaker=True
-    )
+    preprocessed_text = TranscriptProcessor.preprocess(segments, filter_filler_words=True, merge_same_speaker=True)
 
     # 限制文本长度（AI 图像生成的 prompt 不宜过长）
     max_chars = 3000
@@ -130,14 +126,10 @@ async def generate_outline_summary(
     actual_provider = provider or DEFAULT_PROVIDER
     actual_model = model_id or DEFAULT_IMAGE_MODEL
 
-    logger.info(
-        f"Task {task_id}: Using image model - provider: {actual_provider}, model: {actual_model}"
-    )
+    logger.info(f"Task {task_id}: Using image model - provider: {actual_provider}, model: {actual_model}")
 
     # 获取 OpenRouter 服务（支持图像生成）
-    llm_service = await SmartFactory.get_service(
-        "llm", provider=actual_provider, model_id=actual_model
-    )
+    llm_service = await SmartFactory.get_service("llm", provider=actual_provider, model_id=actual_model)
 
     # ===== Step 5: 生成大纲图片 =====
     logger.info(f"Task {task_id}: Calling AI to generate outline image")
@@ -187,8 +179,6 @@ async def generate_outline_summary(
 
     session.add(summary)
 
-    logger.info(
-        f"Task {task_id}: Outline summary generated successfully - " f"image_key: {image_key}"
-    )
+    logger.info(f"Task {task_id}: Outline summary generated successfully - image_key: {image_key}")
 
     return summary

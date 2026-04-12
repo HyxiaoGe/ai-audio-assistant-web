@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends
@@ -56,7 +56,7 @@ def _format_size_bytes(size_bytes: int) -> str:
 
 
 def _build_file_key(filename: str, user_id: str) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ext = Path(filename).suffix.lower()
     file_id = uuid4().hex
     return f"upload/{user_id}/{now:%Y/%m/%d}/{file_id}{ext}"

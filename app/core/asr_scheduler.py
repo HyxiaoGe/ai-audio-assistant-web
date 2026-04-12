@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -82,9 +81,9 @@ class ASRScheduler:
     @classmethod
     def get_weights_for_task(
         cls,
-        task_features: Optional[TaskFeatures] = None,
-        custom_weights: Optional[Dict[str, float]] = None,
-    ) -> Dict[str, float]:
+        task_features: TaskFeatures | None = None,
+        custom_weights: dict[str, float] | None = None,
+    ) -> dict[str, float]:
         """根据任务特性获取权重配置"""
         if custom_weights:
             return custom_weights
@@ -98,13 +97,13 @@ class ASRScheduler:
     async def select_best_provider(
         cls,
         session: Session | AsyncSession,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         variant: str = "file",
-        preferred_providers: Optional[List[str]] = None,
-        weights: Optional[Dict[str, float]] = None,
-        task_features: Optional[TaskFeatures] = None,
-        estimated_duration: Optional[float] = None,
-    ) -> Optional[str]:
+        preferred_providers: list[str] | None = None,
+        weights: dict[str, float] | None = None,
+        task_features: TaskFeatures | None = None,
+        estimated_duration: float | None = None,
+    ) -> str | None:
         """选择最佳 ASR 提供商
 
         综合考虑：
@@ -153,7 +152,7 @@ class ASRScheduler:
 
         # 2. 检查哪些提供商有平台免费额度剩余
         #    平台免费额度不受用户配额限制，应该优先使用
-        providers_with_free_quota: List[str] = []
+        providers_with_free_quota: list[str] = []
         for provider in providers:
             _, remaining_free = await cls._get_free_quota_score(session, provider, variant, user_id)
             if remaining_free > 0:
@@ -174,7 +173,7 @@ class ASRScheduler:
             return None
 
         # 2. 计算每个提供商的得分
-        scores: List[ProviderScore] = []
+        scores: list[ProviderScore] = []
 
         for provider in available:
             # 健康得分
@@ -183,9 +182,7 @@ class ASRScheduler:
                 continue  # 跳过不健康的服务
 
             # 免费额度得分（从数据库读取）
-            free_quota_score, remaining_free = await cls._get_free_quota_score(
-                session, provider, variant, user_id
-            )
+            free_quota_score, remaining_free = await cls._get_free_quota_score(session, provider, variant, user_id)
 
             # 成本得分（从数据库读取）
             cost_score = await cls._get_cost_score(session, provider, variant)
@@ -197,9 +194,7 @@ class ASRScheduler:
             quality_score = await cls._get_quality_score(session, provider, variant)
 
             # 特殊功能匹配得分
-            features_score = await cls._get_features_score(
-                session, provider, variant, task_features
-            )
+            features_score = await cls._get_features_score(session, provider, variant, task_features)
 
             # 计算综合得分
             total_score = (
@@ -252,12 +247,12 @@ class ASRScheduler:
     async def get_provider_scores(
         cls,
         session: Session | AsyncSession,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         variant: str = "file",
-        providers: Optional[List[str]] = None,
-        weights: Optional[Dict[str, float]] = None,
-        task_features: Optional[TaskFeatures] = None,
-    ) -> List[ProviderScore]:
+        providers: list[str] | None = None,
+        weights: dict[str, float] | None = None,
+        task_features: TaskFeatures | None = None,
+    ) -> list[ProviderScore]:
         """获取所有提供商的评分（用于调试/API 返回）
 
         Args:
@@ -273,19 +268,15 @@ class ASRScheduler:
         """
         weights = weights or cls.get_weights_for_task(task_features)
         all_providers = providers or ServiceRegistry.list_services("asr")
-        scores: List[ProviderScore] = []
+        scores: list[ProviderScore] = []
 
         for provider in all_providers:
             health_score = await cls._get_health_score(provider)
-            free_quota_score, remaining_free = await cls._get_free_quota_score(
-                session, provider, variant, user_id
-            )
+            free_quota_score, remaining_free = await cls._get_free_quota_score(session, provider, variant, user_id)
             cost_score = await cls._get_cost_score(session, provider, variant)
             quota_score = await cls._get_quota_score(session, provider, user_id, variant)
             quality_score = await cls._get_quality_score(session, provider, variant)
-            features_score = await cls._get_features_score(
-                session, provider, variant, task_features
-            )
+            features_score = await cls._get_features_score(session, provider, variant, task_features)
 
             total_score = (
                 free_quota_score * weights.get("free_quota", 0.30)
@@ -321,7 +312,7 @@ class ASRScheduler:
         session: Session | AsyncSession,
         provider: str,
         variant: str,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
     ) -> tuple[float, float]:
         """获取免费额度得分
 
@@ -345,9 +336,7 @@ class ASRScheduler:
 
         # 获取剩余免费额度
         try:
-            remaining = await AsrFreeQuotaService.get_remaining_free_quota(
-                session, provider, variant, user_id
-            )
+            remaining = await AsrFreeQuotaService.get_remaining_free_quota(session, provider, variant, user_id)
             if remaining > 0:
                 # 有剩余免费额度，得分 = 剩余比例
                 score = remaining / config.free_quota_seconds
@@ -380,7 +369,7 @@ class ASRScheduler:
         cls,
         session: Session | AsyncSession,
         provider: str,
-        user_id: Optional[str],
+        user_id: str | None,
         variant: str,
     ) -> float:
         """获取配额得分（剩余比例）
@@ -397,7 +386,7 @@ class ASRScheduler:
             _extract_scalars,
         )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         result = await _execute(
             session,
@@ -405,9 +394,7 @@ class ASRScheduler:
             .where(AsrUserQuota.provider == provider)
             .where(AsrUserQuota.variant == variant)
             .where(_active_window_clause(now))
-            .where(
-                or_(AsrUserQuota.owner_user_id.is_(None), AsrUserQuota.owner_user_id == user_id)
-            ),
+            .where(or_(AsrUserQuota.owner_user_id.is_(None), AsrUserQuota.owner_user_id == user_id)),
         )
         rows = _extract_scalars(result)
 
@@ -491,7 +478,7 @@ class ASRScheduler:
         session: Session | AsyncSession,
         provider: str,
         variant: str = "file",
-        task_features: Optional[TaskFeatures] = None,
+        task_features: TaskFeatures | None = None,
     ) -> float:
         """获取特殊功能匹配得分
 
@@ -540,7 +527,7 @@ class ASRScheduler:
         return match_ratio
 
     @classmethod
-    def get_all_scores(cls, scores: List[ProviderScore]) -> Dict[str, Dict[str, float]]:
+    def get_all_scores(cls, scores: list[ProviderScore]) -> dict[str, dict[str, float]]:
         """获取所有提供商的评分详情（用于调试/监控）"""
         return {
             score.provider: {

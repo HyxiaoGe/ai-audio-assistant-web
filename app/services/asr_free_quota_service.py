@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import inspect
 import logging
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Optional, Union
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +35,7 @@ from app.services.asr_pricing_service import (
 logger = logging.getLogger(__name__)
 
 
-async def _maybe_await(result: Union[Awaitable[Any], Any]) -> Any:
+async def _maybe_await(result: Awaitable[Any] | Any) -> Any:
     """兼容同步和异步操作的辅助函数"""
     if inspect.isawaitable(result):
         return await result
@@ -75,7 +76,7 @@ class AsrFreeQuotaService:
         db: AsyncSession,
         provider: str,
         variant: str,
-    ) -> Optional[AsrPricingConfig]:
+    ) -> AsrPricingConfig | None:
         """获取定价配置
 
         Args:
@@ -91,11 +92,11 @@ class AsrFreeQuotaService:
     @classmethod
     async def get_or_create_period(
         cls,
-        db: Union[AsyncSession, Session],
+        db: AsyncSession | Session,
         provider: str,
         variant: str,
-        user_id: Optional[str] = None,
-        now: Optional[datetime] = None,
+        user_id: str | None = None,
+        now: datetime | None = None,
     ) -> AsrUsagePeriod:
         """获取或创建当前周期的用量记录
 
@@ -112,7 +113,7 @@ class AsrFreeQuotaService:
         Returns:
             用量周期记录
         """
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         config = await get_pricing_config(db, provider, variant)
 
         if not config:
@@ -172,8 +173,8 @@ class AsrFreeQuotaService:
         db: AsyncSession,
         provider: str,
         variant: str,
-        user_id: Optional[str] = None,
-        now: Optional[datetime] = None,
+        user_id: str | None = None,
+        now: datetime | None = None,
     ) -> float:
         """获取剩余免费额度（秒）
 
@@ -208,9 +209,9 @@ class AsrFreeQuotaService:
         db: AsyncSession,
         provider: str,
         variant: str,
-        user_id: Optional[str] = None,
-        now: Optional[datetime] = None,
-    ) -> Optional[FreeQuotaStatus]:
+        user_id: str | None = None,
+        now: datetime | None = None,
+    ) -> FreeQuotaStatus | None:
         """获取免费额度完整状态
 
         Args:
@@ -247,8 +248,8 @@ class AsrFreeQuotaService:
     async def get_all_free_quota_status(
         cls,
         db: AsyncSession,
-        user_id: Optional[str] = None,
-        now: Optional[datetime] = None,
+        user_id: str | None = None,
+        now: datetime | None = None,
     ) -> list[FreeQuotaStatus]:
         """获取所有有免费额度的服务状态
 
@@ -264,9 +265,7 @@ class AsrFreeQuotaService:
 
         configs = await get_pricing_configs_with_free_quota(db)
         for config in configs:
-            status = await cls.get_free_quota_status(
-                db, config.provider, config.variant, user_id, now
-            )
+            status = await cls.get_free_quota_status(db, config.provider, config.variant, user_id, now)
             if status:
                 statuses.append(status)
 
@@ -275,12 +274,12 @@ class AsrFreeQuotaService:
     @classmethod
     async def consume_quota(
         cls,
-        db: Union[AsyncSession, Session],
+        db: AsyncSession | Session,
         provider: str,
         variant: str,
         duration_seconds: float,
-        user_id: Optional[str] = None,
-        now: Optional[datetime] = None,
+        user_id: str | None = None,
+        now: datetime | None = None,
     ) -> QuotaConsumptionResult:
         """消耗配额
 
@@ -302,7 +301,7 @@ class AsrFreeQuotaService:
         Returns:
             配额消耗结果
         """
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         config = await get_pricing_config(db, provider, variant)
 
         if not config:
@@ -327,8 +326,7 @@ class AsrFreeQuotaService:
         await _maybe_await(db.flush())
 
         logger.info(
-            "Quota consumed: provider=%s, variant=%s, duration=%.1fs, "
-            "free=%.1fs, paid=%.1fs, cost=%.4f",
+            "Quota consumed: provider=%s, variant=%s, duration=%.1fs, free=%.1fs, paid=%.1fs, cost=%.4f",
             provider,
             variant,
             duration_seconds,
@@ -351,8 +349,8 @@ class AsrFreeQuotaService:
         provider: str,
         variant: str,
         duration_seconds: float,
-        user_id: Optional[str] = None,
-        now: Optional[datetime] = None,
+        user_id: str | None = None,
+        now: datetime | None = None,
     ) -> dict:
         """估算成本（不实际消耗配额）
 

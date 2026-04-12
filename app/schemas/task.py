@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -18,18 +17,18 @@ class TaskOptions(BaseModel):
         default_factory=lambda: ["mindmap"],
         description="要生成的可视化类型列表：mindmap(思维导图), timeline(时间轴), flowchart(流程图)",
     )
-    provider: Optional[str] = Field(default=None)
-    model_id: Optional[str] = Field(default=None)
-    asr_provider: Optional[str] = Field(default=None)
-    asr_variant: Optional[str] = Field(default=None)
+    provider: str | None = Field(default=None)
+    model_id: str | None = Field(default=None)
+    asr_provider: str | None = Field(default=None)
+    asr_variant: str | None = Field(default=None)
 
 
 class TaskCreateRequest(BaseModel):
-    title: Optional[str] = Field(default=None, max_length=500)
+    title: str | None = Field(default=None, max_length=500)
     source_type: str = Field(min_length=1)
-    file_key: Optional[str] = Field(default=None)
-    source_url: Optional[str] = Field(default=None)
-    content_hash: Optional[str] = Field(default=None)
+    file_key: str | None = Field(default=None)
+    source_url: str | None = Field(default=None)
+    content_hash: str | None = Field(default=None)
     options: TaskOptions = Field(default_factory=TaskOptions)
 
 
@@ -42,11 +41,11 @@ class TaskCreateResponse(BaseModel):
 
 class TaskListItem(BaseModel):
     id: str
-    title: Optional[str]
+    title: str | None
     source_type: str
     status: str
     progress: int
-    duration_seconds: Optional[int]
+    duration_seconds: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -56,10 +55,10 @@ class TaskStageResponse(BaseModel):
 
     stage_type: str
     status: str
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
-    error_code: Optional[int]
-    error_message: Optional[str]
+    started_at: datetime | None
+    completed_at: datetime | None
+    error_code: int | None
+    error_message: str | None
     attempt: int
 
 
@@ -68,35 +67,35 @@ class YouTubeVideoInfo(BaseModel):
 
     video_id: str
     channel_id: str
-    channel_title: Optional[str] = None
-    channel_thumbnail: Optional[str] = None
+    channel_title: str | None = None
+    channel_thumbnail: str | None = None
     title: str
-    description: Optional[str] = None
-    thumbnail_url: Optional[str] = None
-    published_at: Optional[datetime] = None
-    duration_seconds: Optional[int] = None
-    view_count: Optional[int] = None
-    like_count: Optional[int] = None
-    comment_count: Optional[int] = None
+    description: str | None = None
+    thumbnail_url: str | None = None
+    published_at: datetime | None = None
+    duration_seconds: int | None = None
+    view_count: int | None = None
+    like_count: int | None = None
+    comment_count: int | None = None
 
 
 class TaskDetailResponse(BaseModel):
     id: str
-    title: Optional[str]
+    title: str | None
     source_type: str
-    source_key: Optional[str]
-    source_url: Optional[str] = None  # YouTube URL
-    audio_url: Optional[str]  # 添加音频播放 URL
+    source_key: str | None
+    source_url: str | None = None  # YouTube URL
+    audio_url: str | None  # 添加音频播放 URL
     status: str
     progress: int
-    stage: Optional[str]
-    duration_seconds: Optional[int]
-    language: Optional[str]
+    stage: str | None
+    duration_seconds: int | None
+    language: str | None
     created_at: datetime
     updated_at: datetime
-    error_message: Optional[str]
+    error_message: str | None
     stages: list[TaskStageResponse] = Field(default_factory=list)  # 阶段信息
-    youtube_info: Optional[YouTubeVideoInfo] = None  # YouTube 视频元数据
+    youtube_info: YouTubeVideoInfo | None = None  # YouTube 视频元数据
 
 
 class TaskBatchDeleteRequest(BaseModel):

@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import Field, validator
 
 from app.core.config_manager import ServiceConfig, register_config_schema
@@ -71,7 +69,7 @@ class QwenConfig(ServiceConfig):
 
     api_key: str = Field(..., description="Qwen API 密钥", min_length=1)
     model: str = Field(..., description="模型名称", min_length=1)
-    max_tokens: Optional[int] = Field(default=1500, description="最大 token 数", ge=1)
+    max_tokens: int | None = Field(default=1500, description="最大 token 数", ge=1)
     temperature: float = Field(default=0.7, description="温度参数", ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, description="核采样参数", ge=0.0, le=1.0)
 
@@ -164,10 +162,10 @@ class OpenRouterConfig(ServiceConfig):
         default="https://openrouter.ai/api/v1",
         description="OpenRouter API 基础 URL",
     )
-    model: Optional[str] = Field(default=None, description="默认模型名称")
+    model: str | None = Field(default=None, description="默认模型名称")
     max_tokens: int = Field(default=4096, description="最大 token 数", ge=1)
-    http_referer: Optional[str] = Field(default=None, description="HTTP-Referer 头")
-    app_title: Optional[str] = Field(default=None, description="X-Title 头")
+    http_referer: str | None = Field(default=None, description="HTTP-Referer 头")
+    app_title: str | None = Field(default=None, description="X-Title 头")
 
     @validator("base_url")
     def validate_base_url(cls, v: str) -> str:

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import inspect
@@ -8,10 +8,11 @@ import re
 import subprocess  # nosec B404
 import tempfile
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional, cast
+from typing import Any, cast
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -63,9 +64,7 @@ def _call_factory(factory: Callable[..., Any], *args: Any, **kwargs: Any) -> Any
 
     accepted_kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
     positional_params = [
-        param
-        for param in params
-        if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+        param for param in params if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
     ]
     max_positional = len(positional_params) - len(
         [param for param in positional_params if param.name in accepted_kwargs]
@@ -80,23 +79,15 @@ async def async_session_factory():
         yield session
 
 
-async def get_asr_service(
-    user_id: Optional[str] = None, provider: Optional[str] = None
-) -> ASRService:
+async def get_asr_service(user_id: str | None = None, provider: str | None = None) -> ASRService:
     return await SmartFactory.get_service("asr", user_id=user_id, provider=provider)
 
 
-async def get_llm_service(
-    provider: str, model_id: str, user_id: Optional[str] = None
-) -> LLMService:
-    return await SmartFactory.get_service(
-        "llm", provider=provider, model_id=model_id, user_id=user_id
-    )
+async def get_llm_service(provider: str, model_id: str, user_id: str | None = None) -> LLMService:
+    return await SmartFactory.get_service("llm", provider=provider, model_id=model_id, user_id=user_id)
 
 
-async def get_storage_service(
-    provider: str = "cos", user_id: Optional[str] = None
-) -> StorageService:
+async def get_storage_service(provider: str = "cos", user_id: str | None = None) -> StorageService:
     return await SmartFactory.get_service("storage", provider=provider, user_id=user_id)
 
 
@@ -115,10 +106,8 @@ def _add_record(session: Session, record: object) -> None:
         session.add_all([record])
 
 
-async def _get_task(session: Session, task_id: str) -> Optional[Task]:
-    result = await _maybe_await(
-        session.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_(None)))
-    )
+async def _get_task(session: Session, task_id: str) -> Task | None:
+    result = await _maybe_await(session.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_(None))))
     result = cast(Result, result)
     return result.scalar_one_or_none()
 
@@ -129,7 +118,7 @@ async def _commit(session: Session) -> None:
         await result
 
 
-def _load_llm_model_id(provider: str, user_id: Optional[str]) -> Optional[str]:
+def _load_llm_model_id(provider: str, user_id: str | None) -> str | None:
     try:
         config = ConfigManager.get_config("llm", provider, user_id=user_id)
     except Exception:
@@ -147,7 +136,7 @@ def _select_default_llm_provider() -> str:
     return providers[0]
 
 
-def _resolve_llm_selection(task: Task, user_id: Optional[str]) -> tuple[str, str]:
+def _resolve_llm_selection(task: Task, user_id: str | None) -> tuple[str, str]:
     options = task.options or {}
     raw_provider = options.get("llm_provider") or options.get("provider")
     raw_model_id = options.get("llm_model_id") or options.get("model_id")
@@ -161,7 +150,7 @@ def _resolve_llm_selection(task: Task, user_id: Optional[str]) -> tuple[str, str
     return provider, model_id
 
 
-def _resolve_asr_provider(task: Task) -> Optional[str]:
+def _resolve_asr_provider(task: Task) -> str | None:
     options = task.options or {}
     raw_provider = options.get("asr_provider")
     return raw_provider if isinstance(raw_provider, str) else None
@@ -173,7 +162,7 @@ def _resolve_asr_variant(task: Task) -> str:
     return raw_variant if isinstance(raw_variant, str) and raw_variant else "file"
 
 
-def _resolve_tencent_app_id(user_id: Optional[str]) -> Optional[str]:
+def _resolve_tencent_app_id(user_id: str | None) -> str | None:
     config = None
     if settings.CONFIG_CENTER_DB_ENABLED:
         try:
@@ -192,7 +181,7 @@ def _resolve_tencent_app_id(user_id: Optional[str]) -> Optional[str]:
     return None
 
 
-def _supports_file_fast(user_id: Optional[str]) -> bool:
+def _supports_file_fast(user_id: str | None) -> bool:
     if "tencent" not in ServiceRegistry.list_services("asr"):
         return False
     return bool(_resolve_tencent_app_id(user_id))
@@ -211,7 +200,7 @@ def _estimate_asr_duration(task: Task, segments: list[TranscriptSegment]) -> int
 
 def _normalize_speaker_segments(
     segments: list[TranscriptSegment],
-    enable_speaker_diarization: Optional[bool],
+    enable_speaker_diarization: bool | None,
 ) -> list[TranscriptSegment]:
     if enable_speaker_diarization is False:
         return [replace(segment, speaker_id=None) for segment in segments]
@@ -223,8 +212,8 @@ def _normalize_speaker_segments(
 
 
 def _serialize_words(
-    words: Optional[list[WordTimestamp]],
-) -> Optional[list[dict[str, float | str | None]]]:
+    words: list[WordTimestamp] | None,
+) -> list[dict[str, float | str | None]] | None:
     if not words:
         return None
     return [
@@ -240,9 +229,9 @@ def _serialize_words(
 
 def _build_asr_kwargs(
     transcribe: Any,
-    status_callback: Optional[Callable[[str], Awaitable[None]]],
-    enable_speaker_diarization: Optional[bool],
-    asr_variant: Optional[str],
+    status_callback: Callable[[str], Awaitable[None]] | None,
+    enable_speaker_diarization: bool | None,
+    asr_variant: str | None,
 ) -> dict[str, Any]:
     params = inspect.signature(transcribe).parameters
     kwargs: dict[str, Any] = {}
@@ -260,8 +249,8 @@ async def _update_task(
     task: Task,
     status: str,
     progress: int,
-    stage: Optional[str],
-    request_id: Optional[str],
+    stage: str | None,
+    request_id: str | None,
 ) -> None:
     task.status = status
     task.progress = max(task.progress or 0, progress)
@@ -318,9 +307,7 @@ async def _update_task(
     await publish_message(f"{task.id}:{task.user_id}", message)
 
 
-async def _mark_failed(
-    session: Session, task: Task, error: BusinessError, request_id: Optional[str]
-) -> None:
+async def _mark_failed(session: Session, task: Task, error: BusinessError, request_id: str | None) -> None:
     task.status = "failed"
     task.progress = 0
     task.error_code = error.code.value
@@ -372,7 +359,7 @@ async def _mark_failed(
     await publish_message(f"{task.id}:{task.user_id}", message)
 
 
-async def _process_task(task_id: str, request_id: Optional[str]) -> None:
+async def _process_task(task_id: str, request_id: str | None) -> None:
     async with async_session_factory() as session:
         task = await _get_task(session, task_id)
         if task is None:
@@ -397,9 +384,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
 
                     # 下载文件到临时目录（用于提取时长和上传到 MinIO）
                     # 使用 SmartFactory 获取 COS storage（异步调用）
-                    cos_storage: StorageService = await _maybe_await(
-                        get_storage_service(user_id=str(task.user_id))
-                    )
+                    cos_storage: StorageService = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
                     cos_storage_client = cast(Any, cos_storage)
                     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                         tmp_path = tmp_file.name
@@ -470,32 +455,20 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
 
                 expires_in = settings.UPLOAD_PRESIGN_EXPIRES
                 if not expires_in:
-                    raise BusinessError(
-                        ErrorCode.INVALID_PARAMETER, detail="upload_presign_expires"
-                    )
+                    raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="upload_presign_expires")
                 # 使用 COS 存储生成带签名的 URL 供 ASR 访问
                 # 使用 SmartFactory 获取 COS storage
-                cos_storage = await _maybe_await(
-                    _call_factory(get_storage_service, user_id=str(task.user_id))
-                )
-                audio_candidates.append(
-                    cos_storage.generate_presigned_url(task.source_key, expires_in)
-                )
+                cos_storage = await _maybe_await(_call_factory(get_storage_service, user_id=str(task.user_id)))
+                audio_candidates.append(cos_storage.generate_presigned_url(task.source_key, expires_in))
             else:
                 if task.source_key:
                     # YouTube 下载的音频也使用 COS 存储（双存储方案）
                     expires_in = settings.UPLOAD_PRESIGN_EXPIRES
                     if not expires_in:
-                        raise BusinessError(
-                            ErrorCode.INVALID_PARAMETER, detail="upload_presign_expires"
-                        )
+                        raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="upload_presign_expires")
                     # 使用 SmartFactory 获取 COS storage
-                    cos_storage = await _maybe_await(
-                        _call_factory(get_storage_service, user_id=str(task.user_id))
-                    )
-                    audio_candidates.append(
-                        cos_storage.generate_presigned_url(task.source_key, expires_in)
-                    )
+                    cos_storage = await _maybe_await(_call_factory(get_storage_service, user_id=str(task.user_id)))
+                    audio_candidates.append(cos_storage.generate_presigned_url(task.source_key, expires_in))
                 direct_url = None
                 if isinstance(task.source_metadata, dict):
                     direct_url = task.source_metadata.get("direct_url")
@@ -515,10 +488,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                 diarization = task.options.get("enable_speaker_diarization")
             if not asr_provider:
                 # 确定可用的 variant 列表
-                if asr_variant != "file":
-                    variants = [asr_variant]
-                else:
-                    variants = ["file", "file_fast"]
+                variants = [asr_variant] if asr_variant != "file" else ["file", "file_fast"]
                 if "file_fast" in variants and not _supports_file_fast(str(task.user_id)):
                     variants = [variant for variant in variants if variant != "file_fast"]
                     if not variants:
@@ -559,10 +529,10 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             asr_service: ASRService = await _maybe_await(
                 _call_factory(get_asr_service, str(task.user_id), provider=asr_provider)
             )
-            last_error: Optional[BusinessError] = None
+            last_error: BusinessError | None = None
             segments: list[TranscriptSegment] = []
             asr_start_time = time.time()
-            successful_audio_url: Optional[str] = None
+            successful_audio_url: str | None = None
 
             async def _asr_status(stage: str) -> None:
                 # This callback is called from within async context
@@ -610,8 +580,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
                     }:
                         raise
                     logger.warning(
-                        "Task %s: ASR failed for URL %d/%d with error %s: %s, "
-                        "trying next URL if available",
+                        "Task %s: ASR failed for URL %d/%d with error %s: %s, trying next URL if available",
                         task_id,
                         idx,
                         len(audio_candidates),
@@ -738,8 +707,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             _add_record(session, asr_usage)
             await _commit(session)
             logger.info(
-                "Task %s: ASRUsage recorded - provider=%s, duration=%ds, "
-                "free=%.1fs, paid=%.1fs, cost=%.4f, time=%dms",
+                "Task %s: ASRUsage recorded - provider=%s, duration=%ds, free=%.1fs, paid=%.1fs, cost=%.4f, time=%dms",
                 task_id,
                 provider_name,
                 duration_seconds,
@@ -772,11 +740,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             await _update_task(session, task, "polishing", 72, "polishing", request_id)
 
             try:
-                polish_query = (
-                    select(Transcript)
-                    .where(Transcript.task_id == task_id)
-                    .order_by(Transcript.sequence)
-                )
+                polish_query = select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
                 polish_result = await session.execute(polish_query)
                 transcript_rows = polish_result.scalars().all()
 
@@ -856,11 +820,7 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
             )
 
             # 从 DB 读取最新转写内容（可能已被润色修改）
-            summarize_query = (
-                select(Transcript)
-                .where(Transcript.task_id == task_id)
-                .order_by(Transcript.sequence)
-            )
+            summarize_query = select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
             summarize_result = await session.execute(summarize_query)
             latest_transcripts = summarize_result.scalars().all()
             latest_segments = [
@@ -968,5 +928,5 @@ async def _process_task(task_id: str, request_id: Optional[str]) -> None:
     autoretry_for=(Exception,),
     retry_backoff=True,
 )
-def process_audio(self, task_id: str, request_id: Optional[str] = None) -> None:
+def process_audio(self, task_id: str, request_id: str | None = None) -> None:
     asyncio.run(_process_task(task_id, request_id))

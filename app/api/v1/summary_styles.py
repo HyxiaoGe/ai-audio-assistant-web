@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Request
 
@@ -17,7 +17,7 @@ logger = logging.getLogger("app.api.summary_styles")
 router = APIRouter(prefix="/summary-styles", tags=["summary-styles"])
 
 # Cache for styles configuration
-_styles_cache: Optional[dict[str, Any]] = None
+_styles_cache: dict[str, Any] | None = None
 
 
 def _load_styles_config() -> dict[str, Any]:
@@ -30,16 +30,10 @@ def _load_styles_config() -> dict[str, Any]:
     if _styles_cache is not None:
         return _styles_cache
 
-    config_path = (
-        Path(__file__).parent.parent.parent
-        / "prompts"
-        / "templates"
-        / "summary"
-        / "styles_i18n.json"
-    )
+    config_path = Path(__file__).parent.parent.parent / "prompts" / "templates" / "summary" / "styles_i18n.json"
 
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             _styles_cache = json.load(f)
     except FileNotFoundError:
         logger.error(f"Styles config not found: {config_path}")

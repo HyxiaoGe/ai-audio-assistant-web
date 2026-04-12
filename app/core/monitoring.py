@@ -11,16 +11,16 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from functools import wraps
-from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger("app.core.monitoring")
 
 
-class AlertLevel(str, Enum):
+class AlertLevel(StrEnum):
     """告警级别"""
 
     DEBUG = "debug"
@@ -29,7 +29,7 @@ class AlertLevel(str, Enum):
     CRITICAL = "critical"
 
 
-class MetricType(str, Enum):
+class MetricType(StrEnum):
     """指标类型"""
 
     COUNTER = "counter"
@@ -59,7 +59,7 @@ class MetricData:
     name: str
     value: float
     timestamp: datetime
-    labels: Dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
     metric_type: MetricType = MetricType.GAUGE
 
 
@@ -104,7 +104,7 @@ class ServiceMetrics:
             self.p99_response_time = _percentile(sorted_times, 0.99)
 
 
-def _percentile(sorted_values: List[float], percentile: float) -> float:
+def _percentile(sorted_values: list[float], percentile: float) -> float:
     if not sorted_values:
         return 0.0
     index = int(len(sorted_values) * percentile)
@@ -123,7 +123,7 @@ class AlertRule:
     message_template: str
     enabled: bool = True
     cooldown: int = 300
-    last_triggered: Optional[datetime] = None
+    last_triggered: datetime | None = None
 
 
 @dataclass
@@ -139,7 +139,7 @@ class Alert:
     timestamp: datetime
     metrics: ServiceMetrics
     resolved: bool = False
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
 
 
 class MetricsCollector:
@@ -147,7 +147,7 @@ class MetricsCollector:
 
     def __init__(self, config: MonitoringConfig):
         self.config = config
-        self._metrics: Dict[str, ServiceMetrics] = {}
+        self._metrics: dict[str, ServiceMetrics] = {}
         self._lock = threading.Lock()
 
     def record_call(
@@ -175,12 +175,12 @@ class MetricsCollector:
             metrics.update_response_time(duration, self.config.enable_percentiles)
             metrics.last_update = datetime.now()
 
-    def get_metrics(self, service_type: str, service_name: str) -> Optional[ServiceMetrics]:
+    def get_metrics(self, service_type: str, service_name: str) -> ServiceMetrics | None:
         key = f"{service_type}:{service_name}"
         with self._lock:
             return self._metrics.get(key)
 
-    def get_all_metrics(self) -> Dict[str, ServiceMetrics]:
+    def get_all_metrics(self) -> dict[str, ServiceMetrics]:
         with self._lock:
             return dict(self._metrics)
 
@@ -195,8 +195,8 @@ class AlertManager:
 
     def __init__(self, config: MonitoringConfig):
         self.config = config
-        self._rules: Dict[str, AlertRule] = {}
-        self._active_alerts: List[Alert] = []
+        self._rules: dict[str, AlertRule] = {}
+        self._active_alerts: list[Alert] = []
         self._alert_history: deque[Alert] = deque(maxlen=1000)
         self._lock = threading.Lock()
         self._register_default_rules()
@@ -208,9 +208,7 @@ class AlertManager:
                 name="服务错误率过高",
                 condition=lambda m: m.error_rate > 0.05,
                 level=AlertLevel.WARNING,
-                message_template=(
-                    "服务 {service_type}:{service_name} 错误率过高: " "{error_rate:.2%}"
-                ),
+                message_template=("服务 {service_type}:{service_name} 错误率过高: {error_rate:.2%}"),
                 cooldown=self.config.alert_cooldown,
             )
         )
@@ -220,9 +218,7 @@ class AlertManager:
                 name="响应时间过长",
                 condition=lambda m: m.avg_response_time > 5.0,
                 level=AlertLevel.WARNING,
-                message_template=(
-                    "服务 {service_type}:{service_name} 响应时间过长: " "{avg_response_time:.2f}s"
-                ),
+                message_template=("服务 {service_type}:{service_name} 响应时间过长: {avg_response_time:.2f}s"),
                 cooldown=self.config.alert_cooldown,
             )
         )
@@ -232,9 +228,7 @@ class AlertManager:
                 name="P99延迟过高",
                 condition=lambda m: m.p99_response_time > 10.0,
                 level=AlertLevel.WARNING,
-                message_template=(
-                    "服务 {service_type}:{service_name} P99延迟过高: " "{p99_response_time:.2f}s"
-                ),
+                message_template=("服务 {service_type}:{service_name} P99延迟过高: {p99_response_time:.2f}s"),
                 cooldown=self.config.alert_cooldown,
             )
         )
@@ -243,8 +237,8 @@ class AlertManager:
         with self._lock:
             self._rules[rule.rule_id] = rule
 
-    def check_rules(self, metrics: ServiceMetrics) -> List[Alert]:
-        triggered_alerts: List[Alert] = []
+    def check_rules(self, metrics: ServiceMetrics) -> list[Alert]:
+        triggered_alerts: list[Alert] = []
         with self._lock:
             for rule in self._rules.values():
                 if not rule.enabled:
@@ -293,7 +287,7 @@ class AlertManager:
         self._alert_history.append(alert)
         return alert
 
-    def get_active_alerts(self) -> List[Alert]:
+    def get_active_alerts(self) -> list[Alert]:
         with self._lock:
             return [alert for alert in self._active_alerts if not alert.resolved]
 
@@ -347,7 +341,7 @@ class NotificationManager:
     """通知管理器"""
 
     def __init__(self) -> None:
-        self._notifiers: List[NotifierInterface] = []
+        self._notifiers: list[NotifierInterface] = []
         self.register_notifier(LogNotifier())
 
     def register_notifier(self, notifier: NotifierInterface) -> None:
@@ -446,10 +440,10 @@ def monitor(service_type: str, service_name: str):
 class MonitoringSystem:
     """监控系统（单例模式）"""
 
-    _instance: Optional["MonitoringSystem"] = None
+    _instance: MonitoringSystem | None = None
     _lock = threading.Lock()
 
-    def __init__(self, config: Optional[MonitoringConfig] = None):
+    def __init__(self, config: MonitoringConfig | None = None):
         if config is None:
             config = MonitoringConfig()
 
@@ -458,10 +452,10 @@ class MonitoringSystem:
         self.alert_manager = AlertManager(config)
         self.notification_manager = NotificationManager()
         self._running = False
-        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_thread: threading.Thread | None = None
 
     @classmethod
-    def get_instance(cls, config: Optional[MonitoringConfig] = None) -> "MonitoringSystem":
+    def get_instance(cls, config: MonitoringConfig | None = None) -> MonitoringSystem:
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -11,19 +10,19 @@ class ASRUsageItem(BaseModel):
 
     id: str
     user_id: str
-    task_id: Optional[str] = None
+    task_id: str | None = None
     provider: str
     variant: str
-    external_task_id: Optional[str] = None
+    external_task_id: str | None = None
     duration_seconds: float
     estimated_cost: float
-    actual_cost: Optional[float] = None
-    audio_url: Optional[str] = None
-    audio_format: Optional[str] = None
+    actual_cost: float | None = None
+    audio_url: str | None = None
+    audio_format: str | None = None
     status: str
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    processing_time_ms: Optional[int] = None
+    error_code: str | None = None
+    error_message: str | None = None
+    processing_time_ms: int | None = None
     created_at: datetime
 
     # 免费额度分拆字段
@@ -51,8 +50,8 @@ class ASRUsageSummaryItem(BaseModel):
     failed_count: int
     total_duration_seconds: float
     total_estimated_cost: float
-    total_actual_cost: Optional[float] = None
-    avg_processing_time_ms: Optional[float] = None
+    total_actual_cost: float | None = None
+    avg_processing_time_ms: float | None = None
 
     # 免费额度分拆汇总
     total_free_quota_consumed: float = Field(default=0, description="总免费额度消耗（秒）")
@@ -64,8 +63,8 @@ class ASRUsageSummaryResponse(BaseModel):
     """ASR 用量汇总响应"""
 
     items: list[ASRUsageSummaryItem] = Field(default_factory=list)
-    period_start: Optional[datetime] = None
-    period_end: Optional[datetime] = None
+    period_start: datetime | None = None
+    period_end: datetime | None = None
     total_duration_seconds: float = 0.0
     total_estimated_cost: float = 0.0
     total_count: int = 0

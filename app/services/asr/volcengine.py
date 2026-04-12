@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -42,43 +42,31 @@ class VolcengineASRService(ASRService):
     def provider(self) -> str:
         return "volcengine"
 
-    def __init__(self, config: Optional[object] = None) -> None:
+    def __init__(self, config: object | None = None) -> None:
         app_id = get_config_value(config, "app_id", settings.VOLC_ASR_APP_ID)
         access_token = get_config_value(config, "access_token", settings.VOLC_ASR_ACCESS_TOKEN)
         resource_id = get_config_value(config, "resource_id", settings.VOLC_ASR_RESOURCE_ID)
         if not app_id or not access_token or not resource_id:
-            raise RuntimeError(
-                "VOLC_ASR_APP_ID/VOLC_ASR_ACCESS_TOKEN/VOLC_ASR_RESOURCE_ID is not set"
-            )
+            raise RuntimeError("VOLC_ASR_APP_ID/VOLC_ASR_ACCESS_TOKEN/VOLC_ASR_RESOURCE_ID is not set")
 
         self._app_id = app_id
         self._access_token = access_token
         self._resource_id = resource_id
-        self._model_name = get_config_value(
-            config, "model_name", settings.VOLC_ASR_MODEL_NAME or "bigmodel"
-        )
-        self._model_version = get_config_value(
-            config, "model_version", settings.VOLC_ASR_MODEL_VERSION
-        )
+        self._model_name = get_config_value(config, "model_name", settings.VOLC_ASR_MODEL_NAME or "bigmodel")
+        self._model_version = get_config_value(config, "model_version", settings.VOLC_ASR_MODEL_VERSION)
         self._language = get_config_value(config, "language", settings.VOLC_ASR_LANGUAGE)
         enable_itn_value = get_config_value(config, "enable_itn", settings.VOLC_ASR_ENABLE_ITN)
         self._enable_itn = enable_itn_value if enable_itn_value is not None else True
-        show_utterances_value = get_config_value(
-            config, "show_utterances", settings.VOLC_ASR_SHOW_UTTERANCES
-        )
+        show_utterances_value = get_config_value(config, "show_utterances", settings.VOLC_ASR_SHOW_UTTERANCES)
         self._show_utterances = show_utterances_value if show_utterances_value is not None else True
-        self._poll_interval = get_config_value(
-            config, "poll_interval", settings.VOLC_ASR_POLL_INTERVAL or 3
-        )
-        self._max_wait = get_config_value(
-            config, "max_wait", settings.VOLC_ASR_MAX_WAIT_SECONDS or 600
-        )
+        self._poll_interval = get_config_value(config, "poll_interval", settings.VOLC_ASR_POLL_INTERVAL or 3)
+        self._max_wait = get_config_value(config, "max_wait", settings.VOLC_ASR_MAX_WAIT_SECONDS or 600)
 
     @monitor("asr", "volcengine")
     async def transcribe(
         self,
         audio_url: str,
-        status_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        status_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> list[TranscriptSegment]:
         if not audio_url:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="audio_url")
@@ -185,9 +173,7 @@ class VolcengineASRService(ASRService):
             if self._resource_id == "volc.bigasr.auc":
                 request["model_version"] = self._model_version
             else:
-                logger.warning(
-                    "VOLC_ASR_MODEL_VERSION ignored for resource_id=%s", self._resource_id
-                )
+                logger.warning("VOLC_ASR_MODEL_VERSION ignored for resource_id=%s", self._resource_id)
 
         return {
             "audio": audio,
@@ -199,9 +185,7 @@ class VolcengineASRService(ASRService):
         suffix = parsed.path.rsplit(".", 1)[-1].lower() if "." in parsed.path else ""
         if suffix in _SUPPORTED_FORMATS:
             return suffix
-        raise BusinessError(
-            ErrorCode.UNSUPPORTED_FILE_FORMAT, allowed=", ".join(_SUPPORTED_FORMATS)
-        )
+        raise BusinessError(ErrorCode.UNSUPPORTED_FILE_FORMAT, allowed=", ".join(_SUPPORTED_FORMATS))
 
     def _parse_result(self, payload: dict[str, object]) -> list[TranscriptSegment]:
         result = payload.get("result")
@@ -268,7 +252,7 @@ class VolcengineASRService(ASRService):
     async def batch_transcribe(
         self,
         audio_urls: list[str],
-        status_callback: Optional[Callable[[str, int, int], Awaitable[None]]] = None,
+        status_callback: Callable[[str, int, int], Awaitable[None]] | None = None,
     ) -> list[list[TranscriptSegment]]:
         if not audio_urls:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="audio_urls")

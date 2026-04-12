@@ -45,7 +45,7 @@ class AsrQuotaUpsertRequest(BaseModel):
     reset: bool = Field(default=True)
 
     @model_validator(mode="after")
-    def _ensure_quota(self) -> "AsrQuotaUpsertRequest":
+    def _ensure_quota(self) -> AsrQuotaUpsertRequest:
         if self.quota_seconds is None and self.quota_hours is None:
             raise ValueError("quota_seconds or quota_hours is required")
         if self.window_start or self.window_end:

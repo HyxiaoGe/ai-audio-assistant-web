@@ -13,8 +13,9 @@ import logging
 import re
 import tempfile
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 from app.core.smart_factory import SmartFactory
 from app.prompts.manager import get_prompt_manager
@@ -23,9 +24,7 @@ logger = logging.getLogger(__name__)
 
 # 新格式图片占位符正则：{{IMAGE: 类型 | 描述 | 关键文字}} 或 {IMAGE: 类型 | 描述 | 关键文字}
 IMAGE_PLACEHOLDER_PATTERN_NEW_DOUBLE = r"\{\{IMAGE:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^}]+)\}\}"
-IMAGE_PLACEHOLDER_PATTERN_NEW_SINGLE = (
-    r"(?<!\{)\{IMAGE:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^}]+)\}(?!\})"
-)
+IMAGE_PLACEHOLDER_PATTERN_NEW_SINGLE = r"(?<!\{)\{IMAGE:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^}]+)\}(?!\})"
 
 # 旧格式图片占位符正则（向后兼容）：{{IMAGE: 描述}} 或 {IMAGE: 描述}
 IMAGE_PLACEHOLDER_PATTERN_OLD = r"\{?\{IMAGE:\s*([^}|]+)\}?\}"
@@ -69,10 +68,7 @@ def extract_image_placeholders(content: str) -> list[dict]:
     # 2. 匹配新格式（单花括号）{IMAGE: 类型 | 描述 | 关键文字}
     for match in re.finditer(IMAGE_PLACEHOLDER_PATTERN_NEW_SINGLE, content):
         # 跳过已匹配的位置
-        if any(
-            start <= match.start() < end or start < match.end() <= end
-            for start, end in matched_positions
-        ):
+        if any(start <= match.start() < end or start < match.end() <= end for start, end in matched_positions):
             continue
 
         image_type = match.group(1).strip().lower()
@@ -96,10 +92,7 @@ def extract_image_placeholders(content: str) -> list[dict]:
     # 3. 匹配旧格式（双花括号）{{IMAGE: 描述}}
     for match in re.finditer(r"\{\{IMAGE:\s*([^}|]+)\}\}", content):
         # 跳过已匹配的位置
-        if any(
-            start <= match.start() < end or start < match.end() <= end
-            for start, end in matched_positions
-        ):
+        if any(start <= match.start() < end or start < match.end() <= end for start, end in matched_positions):
             continue
 
         description = match.group(1).strip()
@@ -118,10 +111,7 @@ def extract_image_placeholders(content: str) -> list[dict]:
     # 4. 匹配旧格式（单花括号）{IMAGE: 描述}
     for match in re.finditer(r"(?<!\{)\{IMAGE:\s*([^}|]+)\}(?!\})", content):
         # 跳过已匹配的位置
-        if any(
-            start <= match.start() < end or start < match.end() <= end
-            for start, end in matched_positions
-        ):
+        if any(start <= match.start() < end or start < match.end() <= end for start, end in matched_positions):
             continue
 
         description = match.group(1).strip()
@@ -180,9 +170,7 @@ def is_auto_images_enabled(summary_type: str, content_style: str | None = None) 
 
     supported_types = config.get("supported_summary_types", [])
     if summary_type not in supported_types:
-        logger.debug(
-            f"Auto images disabled: summary_type '{summary_type}' not in supported types {supported_types}"
-        )
+        logger.debug(f"Auto images disabled: summary_type '{summary_type}' not in supported types {supported_types}")
         return False
 
     if content_style:
@@ -193,9 +181,7 @@ def is_auto_images_enabled(summary_type: str, content_style: str | None = None) 
             )
             return False
 
-    logger.debug(
-        f"Auto images enabled for summary_type={summary_type}, content_style={content_style}"
-    )
+    logger.debug(f"Auto images enabled for summary_type={summary_type}, content_style={content_style}")
     return True
 
 
@@ -231,9 +217,7 @@ async def upload_image(
         # 上传到 MinIO（供前端访问）
         try:
             minio_storage = await SmartFactory.get_service("storage", provider="minio")
-            minio_storage.upload_file(
-                object_name=object_key, file_path=tmp_path, content_type=content_type
-            )
+            minio_storage.upload_file(object_name=object_key, file_path=tmp_path, content_type=content_type)
             logger.info(f"Uploaded summary image to MinIO: {object_key}")
         except Exception as e:
             logger.warning(f"Failed to upload to MinIO: {e}")
@@ -241,9 +225,7 @@ async def upload_image(
         # 上传到云存储（备份）
         try:
             cloud_storage = await SmartFactory.get_service("storage")
-            cloud_storage.upload_file(
-                object_name=object_key, file_path=tmp_path, content_type=content_type
-            )
+            cloud_storage.upload_file(object_name=object_key, file_path=tmp_path, content_type=content_type)
             logger.info(f"Uploaded summary image to cloud storage: {object_key}")
         except Exception as e:
             logger.warning(f"Failed to upload to cloud storage: {e}")
@@ -346,10 +328,7 @@ async def generate_single_image(
         image_path = object_key.replace("summary_images/", "")
         image_url = f"/api/v1/summaries/images/{image_path}"
 
-        logger.info(
-            f"Generated styled image ({image_type}/{content_style}) "
-            f"for '{item['description']}': {object_key}"
-        )
+        logger.info(f"Generated styled image ({image_type}/{content_style}) for '{item['description']}': {object_key}")
 
         return {
             "placeholder": item["placeholder"],
@@ -358,7 +337,7 @@ async def generate_single_image(
             "model_id": model_id,
         }
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(f"Image generation timeout for: {item['description']}")
         return {
             "placeholder": item["placeholder"],
@@ -386,7 +365,7 @@ async def generate_images_parallel(
     locale: str = "zh-CN",
     max_images: int = 3,
     timeout: int = 60,
-    on_image_ready: Optional[Callable[[dict[str, Any], int, int], None]] = None,
+    on_image_ready: Callable[[dict[str, Any], int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """并行生成多张图片，每生成一张立即回调
 
@@ -478,10 +457,7 @@ def replace_placeholders(content: str, image_results: list[dict]) -> str:
                 cleaned = description.replace("{{IMAGE:", "").replace("}}", "")
                 cleaned = cleaned.replace("{IMAGE:", "").replace("}", "")
                 parts = cleaned.split("|")
-                if len(parts) >= 2:
-                    description = parts[1].strip()
-                else:
-                    description = parts[0].strip()
+                description = parts[1].strip() if len(parts) >= 2 else parts[0].strip()
             else:
                 # 处理旧格式
                 description = description.replace("{{IMAGE: ", "").replace("}}", "")
@@ -507,8 +483,8 @@ async def process_summary_images(
     summary_type: str,
     content_style: str | None = None,
     locale: str = "zh-CN",
-    redis_client: Optional[Any] = None,
-    stream_key: Optional[str] = None,
+    redis_client: Any | None = None,
+    stream_key: str | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """处理摘要中的图片占位符
 

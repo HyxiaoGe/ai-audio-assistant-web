@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -33,7 +33,7 @@ class YouTubeSubscriptionService:
         self,
         db: AsyncSession,
         user_id: str,
-    ) -> Optional[Account]:
+    ) -> Account | None:
         """Get user's YouTube OAuth account.
 
         Args:
@@ -68,7 +68,7 @@ class YouTubeSubscriptionService:
         self,
         db: AsyncSession,
         user_id: str,
-        channel_id: Optional[str],
+        channel_id: str | None,
         access_token: str,
         refresh_token: str,
         expires_at: datetime,
@@ -138,7 +138,7 @@ class YouTubeSubscriptionService:
         self,
         db: AsyncSession,
         user_id: str,
-    ) -> Tuple[Account, Any]:
+    ) -> tuple[Account, Any]:
         """Get valid credentials, refreshing if needed.
 
         Args:
@@ -165,9 +165,7 @@ class YouTubeSubscriptionService:
                 )
 
             logger.info(f"Refreshing token for user {user_id}")
-            new_access_token, new_expires_at = self._oauth_service.refresh_access_token(
-                account.refresh_token
-            )
+            new_access_token, new_expires_at = self._oauth_service.refresh_access_token(account.refresh_token)
 
             # Update account with new token
             account.access_token = new_access_token
@@ -206,7 +204,7 @@ class YouTubeSubscriptionService:
             logger.info(f"No subscriptions found for user {user_id}")
             return 0
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Upsert subscriptions
         for sub in subscriptions:
@@ -256,7 +254,7 @@ class YouTubeSubscriptionService:
         page_size: int = 50,
         show_hidden: bool = False,
         starred_only: bool = False,
-    ) -> Tuple[List[YouTubeSubscription], int]:
+    ) -> tuple[list[YouTubeSubscription], int]:
         """Get cached subscriptions from database.
 
         Args:
@@ -280,9 +278,7 @@ class YouTubeSubscriptionService:
             conditions.append(YouTubeSubscription.is_starred == True)  # noqa: E712
 
         # Get total count
-        count_result = await db.execute(
-            select(func.count(YouTubeSubscription.id)).where(*conditions)
-        )
+        count_result = await db.execute(select(func.count(YouTubeSubscription.id)).where(*conditions))
         total = count_result.scalar() or 0
 
         # Get paginated results
@@ -303,7 +299,7 @@ class YouTubeSubscriptionService:
         db: AsyncSession,
         user_id: str,
         channel_id: str,
-    ) -> Optional[YouTubeSubscription]:
+    ) -> YouTubeSubscription | None:
         """Get subscription by channel ID.
 
         Args:
@@ -348,7 +344,7 @@ class YouTubeSubscriptionService:
         self,
         db: AsyncSession,
         user_id: str,
-        channel_ids: List[str],
+        channel_ids: list[str],
         is_starred: bool,
     ) -> int:
         """Batch update starred status for multiple channels.
@@ -370,7 +366,7 @@ class YouTubeSubscriptionService:
                 YouTubeSubscription.user_id == user_id,
                 YouTubeSubscription.channel_id.in_(channel_ids),
             )
-            .values(is_starred=is_starred, updated_at=datetime.now(timezone.utc))
+            .values(is_starred=is_starred, updated_at=datetime.now(UTC))
         )
 
         await db.commit()
@@ -380,10 +376,10 @@ class YouTubeSubscriptionService:
         self,
         db: AsyncSession,
         user_id: str,
-        channel_ids: List[str],
+        channel_ids: list[str],
         auto_transcribe: bool,
-        max_duration: Optional[int] = None,
-        language: Optional[str] = None,
+        max_duration: int | None = None,
+        language: str | None = None,
     ) -> int:
         """Batch update auto-transcribe settings for multiple channels.
 
@@ -400,9 +396,9 @@ class YouTubeSubscriptionService:
         """
         from sqlalchemy import update
 
-        values: Dict[str, Any] = {
+        values: dict[str, Any] = {
             "auto_transcribe": auto_transcribe,
-            "updated_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(UTC),
         }
 
         if max_duration is not None:
@@ -427,7 +423,7 @@ class YouTubeSubscriptionService:
         self,
         db: AsyncSession,
         user_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get YouTube connection status.
 
         Args:

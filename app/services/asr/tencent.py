@@ -9,7 +9,7 @@ import logging
 import mimetypes
 import re
 import time
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -53,30 +53,22 @@ class TencentASRService(ASRService):
     def provider(self) -> str:
         return "tencent"
 
-    def __init__(self, config: Optional[object] = None) -> None:
+    def __init__(self, config: object | None = None) -> None:
         app_id = get_config_value(config, "app_id", settings.TENCENT_ASR_APP_ID)
         secret_id = get_config_value(config, "secret_id", settings.TENCENT_SECRET_ID)
         secret_key = get_config_value(config, "secret_key", settings.TENCENT_SECRET_KEY)
         region = get_config_value(config, "region", settings.TENCENT_REGION)
-        engine_model_type = get_config_value(
-            config, "engine_model_type", settings.TENCENT_ASR_ENGINE_MODEL_TYPE
-        )
+        engine_model_type = get_config_value(config, "engine_model_type", settings.TENCENT_ASR_ENGINE_MODEL_TYPE)
         engine_model_type_file_fast = get_config_value(
             config,
             "engine_model_type_file_fast",
             settings.TENCENT_ASR_ENGINE_MODEL_TYPE_FILE_FAST,
         )
         channel_num = get_config_value(config, "channel_num", settings.TENCENT_ASR_CHANNEL_NUM)
-        res_text_format = get_config_value(
-            config, "res_text_format", settings.TENCENT_ASR_RES_TEXT_FORMAT
-        )
+        res_text_format = get_config_value(config, "res_text_format", settings.TENCENT_ASR_RES_TEXT_FORMAT)
         speaker_dia = get_config_value(config, "speaker_dia", settings.TENCENT_ASR_SPEAKER_DIA)
-        speaker_number = get_config_value(
-            config, "speaker_number", settings.TENCENT_ASR_SPEAKER_NUMBER
-        )
-        poll_interval = get_config_value(
-            config, "poll_interval", settings.TENCENT_ASR_POLL_INTERVAL
-        )
+        speaker_number = get_config_value(config, "speaker_number", settings.TENCENT_ASR_SPEAKER_NUMBER)
+        poll_interval = get_config_value(config, "poll_interval", settings.TENCENT_ASR_POLL_INTERVAL)
         max_wait = get_config_value(config, "max_wait", settings.TENCENT_ASR_MAX_WAIT_SECONDS)
         source_type = get_config_value(config, "source_type", settings.TENCENT_ASR_SOURCE_TYPE)
         if not secret_id or not secret_key or not region:
@@ -108,7 +100,7 @@ class TencentASRService(ASRService):
 
     def _resolve_speaker_settings(
         self,
-        enable_speaker_diarization: Optional[bool],
+        enable_speaker_diarization: bool | None,
     ) -> tuple[int, int]:
         speaker_dia = self._speaker_dia
         speaker_number = self._speaker_number
@@ -122,10 +114,10 @@ class TencentASRService(ASRService):
     async def transcribe(
         self,
         audio_url: str,
-        status_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        status_callback: Callable[[str], Awaitable[None]] | None = None,
         *,
-        enable_speaker_diarization: Optional[bool] = None,
-        asr_variant: Optional[str] = None,
+        enable_speaker_diarization: bool | None = None,
+        asr_variant: str | None = None,
     ) -> list[TranscriptSegment]:
         if not audio_url:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="audio_url")
@@ -150,7 +142,7 @@ class TencentASRService(ASRService):
         result = await self._poll_task(task_id)
         return self._parse_result(result)
 
-    def _normalize_app_id(self, raw: Optional[str]) -> Optional[str]:
+    def _normalize_app_id(self, raw: str | None) -> str | None:
         if raw:
             return str(raw).strip()
         bucket = settings.COS_BUCKET
@@ -172,8 +164,8 @@ class TencentASRService(ASRService):
         self,
         audio_url: str,
         *,
-        enable_speaker_diarization: Optional[bool] = None,
-        asr_variant: Optional[str] = None,
+        enable_speaker_diarization: bool | None = None,
+        asr_variant: str | None = None,
     ) -> str:
         if asr_variant == "file_fast" and self._engine_model_type_file_fast:
             engine_model_type = self._engine_model_type_file_fast
@@ -222,7 +214,7 @@ class TencentASRService(ASRService):
         self,
         audio_url: str,
         *,
-        enable_speaker_diarization: Optional[bool] = None,
+        enable_speaker_diarization: bool | None = None,
     ) -> list[TranscriptSegment]:
         if not self._app_id:
             raise BusinessError(
@@ -264,9 +256,7 @@ class TencentASRService(ASRService):
         try:
             payload = response.json()
         except ValueError as exc:
-            raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED, reason="invalid flash response"
-            ) from exc
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="invalid flash response") from exc
         code = payload.get("code")
         if code != 0:
             message = payload.get("message") or "flash api error"
@@ -372,7 +362,7 @@ class TencentASRService(ASRService):
         return segments
 
     @staticmethod
-    def _parse_flash_words(raw: object) -> Optional[list[WordTimestamp]]:
+    def _parse_flash_words(raw: object) -> list[WordTimestamp] | None:
         if not isinstance(raw, list):
             return None
         words: list[WordTimestamp] = []
@@ -399,14 +389,14 @@ class TencentASRService(ASRService):
         return words or None
 
     @staticmethod
-    def _ms_to_seconds(value: object) -> Optional[float]:
+    def _ms_to_seconds(value: object) -> float | None:
         numeric = TencentASRService._to_float(value)
         if numeric is None:
             return None
         return numeric / 1000.0
 
     @staticmethod
-    def _to_float(value: object) -> Optional[float]:
+    def _to_float(value: object) -> float | None:
         if isinstance(value, (int, float, str)):
             try:
                 return float(value)
@@ -426,9 +416,7 @@ class TencentASRService(ASRService):
             result = await asyncio.to_thread(self._describe_task, task_id)
             status = result.get("Status")
             status_str = result.get("StatusStr", "unknown")
-            logger.info(
-                f"ASR poll #{poll_count} for task {task_id}: status={status} ({status_str})"
-            )
+            logger.info(f"ASR poll #{poll_count} for task {task_id}: status={status} ({status_str})")
             if status == 2:
                 logger.info(f"ASR task {task_id} completed successfully after {poll_count} polls")
                 return result
@@ -464,9 +452,7 @@ class TencentASRService(ASRService):
         if result_detail is None:
             result_detail = payload.get("Result")
             if result_detail is None:
-                raise BusinessError(
-                    ErrorCode.ASR_SERVICE_FAILED, reason="missing ResultDetail/Result"
-                )
+                raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="missing ResultDetail/Result")
         if isinstance(result_detail, str):
             try:
                 parsed = json.loads(result_detail)
@@ -488,23 +474,17 @@ class TencentASRService(ASRService):
             elif isinstance(parsed, dict):
                 result_detail = [parsed]
             else:
-                raise BusinessError(
-                    ErrorCode.ASR_SERVICE_FAILED, reason="ResultDetail/Result is not a list"
-                )
+                raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="ResultDetail/Result is not a list")
         elif isinstance(result_detail, dict):
             result_detail = [result_detail]
         if not isinstance(result_detail, list):
-            raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED, reason="ResultDetail/Result is not a list"
-            )
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="ResultDetail/Result is not a list")
 
         segments: list[TranscriptSegment] = []
         for item in result_detail:
             if not isinstance(item, dict):
                 continue
-            use_detail = use_detail or any(
-                key in item for key in ("FinalSentence", "StartMs", "EndMs")
-            )
+            use_detail = use_detail or any(key in item for key in ("FinalSentence", "StartMs", "EndMs"))
             words = self._parse_words(item)
             if use_detail:
                 speaker_id = item.get("SpeakerId")
@@ -545,28 +525,19 @@ class TencentASRService(ASRService):
                     return timestamped
         return segments
 
-    def _parse_words(self, item: dict[str, object]) -> Optional[list[WordTimestamp]]:
-        words_raw = (
-            item.get("SentenceWords")
-            or item.get("Words")
-            or item.get("WordList")
-            or item.get("WordSet")
-        )
+    def _parse_words(self, item: dict[str, object]) -> list[WordTimestamp] | None:
+        words_raw = item.get("SentenceWords") or item.get("Words") or item.get("WordList") or item.get("WordSet")
         if not isinstance(words_raw, list):
             return None
         words: list[WordTimestamp] = []
         for entry in words_raw:
             if not isinstance(entry, dict):
                 continue
-            word_value = (
-                entry.get("Word") or entry.get("WordStr") or entry.get("Text") or entry.get("Value")
-            )
+            word_value = entry.get("Word") or entry.get("WordStr") or entry.get("Text") or entry.get("Value")
             if not isinstance(word_value, str):
                 continue
             base_start_ms = self._to_float(item.get("StartMs"))
-            offset_start = self._to_float(
-                entry.get("OffsetStartMs") or entry.get("OffsetStartTime")
-            )
+            offset_start = self._to_float(entry.get("OffsetStartMs") or entry.get("OffsetStartTime"))
             offset_end = self._to_float(entry.get("OffsetEndMs") or entry.get("OffsetEndTime"))
             start_val = entry.get("StartTime") or entry.get("StartMs") or entry.get("BeginTime")
             end_val = entry.get("EndTime") or entry.get("EndMs") or entry.get("FinishTime")
@@ -590,7 +561,7 @@ class TencentASRService(ASRService):
         return words or None
 
     @staticmethod
-    def _to_seconds(value: object) -> Optional[float]:
+    def _to_seconds(value: object) -> float | None:
         numeric = TencentASRService._to_float(value)
         if numeric is None:
             return None
@@ -664,7 +635,7 @@ class TencentASRService(ASRService):
     async def batch_transcribe(
         self,
         audio_urls: list[str],
-        status_callback: Optional[Callable[[str, int, int], Awaitable[None]]] = None,
+        status_callback: Callable[[str, int, int], Awaitable[None]] | None = None,
     ) -> list[list[TranscriptSegment]]:
         """批量转写音频
 
@@ -703,9 +674,7 @@ class TencentASRService(ASRService):
         """
         try:
             # 检查必要的配置是否存在
-            if not self._secret_id or not self._secret_key or not self._region:
-                return False
-            return True
+            return not (not self._secret_id or not self._secret_key or not self._region)
         except Exception:
             return False
 

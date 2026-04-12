@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +35,7 @@ class QuotaAlertInfo:
     used_seconds: float
     usage_percent: float
     threshold: int
-    owner_user_id: Optional[str]
+    owner_user_id: str | None
 
 
 def _active_window_clause(now: datetime) -> object:
@@ -45,7 +44,7 @@ def _active_window_clause(now: datetime) -> object:
 
 async def check_quota_alerts(
     db: AsyncSession,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> list[QuotaAlertInfo]:
     """检查所有配额的使用率，返回需要预警的配额列表
 
@@ -56,7 +55,7 @@ async def check_quota_alerts(
     Returns:
         需要预警的配额信息列表
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     # 查询所有活跃的配额
     result = await db.execute(
@@ -93,8 +92,8 @@ async def send_quota_alert_notification(
     db: AsyncSession,
     user_id: str,
     alert: QuotaAlertInfo,
-    now: Optional[datetime] = None,
-) -> Optional[Notification]:
+    now: datetime | None = None,
+) -> Notification | None:
     """发送配额预警通知
 
     每个阈值每天最多发送一次通知。
@@ -108,10 +107,10 @@ async def send_quota_alert_notification(
     Returns:
         创建的通知对象，如果今天已发送则返回 None
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     # 检查今天是否已发送过此阈值的通知
-    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    today_start = datetime(now.year, now.month, now.day, tzinfo=UTC)
 
     existing = await db.execute(
         select(Notification)
@@ -196,7 +195,7 @@ async def send_quota_alert_notification(
 
 async def process_all_quota_alerts(
     db: AsyncSession,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> int:
     """处理所有配额预警
 
@@ -209,7 +208,7 @@ async def process_all_quota_alerts(
     Returns:
         发送的通知数量
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     alerts = await check_quota_alerts(db, now)
     sent_count = 0

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import tos
 from tos.exceptions import TosClientError, TosServerError
@@ -33,7 +33,7 @@ class TOSStorageService(StorageService):
     def provider(self) -> str:
         return "tos"
 
-    def __init__(self, config: Optional[object] = None) -> None:
+    def __init__(self, config: object | None = None) -> None:
         access_key = get_config_value(config, "access_key", settings.TOS_ACCESS_KEY)
         secret_key = get_config_value(config, "secret_key", settings.TOS_SECRET_KEY)
         endpoint = get_config_value(config, "endpoint", settings.TOS_ENDPOINT)
@@ -42,8 +42,7 @@ class TOSStorageService(StorageService):
 
         if not access_key or not secret_key or not endpoint or not region or not bucket:
             raise RuntimeError(
-                "TOS settings are not set (TOS_ACCESS_KEY/TOS_SECRET_KEY/"
-                "TOS_ENDPOINT/TOS_REGION/TOS_BUCKET)"
+                "TOS settings are not set (TOS_ACCESS_KEY/TOS_SECRET_KEY/TOS_ENDPOINT/TOS_REGION/TOS_BUCKET)"
             )
 
         self._bucket = bucket
@@ -81,9 +80,7 @@ class TOSStorageService(StorageService):
         RetryConfig(max_attempts=3, initial_delay=1.0, max_delay=10.0),
         exceptions=(TosClientError, TosServerError, ConnectionError, TimeoutError),
     )
-    def upload_file(
-        self, object_name: str, file_path: str, content_type: str | None = None
-    ) -> None:
+    def upload_file(self, object_name: str, file_path: str, content_type: str | None = None) -> None:
         resolved_type = content_type or mimetypes.guess_type(file_path)[0]
         size_bytes = Path(file_path).stat().st_size
         self._client.put_object_from_file(
@@ -110,7 +107,7 @@ class TOSStorageService(StorageService):
                 return False
             raise
 
-    def get_file_info(self, object_name: str) -> Dict[str, Any]:
+    def get_file_info(self, object_name: str) -> dict[str, Any]:
         info = self._client.head_object(self._bucket, object_name)
         return {
             "object_name": object_name,
@@ -121,7 +118,7 @@ class TOSStorageService(StorageService):
             "metadata": info.meta,
         }
 
-    def list_files(self, prefix: str = "", limit: int = 1000) -> List[str]:
+    def list_files(self, prefix: str = "", limit: int = 1000) -> list[str]:
         listed = self._client.list_objects(self._bucket, prefix=prefix, max_keys=limit)
         return [item.key for item in listed.contents]
 

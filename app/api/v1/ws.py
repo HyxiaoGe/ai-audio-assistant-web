@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import json
 from dataclasses import dataclass
-from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
@@ -46,9 +45,7 @@ async def _send_error(websocket: WebSocket, code: ErrorCode, locale: str, trace_
     await websocket.send_text(json.dumps(payload, ensure_ascii=False))
 
 
-async def _send_ok(
-    websocket: WebSocket, message: str, data: dict[str, object], trace_id: str
-) -> None:
+async def _send_ok(websocket: WebSocket, message: str, data: dict[str, object], trace_id: str) -> None:
     payload = {"code": 0, "message": message, "data": data, "traceId": trace_id}
     await websocket.send_text(json.dumps(payload, ensure_ascii=False))
 
@@ -61,7 +58,7 @@ def _get_close_code(error_code: ErrorCode) -> int:
 
 async def _authenticate_token(
     token: str, session: AsyncSession, locale: str, trace_id: str
-) -> tuple[Optional[WsUser], Optional[ErrorCode]]:
+) -> tuple[WsUser | None, ErrorCode | None]:
     try:
         auth_user = await verify_access_token(token)
     except Exception as exc:
@@ -78,7 +75,7 @@ async def _authenticate_token(
 
 async def _authenticate_header(
     websocket: WebSocket, session: AsyncSession, locale: str, trace_id: str
-) -> tuple[Optional[WsUser], Optional[ErrorCode]]:
+) -> tuple[WsUser | None, ErrorCode | None]:
     authorization = websocket.headers.get("Authorization")
     try:
         token = extract_bearer_token(authorization)
@@ -91,10 +88,10 @@ async def _authenticate_header(
 
 async def _authenticate_in_band(
     websocket: WebSocket, session: AsyncSession, locale: str, trace_id: str
-) -> tuple[Optional[WsUser], Optional[ErrorCode]]:
+) -> tuple[WsUser | None, ErrorCode | None]:
     try:
         raw_message = await asyncio.wait_for(websocket.receive_text(), timeout=AUTH_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return None, ErrorCode.AUTH_TOKEN_NOT_PROVIDED
 
     try:

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Dict, List
+from collections.abc import AsyncIterator
+from typing import Any
 
 
 class LLMService(ABC):
@@ -99,7 +100,7 @@ class LLMService(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def chat(self, messages: List[Dict[str, str]], **kwargs: Any) -> str:
+    async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
         """通用对话接口（非流式）
 
         Args:
@@ -115,9 +116,7 @@ class LLMService(ABC):
         raise NotImplementedError("通用对话功能待实现")
 
     @abstractmethod
-    async def chat_stream(
-        self, messages: List[Dict[str, str]], **kwargs: Any
-    ) -> AsyncIterator[str]:
+    async def chat_stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
         """通用对话接口（流式）
 
         Args:

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from sqlalchemy import ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -22,11 +20,11 @@ class LLMUsage(BaseRecord):
     user_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False
     )
-    task_id: Mapped[Optional[str]] = mapped_column(
+    task_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
     )
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
-    model_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    model_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     call_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    summary_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    summary_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     status: Mapped[str] = mapped_column(String(20), server_default=text("'success'"))

@@ -53,9 +53,7 @@ async def get_transcripts(
     user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     # Verify task exists and belongs to user
-    task_stmt = select(Task).where(
-        Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None)
-    )
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
     task = task_result.scalar_one_or_none()
 
@@ -63,9 +61,7 @@ async def get_transcripts(
         raise BusinessError(ErrorCode.TASK_NOT_FOUND)
 
     # Get all transcripts for this task
-    transcript_stmt = (
-        select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
-    )
+    transcript_stmt = select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
     transcript_result = await db.execute(transcript_stmt)
     transcripts = transcript_result.scalars().all()
 

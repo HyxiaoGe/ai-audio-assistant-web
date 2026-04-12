@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -34,7 +34,7 @@ class Notification(BaseRecord):
     user_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False
     )
-    task_id: Mapped[Optional[str]] = mapped_column(
+    task_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("tasks.id", ondelete="SET NULL"),  # 任务删除后通知仍保留
         nullable=True,
@@ -49,18 +49,14 @@ class Notification(BaseRecord):
 
     message: Mapped[str] = mapped_column(Text, nullable=False)  # 详细描述
 
-    action_url: Mapped[Optional[str]] = mapped_column(
-        String(500), nullable=True
-    )  # 跳转链接 /tasks/{id}
+    action_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 跳转链接 /tasks/{id}
 
     # Status fields
-    read_at: Mapped[Optional[datetime]] = mapped_column(
+    read_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )  # NULL = 未读，有值 = 已读时间
 
-    dismissed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )  # 用户主动关闭的时间
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 用户主动关闭的时间
 
     # Extension fields
     extra_data: Mapped[dict] = mapped_column(
@@ -71,13 +67,11 @@ class Notification(BaseRecord):
         String(10), default="normal", server_default=text("'normal'"), nullable=False
     )  # urgent, high, normal, low
 
-    expires_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )  # 过期时间（可选）
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 过期时间（可选）
 
     # Relationships
-    user: Mapped["UserProfile"] = relationship("UserProfile", back_populates="notifications")  # type: ignore
-    task: Mapped[Optional["Task"]] = relationship(  # type: ignore
+    user: Mapped[UserProfile] = relationship("UserProfile", back_populates="notifications")  # type: ignore
+    task: Mapped[Task | None] = relationship(  # type: ignore
         "Task", back_populates="notifications"
     )
 

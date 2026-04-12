@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import time
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 
 import httpx
 from aliyunsdkcore.client import AcsClient
@@ -55,11 +55,9 @@ class AliyunASRService(ASRService):
     def provider(self) -> str:
         return "aliyun"
 
-    def __init__(self, config: Optional[object] = None) -> None:
+    def __init__(self, config: object | None = None) -> None:
         access_key_id = get_config_value(config, "access_key_id", settings.ALIYUN_ACCESS_KEY_ID)
-        access_key_secret = get_config_value(
-            config, "access_key_secret", settings.ALIYUN_ACCESS_KEY_SECRET
-        )
+        access_key_secret = get_config_value(config, "access_key_secret", settings.ALIYUN_ACCESS_KEY_SECRET)
         app_key = get_config_value(config, "app_key", settings.ALIYUN_NLS_APP_KEY)
         region = get_config_value(config, "region", "cn-shanghai")
 
@@ -73,7 +71,7 @@ class AliyunASRService(ASRService):
         self._access_key_secret = access_key_secret
         self._app_key = app_key
         self._region = region
-        self._token: Optional[str] = None
+        self._token: str | None = None
         self._token_expires_at: float = 0.0
         self._token_lock = asyncio.Lock()
 
@@ -85,7 +83,7 @@ class AliyunASRService(ASRService):
     async def transcribe(
         self,
         audio_url: str,
-        status_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        status_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> list[TranscriptSegment]:
         """转写音频文件"""
         if not audio_url:
@@ -138,9 +136,7 @@ class AliyunASRService(ASRService):
             response = client.do_action_with_exception(request)
             payload = json.loads(response)
         except Exception as exc:  # pragma: no cover - sdk wrapper
-            raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED, reason=f"Create token failed: {exc}"
-            ) from exc
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Create token failed: {exc}") from exc
 
         token_info = payload.get("Token") if isinstance(payload, dict) else None
         if not isinstance(token_info, dict):
@@ -157,9 +153,7 @@ class AliyunASRService(ASRService):
             if expires_at > 1e12:
                 expires_at = expires_at / 1000.0
         except (TypeError, ValueError) as exc:
-            raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED, reason=f"Invalid token expiry: {expire_time}"
-            ) from exc
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Invalid token expiry: {expire_time}") from exc
 
         return token, expires_at
 
@@ -190,13 +184,9 @@ class AliyunASRService(ASRService):
                 )
             data = response.json()
         except httpx.HTTPError as exc:
-            raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED, reason=f"Submit task failed: {exc}"
-            ) from exc
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Submit task failed: {exc}") from exc
         except json.JSONDecodeError as exc:
-            raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED, reason=f"Invalid response JSON: {exc}"
-            ) from exc
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Invalid response JSON: {exc}") from exc
 
         status = data.get("status")
         if status not in (None, 20000000):
@@ -214,9 +204,7 @@ class AliyunASRService(ASRService):
             except json.JSONDecodeError:
                 return response.text or "Invalid JSON response"
             if isinstance(payload, dict):
-                return str(
-                    payload.get("message") or payload.get("msg") or payload.get("error") or payload
-                )
+                return str(payload.get("message") or payload.get("msg") or payload.get("error") or payload)
             return str(payload)
         return response.text or "Empty response body"
 
@@ -258,13 +246,9 @@ class AliyunASRService(ASRService):
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPError as exc:
-            raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED, reason=f"Query task failed: {exc}"
-            ) from exc
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Query task failed: {exc}") from exc
         except json.JSONDecodeError as exc:
-            raise BusinessError(
-                ErrorCode.ASR_SERVICE_FAILED, reason=f"Invalid response JSON: {exc}"
-            ) from exc
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Invalid response JSON: {exc}") from exc
 
         return data
 
@@ -275,17 +259,14 @@ class AliyunASRService(ASRService):
             if isinstance(flash_result, dict) and "sentences" in flash_result:
                 sentences = flash_result["sentences"]
                 if not sentences:
-                    raise BusinessError(
-                        ErrorCode.ASR_SERVICE_FAILED, reason="Empty sentences in flash_result"
-                    )
+                    raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="Empty sentences in flash_result")
 
                 segments = []
                 for sentence in sentences:
                     segments.append(
                         TranscriptSegment(
                             speaker_id=None,
-                            start_time=sentence.get("begin_time", 0)
-                            / 1000.0,  # Convert ms to seconds
+                            start_time=sentence.get("begin_time", 0) / 1000.0,  # Convert ms to seconds
                             end_time=sentence.get("end_time", 0) / 1000.0,
                             content=sentence.get("text", "").strip(),
                             confidence=None,
@@ -365,7 +346,7 @@ class AliyunASRService(ASRService):
     async def batch_transcribe(
         self,
         audio_urls: list[str],
-        status_callback: Optional[Callable[[str, int, int], Awaitable[None]]] = None,
+        status_callback: Callable[[str, int, int], Awaitable[None]] | None = None,
     ) -> list[list[TranscriptSegment]]:
         if not audio_urls:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="audio_urls")

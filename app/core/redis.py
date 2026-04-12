@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from redis.asyncio import Redis
 
 from app.config import settings
 
-_redis_client: Optional[Redis] = None
+_redis_client: Redis | None = None
 
 
 def _get_redis_url() -> str:

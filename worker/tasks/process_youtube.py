@@ -7,10 +7,11 @@ import logging
 import re
 import subprocess  # nosec B404
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -47,7 +48,7 @@ from worker.tasks.image_generator import (
 logger = logging.getLogger("worker.process_youtube")
 
 
-def _load_llm_model_id(provider: str, user_id: Optional[str]) -> Optional[str]:
+def _load_llm_model_id(provider: str, user_id: str | None) -> str | None:
     try:
         config = ConfigManager.get_config("llm", provider, user_id=user_id)
     except Exception:
@@ -65,7 +66,7 @@ def _select_default_llm_provider() -> str:
     return providers[0]
 
 
-def _resolve_llm_selection(task: Task, user_id: Optional[str]) -> tuple[str, str]:
+def _resolve_llm_selection(task: Task, user_id: str | None) -> tuple[str, str]:
     options = task.options or {}
     raw_provider = options.get("llm_provider") or options.get("provider")
     raw_model_id = options.get("llm_model_id") or options.get("model_id")
@@ -79,7 +80,7 @@ def _resolve_llm_selection(task: Task, user_id: Optional[str]) -> tuple[str, str
     return provider, model_id
 
 
-def _resolve_asr_provider(task: Task) -> Optional[str]:
+def _resolve_asr_provider(task: Task) -> str | None:
     options = task.options or {}
     raw_provider = options.get("asr_provider")
     return raw_provider if isinstance(raw_provider, str) else None
@@ -91,7 +92,7 @@ def _resolve_asr_variant(task: Task) -> str:
     return raw_variant if isinstance(raw_variant, str) and raw_variant else "file"
 
 
-def _resolve_tencent_app_id(user_id: Optional[str]) -> Optional[str]:
+def _resolve_tencent_app_id(user_id: str | None) -> str | None:
     try:
         config = ConfigManager.get_config("asr", "tencent", user_id=user_id)
     except Exception:
@@ -108,7 +109,7 @@ def _resolve_tencent_app_id(user_id: Optional[str]) -> Optional[str]:
     return None
 
 
-def _supports_file_fast(user_id: Optional[str]) -> bool:
+def _supports_file_fast(user_id: str | None) -> bool:
     if "tencent" not in ServiceRegistry.list_services("asr"):
         return False
     return bool(_resolve_tencent_app_id(user_id))
@@ -127,7 +128,7 @@ def _estimate_asr_duration(task: Task, segments: list[TranscriptSegment]) -> int
 
 def _normalize_speaker_segments(
     segments: list[TranscriptSegment],
-    enable_speaker_diarization: Optional[bool],
+    enable_speaker_diarization: bool | None,
 ) -> list[TranscriptSegment]:
     if enable_speaker_diarization is False:
         return [replace(segment, speaker_id=None) for segment in segments]
@@ -139,8 +140,8 @@ def _normalize_speaker_segments(
 
 
 def _serialize_words(
-    words: Optional[list[WordTimestamp]],
-) -> Optional[list[dict[str, float | str | None]]]:
+    words: list[WordTimestamp] | None,
+) -> list[dict[str, float | str | None]] | None:
     if not words:
         return None
     return [
@@ -156,9 +157,9 @@ def _serialize_words(
 
 def _build_asr_kwargs(
     transcribe: Any,
-    status_callback: Optional[Callable[[str], Awaitable[None]]],
-    enable_speaker_diarization: Optional[bool],
-    asr_variant: Optional[str],
+    status_callback: Callable[[str], Awaitable[None]] | None,
+    enable_speaker_diarization: bool | None,
+    asr_variant: str | None,
 ) -> dict[str, Any]:
     params = inspect.signature(transcribe).parameters
     kwargs: dict[str, Any] = {}
@@ -195,13 +196,13 @@ def _get_download_format() -> str:
 
 
 def _build_file_key(filename: str, user_id: str) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ext = Path(filename).suffix.lower()
     file_id = uuid4().hex
     return f"youtube/{user_id}/{now:%Y/%m/%d}/{file_id}{ext}"
 
 
-def _extract_direct_url(info: dict) -> Optional[str]:
+def _extract_direct_url(info: dict) -> str | None:
     url = info.get("url")
     if isinstance(url, str) and url:
         return url
@@ -222,7 +223,7 @@ def _extract_direct_url(info: dict) -> Optional[str]:
     return None
 
 
-def _extract_youtube_info(url: str) -> tuple[Optional[str], Optional[str]]:
+def _extract_youtube_info(url: str) -> tuple[str | None, str | None]:
     output_dir = _get_download_dir()
     outtmpl = str(output_dir / _get_output_template())
     fmt = _get_download_format()
@@ -256,7 +257,7 @@ def _download_youtube(url: str, progress_callback=None) -> str:
         return ydl.prepare_filename(info)
 
 
-def _get_audio_duration(file_path: str) -> Optional[int]:
+def _get_audio_duration(file_path: str) -> int | None:
     """Get audio duration in seconds using ffprobe.
 
     Returns:
@@ -313,7 +314,7 @@ def _transcode_to_wav_16k(input_path: str) -> str:
     return output_path
 
 
-def _get_task(session: Session, task_id: str) -> Optional[Task]:
+def _get_task(session: Session, task_id: str) -> Task | None:
     result = session.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_(None)))
     return result.scalar_one_or_none()
 
@@ -321,8 +322,8 @@ def _get_task(session: Session, task_id: str) -> Optional[Task]:
 def _update_metadata(
     session: Session,
     task: Task,
-    direct_url: Optional[str],
-    title: Optional[str],
+    direct_url: str | None,
+    title: str | None,
 ) -> None:
     metadata = dict(task.source_metadata or {})
     if direct_url:
@@ -337,7 +338,7 @@ def _update_source_key(
     session: Session,
     task: Task,
     source_key: str,
-    duration_seconds: Optional[int] = None,
+    duration_seconds: int | None = None,
 ) -> None:
     task.source_key = source_key
     if duration_seconds is not None:
@@ -350,8 +351,8 @@ def _update_task(
     task: Task,
     status: str,
     progress: int,
-    stage: Optional[str],
-    request_id: Optional[str],
+    stage: str | None,
+    request_id: str | None,
 ) -> None:
     task.status = status
     task.progress = max(task.progress or 0, progress)
@@ -409,9 +410,7 @@ def _update_task(
     publish_task_update_sync(task.id, str(task.user_id), message)
 
 
-def _mark_failed(
-    session: Session, task: Task, error: BusinessError, request_id: Optional[str]
-) -> None:
+def _mark_failed(session: Session, task: Task, error: BusinessError, request_id: str | None) -> None:
     task.status = "failed"
     task.progress = 0
     task.error_code = error.code.value
@@ -466,7 +465,7 @@ def _mark_failed(
 
 def _process_youtube(
     task_id: str,
-    request_id: Optional[str],
+    request_id: str | None,
 ) -> None:
     """处理 YouTube 任务（支持阶段管理和智能重试）
 
@@ -582,9 +581,7 @@ def _process_youtube(
 
             original_filename = _download_youtube(task.source_url, progress_callback=_progress_hook)
             if not original_filename:
-                raise BusinessError(
-                    ErrorCode.FILE_PROCESSING_ERROR, reason="download produced empty file"
-                )
+                raise BusinessError(ErrorCode.FILE_PROCESSING_ERROR, reason="download produced empty file")
         except Exception as exc:
             logger.exception("youtube download failed: %s", exc)
             if not direct_url:
@@ -729,9 +726,7 @@ def _process_youtube(
     with get_sync_db_session() as session:
         task = _get_task(session, task_id)
         # 检查是否已有转写结果
-        existing_transcripts = (
-            session.query(Transcript).filter(Transcript.task_id == task_id).count()
-        )
+        existing_transcripts = session.query(Transcript).filter(Transcript.task_id == task_id).count()
 
         if existing_transcripts > 0:
             skip_transcribe = True
@@ -743,10 +738,7 @@ def _process_youtube(
             stage_manager.skip_stage(session, StageType.TRANSCRIBE, "Transcripts already exist")
 
             transcripts_list = (
-                session.query(Transcript)
-                .filter(Transcript.task_id == task_id)
-                .order_by(Transcript.sequence)
-                .all()
+                session.query(Transcript).filter(Transcript.task_id == task_id).order_by(Transcript.sequence).all()
             )
 
             from app.services.asr.base import TranscriptSegment
@@ -774,9 +766,7 @@ def _process_youtube(
                 if task.source_key:
                     # 使用 SmartFactory 获取 COS storage
                     cos_storage = asyncio.run(
-                        SmartFactory.get_service(
-                            "storage", provider="cos", user_id=str(task.user_id)
-                        )
+                        SmartFactory.get_service("storage", provider="cos", user_id=str(task.user_id))
                     )
                     audio_url = cos_storage.generate_presigned_url(task.source_key, expires_in=7200)
                     audio_candidates.append(audio_url)
@@ -797,10 +787,7 @@ def _process_youtube(
                     diarization = task.options.get("enable_speaker_diarization")
                 if not asr_provider:
                     # 确定可用的 variant 列表
-                    if asr_variant != "file":
-                        variants = [asr_variant]
-                    else:
-                        variants = ["file", "file_fast"]
+                    variants = [asr_variant] if asr_variant != "file" else ["file", "file_fast"]
                     if "file_fast" in variants and not _supports_file_fast(str(task.user_id)):
                         variants = [variant for variant in variants if variant != "file_fast"]
                         if not variants:
@@ -847,10 +834,10 @@ def _process_youtube(
                         provider=asr_provider,
                     )
                 )
-                last_error: Optional[BusinessError] = None
+                last_error: BusinessError | None = None
                 segments = []
                 asr_start_time = time.time()
-                successful_audio_url: Optional[str] = None
+                successful_audio_url: str | None = None
 
                 async def _asr_status(stage: str) -> None:
                     # ASR status callback (currently not used for progress updates)
@@ -1040,9 +1027,7 @@ def _process_youtube(
                         exc_info=True,
                         extra={"task_id": task_id},
                     )
-                stage_manager.complete_stage(
-                    session, StageType.TRANSCRIBE, {"segment_count": len(transcripts)}
-                )
+                stage_manager.complete_stage(session, StageType.TRANSCRIBE, {"segment_count": len(transcripts)})
                 logger.info(
                     "Task %s: Saved %d transcript segments",
                     task_id,
@@ -1072,9 +1057,7 @@ def _process_youtube(
                         for t in transcript_rows
                     ]
 
-                    polish_provider, polish_model_id = _resolve_llm_selection(
-                        task, str(task.user_id)
-                    )
+                    polish_provider, polish_model_id = _resolve_llm_selection(task, str(task.user_id))
                     polish_llm = asyncio.run(
                         SmartFactory.get_service(
                             "llm",
@@ -1145,9 +1128,7 @@ def _process_youtube(
                         _mark_failed(session, task, exc, request_id)
                     else:
                         error = BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=str(exc))
-                        stage_manager.fail_stage(
-                            session, StageType.TRANSCRIBE, error.code, str(error)
-                        )
+                        stage_manager.fail_stage(session, StageType.TRANSCRIBE, error.code, str(error))
                         _mark_failed(session, task, error, request_id)
             return
 
@@ -1196,10 +1177,7 @@ def _process_youtube(
                     session.commit()
                 # 从 DB 读取最新的转写内容（可能已被润色修改）
                 latest_transcripts = (
-                    session.query(Transcript)
-                    .filter(Transcript.task_id == task_id)
-                    .order_by(Transcript.sequence)
-                    .all()
+                    session.query(Transcript).filter(Transcript.task_id == task_id).order_by(Transcript.sequence).all()
                 )
                 full_text = "\n".join([t.content for t in latest_transcripts])
 
@@ -1236,9 +1214,7 @@ def _process_youtube(
                         },
                     )
                     try:
-                        content = asyncio.run(
-                            llm_service.summarize(full_text, summary_type, content_style)
-                        )
+                        content = asyncio.run(llm_service.summarize(full_text, summary_type, content_style))
                     except Exception:
                         if llm_provider:
                             llm_usages.append(
@@ -1297,9 +1273,7 @@ def _process_youtube(
 
                 # ========== 处理 overview 摘要的图片 ==========
                 for summary in summaries:
-                    if summary.summary_type == "overview" and is_auto_images_enabled(
-                        "overview", content_style
-                    ):
+                    if summary.summary_type == "overview" and is_auto_images_enabled("overview", content_style):
                         placeholders = extract_image_placeholders(summary.content)
                         if placeholders:
                             logger.info(
@@ -1319,9 +1293,7 @@ def _process_youtube(
                                     )
                                 )
                                 if image_results:
-                                    success_count = sum(
-                                        1 for r in image_results if r["status"] == "success"
-                                    )
+                                    success_count = sum(1 for r in image_results if r["status"] == "success")
                                     logger.info(
                                         "Task %s: Generated %d/%d images for overview summary",
                                         task_id,
@@ -1355,9 +1327,7 @@ def _process_youtube(
                                     extra={"task_id": task_id, "error": str(img_err)},
                                 )
 
-                stage_manager.complete_stage(
-                    session, StageType.SUMMARIZE, {"summary_count": len(summaries)}
-                )
+                stage_manager.complete_stage(session, StageType.SUMMARIZE, {"summary_count": len(summaries)})
                 logger.info(
                     "Task %s: All summaries saved to database",
                     task_id,
@@ -1373,9 +1343,7 @@ def _process_youtube(
                         _mark_failed(session, task, exc, request_id)
                     else:
                         error = BusinessError(ErrorCode.LLM_SERVICE_FAILED, reason=str(exc))
-                        stage_manager.fail_stage(
-                            session, StageType.SUMMARIZE, error.code, str(error)
-                        )
+                        stage_manager.fail_stage(session, StageType.SUMMARIZE, error.code, str(error))
                         _mark_failed(session, task, error, request_id)
             return
 
@@ -1447,7 +1415,7 @@ def _process_youtube(
 def process_youtube(
     self,
     task_id: str,
-    request_id: Optional[str] = None,
+    request_id: str | None = None,
 ) -> None:
     """Celery 任务入口：处理 YouTube 视频
 

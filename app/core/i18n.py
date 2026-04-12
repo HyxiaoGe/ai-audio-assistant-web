@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict
 
 from app.i18n.codes import ErrorCode
 
-_LOCALE_FILES: Dict[str, Path] = {
+_LOCALE_FILES: dict[str, Path] = {
     "zh": Path(__file__).resolve().parents[1] / "i18n" / "zh.json",
     "en": Path(__file__).resolve().parents[1] / "i18n" / "en.json",
 }
-_CACHE: Dict[str, Dict[int, str]] = {}
+_CACHE: dict[str, dict[int, str]] = {}
 
 
-def _load_locale_messages(locale: str) -> Dict[int, str]:
+def _load_locale_messages(locale: str) -> dict[int, str]:
     if locale in _CACHE:
         return _CACHE[locale]
     path = _LOCALE_FILES.get(locale)
@@ -25,7 +24,7 @@ def _load_locale_messages(locale: str) -> Dict[int, str]:
     if not isinstance(data, dict):
         _CACHE[locale] = {}
         return _CACHE[locale]
-    normalized: Dict[int, str] = {}
+    normalized: dict[int, str] = {}
     for key, value in data.items():
         if not isinstance(key, str) or not isinstance(value, str):
             continue

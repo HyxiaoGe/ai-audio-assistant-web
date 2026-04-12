@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from auth import AuthenticatedUser, JWTValidator
 
 from app.config import settings
@@ -15,14 +13,12 @@ _validator: JWTValidator | None = None
 def get_jwt_validator() -> JWTValidator:
     global _validator
     if _validator is None:
-        jwks_url = (
-            settings.AUTH_SERVICE_JWKS_URL or f"{settings.AUTH_SERVICE_URL}/.well-known/jwks.json"
-        )
+        jwks_url = settings.AUTH_SERVICE_JWKS_URL or f"{settings.AUTH_SERVICE_URL}/.well-known/jwks.json"
         _validator = JWTValidator(jwks_url=jwks_url, cache_ttl=300)
     return _validator
 
 
-def extract_bearer_token(authorization: Optional[str]) -> str:
+def extract_bearer_token(authorization: str | None) -> str:
     if not authorization:
         raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
     scheme, _, token = authorization.partition(" ")

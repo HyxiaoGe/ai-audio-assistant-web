@@ -53,10 +53,7 @@ def validate_mermaid(content: str) -> str:
     # 基本验证：检查是否以合法的 Mermaid 图表类型开头
     valid_types = ["mindmap", "timeline", "flowchart", "graph", "sequenceDiagram"]
     if not any(mermaid_code.startswith(diagram_type) for diagram_type in valid_types):
-        raise ValueError(
-            f"Invalid Mermaid syntax: must start with one of {valid_types}, "
-            f"got: {mermaid_code[:50]}..."
-        )
+        raise ValueError(f"Invalid Mermaid syntax: must start with one of {valid_types}, got: {mermaid_code[:50]}...")
 
     logger.info(f"Validated Mermaid code, length: {len(mermaid_code)} characters")
     return mermaid_code
@@ -85,9 +82,7 @@ async def render_mermaid_to_image(
         RuntimeError: 如果渲染失败
     """
     # 创建临时文件
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".mmd", delete=False, encoding="utf-8"
-    ) as mmd_file:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".mmd", delete=False, encoding="utf-8") as mmd_file:
         mmd_file.write(mermaid_code)
         mmd_path = mmd_file.name
 
@@ -126,9 +121,7 @@ async def render_mermaid_to_image(
         with open(output_path, "rb") as f:
             image_data = f.read()
 
-        logger.info(
-            f"Successfully rendered {output_format.upper()} image, size: {len(image_data)} bytes"
-        )
+        logger.info(f"Successfully rendered {output_format.upper()} image, size: {len(image_data)} bytes")
         return image_data
 
     finally:
@@ -218,14 +211,11 @@ async def generate_visual_summary(
     quality_notice = TranscriptProcessor.get_quality_notice(quality)
 
     logger.info(
-        f"Task {task_id}: Quality assessment - score: {quality.quality_score}, "
-        f"confidence: {quality.avg_confidence:.2f}"
+        f"Task {task_id}: Quality assessment - score: {quality.quality_score}, confidence: {quality.avg_confidence:.2f}"
     )
 
     # ===== Step 2: 预处理转写文本 =====
-    preprocessed_text = TranscriptProcessor.preprocess(
-        segments, filter_filler_words=True, merge_same_speaker=True
-    )
+    preprocessed_text = TranscriptProcessor.preprocess(segments, filter_filler_words=True, merge_same_speaker=True)
 
     logger.info(f"Task {task_id}: Preprocessed text length: {len(preprocessed_text)} chars")
 
@@ -246,14 +236,9 @@ async def generate_visual_summary(
         # If provider is set but model_id is not, use default model for that provider
         model_id = default_models.get(provider, "deepseek-chat")
 
-    llm_service: LLMService = await SmartFactory.get_service(
-        "llm", provider=provider, model_id=model_id
-    )
+    llm_service: LLMService = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
 
-    logger.info(
-        f"Task {task_id}: Using LLM - provider: {llm_service.provider}, "
-        f"model: {llm_service.model_name}"
-    )
+    logger.info(f"Task {task_id}: Using LLM - provider: {llm_service.provider}, model: {llm_service.model_name}")
 
     # ===== Step 4: 获取可视化提示词 =====
     prompt_config = get_prompt_manager().get_prompt(
@@ -283,9 +268,7 @@ async def generate_visual_summary(
     try:
         mermaid_code = validate_mermaid(raw_output)
     except ValueError as e:
-        logger.error(
-            f"Task {task_id}: Mermaid validation failed: {e}\n" f"Raw output: {raw_output[:500]}..."
-        )
+        logger.error(f"Task {task_id}: Mermaid validation failed: {e}\nRaw output: {raw_output[:500]}...")
         raise
 
     # ===== Step 7: 渲染图片（可选）=====
@@ -307,8 +290,7 @@ async def generate_visual_summary(
 
         except Exception as e:
             logger.warning(
-                f"Task {task_id}: Failed to generate/upload image: {e}. "
-                "Continuing with Mermaid syntax only.",
+                f"Task {task_id}: Failed to generate/upload image: {e}. Continuing with Mermaid syntax only.",
                 exc_info=True,
             )
             # 图片生成失败不影响 Mermaid 语法的保存

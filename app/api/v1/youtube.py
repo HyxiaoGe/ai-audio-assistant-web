@@ -5,8 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.encoders import jsonable_encoder
@@ -67,7 +66,7 @@ def _generate_state(user_id: str) -> str:
     return state
 
 
-def _verify_state(state: str) -> Optional[str]:
+def _verify_state(state: str) -> str | None:
     """Verify state and return user_id, then remove it."""
     return _oauth_states.pop(state, None)
 
@@ -101,7 +100,7 @@ async def _trigger_video_sync_if_needed(
         )
     else:
         # Only sync subscriptions that haven't been synced or are stale
-        threshold_time = datetime.now(timezone.utc) - timedelta(hours=threshold_hours)
+        threshold_time = datetime.now(UTC) - timedelta(hours=threshold_hours)
 
         result = await db.execute(
             select(YouTubeSubscription.channel_id).where(
@@ -172,9 +171,7 @@ async def oauth_callback(
     if not user_id:
         logger.warning(f"Invalid state in callback: {state[:20]}...")
         # Redirect to frontend with error
-        return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/settings?youtube=error&reason=invalid_state"
-        )
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/settings?youtube=error&reason=invalid_state")
 
     try:
         oauth_service = YouTubeOAuthService()
@@ -225,14 +222,10 @@ async def oauth_callback(
     except BusinessError as e:
         logger.exception(f"OAuth callback failed for user {user_id}: {e}")
         reason = e.kwargs.get("reason", str(e.code))
-        return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/settings?youtube=error&reason={reason}"
-        )
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/settings?youtube=error&reason={reason}")
     except Exception as e:
         logger.exception(f"Unexpected error in OAuth callback: {e}")
-        return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/settings?youtube=error&reason=unknown"
-        )
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/settings?youtube=error&reason=unknown")
 
 
 @router.get("/status")
@@ -344,11 +337,7 @@ async def sync_subscriptions(
 
     logger.info(f"Started subscription sync for user {user.id}, task_id={task.id}")
 
-    return success(
-        data=jsonable_encoder(
-            YouTubeSyncResponse(task_id=task.id, message="Sync started in background")
-        )
-    )
+    return success(data=jsonable_encoder(YouTubeSyncResponse(task_id=task.id, message="Sync started in background")))
 
 
 # ============================================================
@@ -495,10 +484,7 @@ async def batch_auto_transcribe_settings(
         language=request.language,
     )
 
-    logger.info(
-        f"Batch auto-transcribe update: {updated_count} channels, "
-        f"enabled={request.auto_transcribe}"
-    )
+    logger.info(f"Batch auto-transcribe update: {updated_count} channels, enabled={request.auto_transcribe}")
 
     return success(
         data=jsonable_encoder(
@@ -524,7 +510,7 @@ async def _get_transcribed_status(
     db: AsyncSession,
     user_id: str,
     video_ids: list[str],
-) -> dict[str, tuple[bool, Optional[str]]]:
+) -> dict[str, tuple[bool, str | None]]:
     """Get transcription status for a list of video IDs.
 
     Returns:
@@ -545,7 +531,7 @@ async def _get_transcribed_status(
         )
     )
 
-    status_map: dict[str, tuple[bool, Optional[str]]] = {vid: (False, None) for vid in video_ids}
+    status_map: dict[str, tuple[bool, str | None]] = {vid: (False, None) for vid in video_ids}
 
     for content_hash, task_id, task_status in result.all():
         video_id = hash_to_video_id.get(content_hash)
@@ -590,7 +576,7 @@ async def get_channel_videos(
             needs_sync = True
         else:
             # Check if stale
-            threshold = datetime.now(timezone.utc) - timedelta(hours=VIDEO_SYNC_THRESHOLD_HOURS)
+            threshold = datetime.now(UTC) - timedelta(hours=VIDEO_SYNC_THRESHOLD_HOURS)
             if last_synced < threshold:
                 needs_sync = True
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 from datetime import timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from minio import Minio
 from minio.error import S3Error
@@ -30,7 +30,7 @@ class MinioStorageService(StorageService):
     def provider(self) -> str:
         return "minio"
 
-    def __init__(self, config: Optional[object] = None) -> None:
+    def __init__(self, config: object | None = None) -> None:
         endpoint = get_config_value(config, "endpoint", settings.MINIO_ENDPOINT)
         access_key = get_config_value(config, "access_key", settings.MINIO_ACCESS_KEY)
         secret_key = get_config_value(config, "secret_key", settings.MINIO_SECRET_KEY)
@@ -76,9 +76,7 @@ class MinioStorageService(StorageService):
         RetryConfig(max_attempts=3, initial_delay=1.0, max_delay=10.0),
         exceptions=(S3Error, ConnectionError, TimeoutError),
     )
-    def upload_file(
-        self, object_name: str, file_path: str, content_type: str | None = None
-    ) -> None:
+    def upload_file(self, object_name: str, file_path: str, content_type: str | None = None) -> None:
         resolved_type = content_type or mimetypes.guess_type(file_path)[0]
         self._client.fput_object(
             bucket_name=self._bucket,
@@ -116,7 +114,7 @@ class MinioStorageService(StorageService):
                 return False
             raise
 
-    def get_file_info(self, object_name: str) -> Dict[str, Any]:
+    def get_file_info(self, object_name: str) -> dict[str, Any]:
         """获取文件元数据
 
         Args:
@@ -135,7 +133,7 @@ class MinioStorageService(StorageService):
             "metadata": stat.metadata,
         }
 
-    def list_files(self, prefix: str = "", limit: int = 1000) -> List[str]:
+    def list_files(self, prefix: str = "", limit: int = 1000) -> list[str]:
         """列出文件
 
         Args:

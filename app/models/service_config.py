@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -24,14 +22,12 @@ class ServiceConfig(BaseRecord):
 
     service_type: Mapped[str] = mapped_column(String(20), nullable=False)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
-    owner_user_id: Mapped[Optional[str]] = mapped_column(
+    owner_user_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
     )
-    config: Mapped[dict[str, object]] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'::jsonb")
-    )
+    config: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
-    updated_by: Mapped[Optional[str]] = mapped_column(
+    updated_by: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True
     )

@@ -8,12 +8,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Optional
+from datetime import UTC, datetime
+from enum import StrEnum
 
 
-class QuotaResetPeriod(str, Enum):
+class QuotaResetPeriod(StrEnum):
     """额度刷新周期"""
 
     MONTHLY = "monthly"  # 每月刷新
@@ -23,7 +22,7 @@ class QuotaResetPeriod(str, Enum):
 
 def get_current_period_bounds(
     reset_period: str,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> tuple[datetime, datetime]:
     """计算当前周期的开始和结束时间
 
@@ -34,23 +33,23 @@ def get_current_period_bounds(
     Returns:
         (period_start, period_end) 元组
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     if reset_period == QuotaResetPeriod.MONTHLY or reset_period == "monthly":
         # 月度周期：当月1日 00:00:00 到 下月1日 00:00:00
-        period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        period_start = datetime(now.year, now.month, 1, tzinfo=UTC)
         if now.month == 12:
-            period_end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+            period_end = datetime(now.year + 1, 1, 1, tzinfo=UTC)
         else:
-            period_end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+            period_end = datetime(now.year, now.month + 1, 1, tzinfo=UTC)
     elif reset_period == QuotaResetPeriod.YEARLY or reset_period == "yearly":
         # 年度周期：当年1月1日 00:00:00 到 下年1月1日 00:00:00
-        period_start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-        period_end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        period_start = datetime(now.year, 1, 1, tzinfo=UTC)
+        period_end = datetime(now.year + 1, 1, 1, tzinfo=UTC)
     else:
         # 无刷新周期：使用固定的起止时间（Unix 纪元到遥远的未来）
-        period_start = datetime(1970, 1, 1, tzinfo=timezone.utc)
-        period_end = datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        period_start = datetime(1970, 1, 1, tzinfo=UTC)
+        period_end = datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC)
 
     return period_start, period_end
 

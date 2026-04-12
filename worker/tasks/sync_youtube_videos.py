@@ -6,8 +6,8 @@ Syncs videos from subscribed channels to local database.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from celery import shared_task
 from google.oauth2.credentials import Credentials
@@ -34,7 +34,7 @@ def _build_credentials(account: Account) -> Credentials:
     # Google auth library expects naive datetime (no timezone)
     expiry = account.token_expires_at
     if expiry and expiry.tzinfo is not None:
-        expiry = expiry.astimezone(timezone.utc).replace(tzinfo=None)
+        expiry = expiry.astimezone(UTC).replace(tzinfo=None)
 
     return Credentials(  # nosec B106 - not a password
         token=account.access_token,
@@ -46,22 +46,22 @@ def _build_credentials(account: Account) -> Credentials:
     )
 
 
-def _is_token_expired(expires_at: Optional[datetime], buffer_minutes: int = 5) -> bool:
+def _is_token_expired(expires_at: datetime | None, buffer_minutes: int = 5) -> bool:
     """Check if token is expired or will expire soon."""
     if not expires_at:
         return True
 
     # Ensure timezone aware
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = expires_at.replace(tzinfo=UTC)
 
     from datetime import timedelta
 
     buffer = timedelta(minutes=buffer_minutes)
-    return datetime.now(timezone.utc) >= (expires_at - buffer)
+    return datetime.now(UTC) >= (expires_at - buffer)
 
 
-def _parse_duration(duration_str: Optional[str]) -> Optional[int]:
+def _parse_duration(duration_str: str | None) -> int | None:
     """Parse ISO 8601 duration string to seconds."""
     if not duration_str:
         return None
@@ -85,7 +85,7 @@ def _parse_duration(duration_str: Optional[str]) -> Optional[int]:
         return None
 
 
-def _parse_int(value: Optional[str]) -> Optional[int]:
+def _parse_int(value: str | None) -> int | None:
     """Parse string to int, returning None on failure."""
     if value is None:
         return None
@@ -96,7 +96,7 @@ def _parse_int(value: Optional[str]) -> Optional[int]:
         return None
 
 
-def _parse_datetime(dt_str: Optional[str]) -> Optional[datetime]:
+def _parse_datetime(dt_str: str | None) -> datetime | None:
     """Parse ISO datetime string from YouTube API."""
     if not dt_str:
         return None
@@ -107,7 +107,7 @@ def _parse_datetime(dt_str: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def _get_best_thumbnail(thumbnails: Dict[str, Any]) -> Optional[str]:
+def _get_best_thumbnail(thumbnails: dict[str, Any]) -> str | None:
     """Get the best available thumbnail URL."""
     for quality in ["medium", "high", "default", "maxres", "standard"]:
         if quality in thumbnails:
@@ -130,8 +130,8 @@ def sync_channel_videos(
     channel_id: str,
     max_videos: int = 50,
     incremental: bool = True,
-    request_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    request_id: str | None = None,
+) -> dict[str, Any]:
     """Sync videos for a specific channel.
 
     Args:
@@ -203,7 +203,7 @@ def sync_channel_videos(
                     if credentials.expiry:
                         expires_at = credentials.expiry
                         if expires_at.tzinfo is None:
-                            expires_at = expires_at.replace(tzinfo=timezone.utc)
+                            expires_at = expires_at.replace(tzinfo=UTC)
                         account.token_expires_at = expires_at
 
                     session.commit()
@@ -214,17 +214,12 @@ def sync_channel_videos(
 
                     # Check if this is an invalid_grant error (refresh token expired/revoked)
                     error_str = str(e).lower()
-                    if (
-                        "invalid_grant" in error_str
-                        or "token has been expired or revoked" in error_str
-                    ):
+                    if "invalid_grant" in error_str or "token has been expired or revoked" in error_str:
                         # Only mark and notify if not already marked (avoid duplicate notifications)
                         if not account.needs_reauth:
                             account.needs_reauth = True
                             session.commit()
-                            logger.warning(
-                                f"Marked account for user {user_id} as needs_reauth=True"
-                            )
+                            logger.warning(f"Marked account for user {user_id} as needs_reauth=True")
 
                             # Send WebSocket notification to frontend (only once)
                             import json
@@ -309,8 +304,8 @@ def sync_channel_videos(
                 existing_video_ids = set(result.scalars().all())
 
             # Fetch videos from playlist
-            now = datetime.now(timezone.utc)
-            all_videos: List[Dict[str, Any]] = []
+            now = datetime.now(UTC)
+            all_videos: list[dict[str, Any]] = []
             page_token = None
             stop_fetching = False
 
@@ -349,8 +344,7 @@ def sync_channel_videos(
                                 "description": snippet.get("description"),
                                 "thumbnail_url": _get_best_thumbnail(snippet.get("thumbnails", {})),
                                 "published_at": _parse_datetime(
-                                    content_details.get("videoPublishedAt")
-                                    or snippet.get("publishedAt")
+                                    content_details.get("videoPublishedAt") or snippet.get("publishedAt")
                                 ),
                             }
                         )
@@ -375,7 +369,7 @@ def sync_channel_videos(
 
             # Batch fetch video details (duration, stats)
             video_ids = [v["video_id"] for v in all_videos]
-            video_details: Dict[str, Dict[str, Any]] = {}
+            video_details: dict[str, dict[str, Any]] = {}
 
             # Process in batches of 50
             for i in range(0, len(video_ids), 50):
@@ -491,8 +485,7 @@ def sync_channel_videos(
                         request_id=request_id,
                     )
                     logger.info(
-                        f"Triggered auto-transcription for {len(new_video_ids)} "
-                        f"videos from channel {channel_id}"
+                        f"Triggered auto-transcription for {len(new_video_ids)} videos from channel {channel_id}"
                     )
 
             return {
@@ -514,7 +507,7 @@ def sync_channel_videos(
 def sync_all_subscriptions_videos(
     self,
     max_videos_per_channel: int = 20,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Sync videos for all users' subscriptions.
 
     This is a daily scheduled task that syncs the latest videos
@@ -541,8 +534,7 @@ def sync_all_subscriptions_videos(
                 )
                 .join(
                     Account,
-                    (Account.user_id == YouTubeSubscription.user_id)
-                    & (Account.provider == YOUTUBE_PROVIDER),
+                    (Account.user_id == YouTubeSubscription.user_id) & (Account.provider == YOUTUBE_PROVIDER),
                 )
                 .where(
                     YouTubeSubscription.sync_enabled == True,  # noqa: E712
@@ -552,9 +544,7 @@ def sync_all_subscriptions_videos(
             )
             subscriptions = result.all()
 
-            logger.info(
-                f"Found {len(subscriptions)} subscriptions to sync (sync_enabled, valid auth)"
-            )
+            logger.info(f"Found {len(subscriptions)} subscriptions to sync (sync_enabled, valid auth)")
 
             for user_id, channel_id in subscriptions:
                 try:
@@ -597,7 +587,7 @@ def sync_all_subscriptions_videos(
 def check_scheduled_syncs(
     self,
     batch_size: int = 100,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Check which channels need syncing based on their next_sync_at time.
 
     Runs periodically (e.g., every hour) to trigger syncs for channels
@@ -613,7 +603,7 @@ def check_scheduled_syncs(
 
     logger.info("Checking for scheduled channel syncs")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     syncs_triggered = 0
     errors = 0
 
@@ -627,8 +617,7 @@ def check_scheduled_syncs(
                 select(YouTubeSubscription.user_id, YouTubeSubscription.channel_id)
                 .join(
                     Account,
-                    (Account.user_id == YouTubeSubscription.user_id)
-                    & (Account.provider == YOUTUBE_PROVIDER),
+                    (Account.user_id == YouTubeSubscription.user_id) & (Account.provider == YOUTUBE_PROVIDER),
                 )
                 .where(
                     YouTubeSubscription.sync_enabled == True,  # noqa: E712

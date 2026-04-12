@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any
 
 from loguru import logger
 
@@ -62,10 +62,10 @@ POLISH_SYSTEM_PROMPT = """你是一个专业的语音转写校对助手。你的
 
 
 def group_segments_by_time(
-    segments: List[Dict[str, Any]],
+    segments: list[dict[str, Any]],
     window_seconds: float = 180.0,
     max_per_group: int = 50,
-) -> List[List[Dict[str, Any]]]:
+) -> list[list[dict[str, Any]]]:
     """按时间窗口分组，让 LLM 看到上下文。
 
     Args:
@@ -79,8 +79,8 @@ def group_segments_by_time(
     if not segments:
         return []
 
-    groups: List[List[Dict[str, Any]]] = []
-    current_group: List[Dict[str, Any]] = []
+    groups: list[list[dict[str, Any]]] = []
+    current_group: list[dict[str, Any]] = []
     group_start: float = segments[0]["start_time"]
 
     for seg in segments:
@@ -103,7 +103,7 @@ def group_segments_by_time(
 # ============================================================
 
 
-def build_polish_user_prompt(segments: List[Dict[str, Any]]) -> str:
+def build_polish_user_prompt(segments: list[dict[str, Any]]) -> str:
     """构建 user prompt，逐段编号。"""
     lines = [f"[{seg['sequence']}] {seg['content']}" for seg in segments]
     return "请校对以下 ASR 转写文本，逐段修正错误：\n\n" + "\n".join(lines)
@@ -118,15 +118,15 @@ _RESULT_PATTERN = re.compile(r"\[(\d+)\]\s*(.*)")
 
 def parse_polish_response(
     response: str,
-    original_segments: List[Dict[str, Any]],
-) -> List[PolishResult]:
+    original_segments: list[dict[str, Any]],
+) -> list[PolishResult]:
     """解析 LLM 返回的润色结果。
 
     期望格式：每行 [序号] 内容。
     解析失败的段回退到原文。
     """
     # 解析 LLM 输出
-    parsed: Dict[int, str] = {}
+    parsed: dict[int, str] = {}
     for line in response.strip().split("\n"):
         line = line.strip()
         if not line:
@@ -138,7 +138,7 @@ def parse_polish_response(
             parsed[seq] = content
 
     # 逐段匹配
-    results: List[PolishResult] = []
+    results: list[PolishResult] = []
     for seg in original_segments:
         seq = seg["sequence"]
         original = seg["content"]
@@ -173,9 +173,9 @@ def parse_polish_response(
 
 async def polish_transcripts(
     llm_service: LLMService,
-    segments: List[Dict[str, Any]],
+    segments: list[dict[str, Any]],
     window_seconds: float = 180.0,
-) -> List[PolishResult]:
+) -> list[PolishResult]:
     """对转写片段进行 LLM 润色。
 
     Args:
@@ -194,7 +194,7 @@ async def polish_transcripts(
         return []
 
     groups = group_segments_by_time(segments, window_seconds)
-    all_results: List[PolishResult] = []
+    all_results: list[PolishResult] = []
 
     logger.info(
         "Polish: %d segments split into %d groups (window=%ds)",

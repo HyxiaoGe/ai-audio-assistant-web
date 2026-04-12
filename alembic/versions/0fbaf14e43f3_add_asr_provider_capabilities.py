@@ -6,9 +6,9 @@ Create Date: 2026-01-24 11:29:16.519604
 
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0fbaf14e43f3"
 down_revision = "6bb23b8bc4d0"
@@ -20,9 +20,7 @@ def upgrade() -> None:
     # 1. 添加新字段
     op.add_column(
         "asr_pricing_configs",
-        sa.Column(
-            "quality_score", sa.Float(), server_default=sa.text("0.8"), nullable=False
-        ),
+        sa.Column("quality_score", sa.Float(), server_default=sa.text("0.8"), nullable=False),
     )
     op.add_column(
         "asr_pricing_configs",

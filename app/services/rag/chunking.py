@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
 
 from app.models.transcript import Transcript
 
@@ -9,10 +9,10 @@ from app.models.transcript import Transcript
 @dataclass(frozen=True)
 class RagChunkPayload:
     content: str
-    start_time: Optional[float]
-    end_time: Optional[float]
-    speaker_id: Optional[str]
-    transcript_id: Optional[str]
+    start_time: float | None
+    end_time: float | None
+    speaker_id: str | None
+    transcript_id: str | None
 
 
 def _segment_length(segment: Transcript) -> int:

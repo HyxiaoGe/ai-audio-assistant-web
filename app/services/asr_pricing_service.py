@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Awaitable, Optional, Union
+from collections.abc import Awaitable
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +21,7 @@ from app.models.asr_pricing_config import AsrPricingConfig
 logger = logging.getLogger(__name__)
 
 
-async def _maybe_await(result: Union[Awaitable[Any], Any]) -> Any:
+async def _maybe_await(result: Awaitable[Any] | Any) -> Any:
     """兼容同步和异步操作的辅助函数"""
     if inspect.isawaitable(result):
         return await result
@@ -28,10 +29,10 @@ async def _maybe_await(result: Union[Awaitable[Any], Any]) -> Any:
 
 
 async def get_pricing_config(
-    db: Union[AsyncSession, Session],
+    db: AsyncSession | Session,
     provider: str,
     variant: str,
-) -> Optional[AsrPricingConfig]:
+) -> AsrPricingConfig | None:
     """获取指定平台和变体的定价配置
 
     支持同步和异步 session，以便在 worker 中使用。

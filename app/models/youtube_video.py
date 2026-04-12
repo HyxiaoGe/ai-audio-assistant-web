@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
@@ -50,17 +49,17 @@ class YouTubeVideo(BaseRecord):
 
     # Video metadata (from snippet)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    thumbnail_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    thumbnail_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     # Video details (from contentDetails)
-    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Statistics (from statistics) - updated periodically
-    view_count: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    like_count: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    comment_count: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    view_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    like_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    comment_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     # Sync metadata
     last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

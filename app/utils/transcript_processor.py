@@ -3,7 +3,7 @@
 提供转写文本的质量评估和预处理功能，用于提升摘要生成质量。
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from app.services.asr.base import TranscriptSegment
 
@@ -62,14 +62,10 @@ class TranscriptProcessor:
             return TranscriptQuality("medium", 0.75, 0, 0.0)
 
         # 计算平均置信度
-        avg_confidence = sum(s.confidence for s in segments_with_confidence) / len(
-            segments_with_confidence
-        )
+        avg_confidence = sum(s.confidence for s in segments_with_confidence) / len(segments_with_confidence)
 
         # 统计低置信度片段
-        low_confidence_segments = [
-            s for s in segments_with_confidence if s.confidence < cls.LOW_CONFIDENCE_THRESHOLD
-        ]
+        low_confidence_segments = [s for s in segments_with_confidence if s.confidence < cls.LOW_CONFIDENCE_THRESHOLD]
         low_confidence_count = len(low_confidence_segments)
         low_confidence_ratio = low_confidence_count / total_segments
 
@@ -170,9 +166,7 @@ class TranscriptProcessor:
         return is_low_confidence and is_short and is_filler
 
     @classmethod
-    def _merge_segments(
-        cls, segments: list[TranscriptSegment], threshold_seconds: float
-    ) -> list[dict[str, Any]]:
+    def _merge_segments(cls, segments: list[TranscriptSegment], threshold_seconds: float) -> list[dict[str, Any]]:
         """合并同一说话人的连续segment
 
         Args:
@@ -183,7 +177,7 @@ class TranscriptProcessor:
             list[dict]: 合并后的block列表
         """
         merged: list[dict[str, Any]] = []
-        current_block: Optional[dict[str, Any]] = None
+        current_block: dict[str, Any] | None = None
 
         for seg in segments:
             if current_block is None:

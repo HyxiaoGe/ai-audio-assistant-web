@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,14 +28,14 @@ class Summary(BaseRecord):
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"), nullable=False)
 
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    model_used: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    prompt_version: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    token_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    comparison_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comparison_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Visual summary fields
-    visual_format: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    visual_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    image_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    image_format: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
-    image_model_used: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    visual_format: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    visual_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    image_format: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    image_model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)

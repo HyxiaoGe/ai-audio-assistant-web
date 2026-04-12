@@ -22,7 +22,7 @@ import asyncio
 import logging
 import time
 from threading import Lock
-from typing import Any, Dict, Optional, Type
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
@@ -92,7 +92,7 @@ class ConfigManager:
 
     # 类变量：存储配置 Schema
     # 格式: {service_type: {name: ConfigClass}}
-    _schemas: Dict[str, Dict[str, Type[ServiceConfig]]] = {
+    _schemas: dict[str, dict[str, type[ServiceConfig]]] = {
         "llm": {},
         "asr": {},
         "storage": {},
@@ -100,31 +100,31 @@ class ConfigManager:
 
     # 类变量：缓存已验证的配置实例
     # 格式: {service_type: {name: config_instance}}
-    _configs: Dict[str, Dict[str, ServiceConfig]] = {
+    _configs: dict[str, dict[str, ServiceConfig]] = {
         "llm": {},
         "asr": {},
         "storage": {},
     }
 
-    _config_timestamps: Dict[str, Dict[str, float]] = {
+    _config_timestamps: dict[str, dict[str, float]] = {
         "llm": {},
         "asr": {},
         "storage": {},
     }
 
-    _user_configs: Dict[str, Dict[str, Dict[str, ServiceConfig]]] = {
+    _user_configs: dict[str, dict[str, dict[str, ServiceConfig]]] = {
         "llm": {},
         "asr": {},
         "storage": {},
     }
 
-    _user_timestamps: Dict[str, Dict[str, Dict[str, float]]] = {
+    _user_timestamps: dict[str, dict[str, dict[str, float]]] = {
         "llm": {},
         "asr": {},
         "storage": {},
     }
 
-    _db_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+    _db_session_factory: async_sessionmaker[AsyncSession] | None = None
     _cache_ttl_seconds: int = 0
 
     # 线程锁：确保注册和加载过程线程安全
@@ -132,7 +132,7 @@ class ConfigManager:
 
     # 配置字段映射表：{service_type: {name: {field: settings_attr}}}
     # 数据驱动配置加载，避免 if-elif 分支（P2-1 优化）
-    _CONFIG_MAPPING: Dict[str, Dict[str, Dict[str, str]]] = {
+    _CONFIG_MAPPING: dict[str, dict[str, dict[str, str]]] = {
         "llm": {
             "doubao": {
                 "api_key": "DOUBAO_API_KEY",
@@ -237,7 +237,7 @@ class ConfigManager:
         cls,
         service_type: str,
         name: str,
-        config_class: Type[ServiceConfig],
+        config_class: type[ServiceConfig],
     ) -> None:
         """注册配置 Schema
 
@@ -257,21 +257,14 @@ class ConfigManager:
             ConfigManager.register_schema("llm", "doubao", DoubaoConfig)
         """
         if service_type not in cls._schemas:
-            raise ValueError(
-                f"Unsupported service_type: {service_type}. "
-                f"Supported types: {list(cls._schemas.keys())}"
-            )
+            raise ValueError(f"Unsupported service_type: {service_type}. Supported types: {list(cls._schemas.keys())}")
 
         if not issubclass(config_class, ServiceConfig):
-            raise ValueError(
-                f"config_class must be a subclass of ServiceConfig, " f"got {config_class}"
-            )
+            raise ValueError(f"config_class must be a subclass of ServiceConfig, got {config_class}")
 
         with cls._lock:
             cls._schemas[service_type][name] = config_class
-            logger.info(
-                f"Registered config schema for {service_type}/{name}: " f"{config_class.__name__}"
-            )
+            logger.info(f"Registered config schema for {service_type}/{name}: {config_class.__name__}")
 
     @classmethod
     def configure_db(
@@ -285,9 +278,9 @@ class ConfigManager:
     @classmethod
     async def refresh_from_db(
         cls,
-        service_type: Optional[str] = None,
-        name: Optional[str] = None,
-        user_id: Optional[str] = None,
+        service_type: str | None = None,
+        name: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         if not settings.CONFIG_CENTER_DB_ENABLED or cls._db_session_factory is None:
             return
@@ -313,7 +306,7 @@ class ConfigManager:
         service_type: str,
         name: str,
         reload: bool = False,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
     ) -> ServiceConfig:
         """获取服务配置（自动从 settings 加载和验证）
 
@@ -340,9 +333,7 @@ class ConfigManager:
 
         if name not in cls._schemas[service_type]:
             available = list(cls._schemas[service_type].keys())
-            raise ValueError(
-                f"No config schema registered for {service_type}/{name}. " f"Available: {available}"
-            )
+            raise ValueError(f"No config schema registered for {service_type}/{name}. Available: {available}")
 
         if user_id:
             user_config = cls._get_user_cached(service_type, name, user_id, reload)
@@ -395,9 +386,7 @@ class ConfigManager:
             return False
 
     @classmethod
-    def validate_config_data(
-        cls, service_type: str, name: str, data: Dict[str, Any]
-    ) -> ServiceConfig:
+    def validate_config_data(cls, service_type: str, name: str, data: dict[str, Any]) -> ServiceConfig:
         if service_type not in cls._schemas or name not in cls._schemas[service_type]:
             raise ValueError(f"Unknown config schema for {service_type}/{name}")
         config_class = cls._schemas[service_type][name]
@@ -435,7 +424,7 @@ class ConfigManager:
         return list(cls._schemas[service_type].keys())
 
     @classmethod
-    def clear(cls, service_type: Optional[str] = None) -> None:
+    def clear(cls, service_type: str | None = None) -> None:
         """清空配置缓存（主要用于测试）
 
         Args:
@@ -463,7 +452,7 @@ class ConfigManager:
         session: AsyncSession,
         service_type: str,
         name: str,
-        user_id: Optional[str],
+        user_id: str | None,
     ) -> None:
         stmt = select(ServiceConfigRecord).where(
             ServiceConfigRecord.service_type == service_type,
@@ -506,7 +495,7 @@ class ConfigManager:
         service_type: str,
         name: str,
         config: ServiceConfig,
-        user_id: Optional[str],
+        user_id: str | None,
     ) -> None:
         if user_id:
             cls._user_configs[service_type].setdefault(user_id, {})[name] = config
@@ -534,7 +523,7 @@ class ConfigManager:
         return (time.time() - cached_at) <= cls._cache_ttl_seconds
 
     @classmethod
-    def _schedule_refresh(cls, service_type: str, name: str, user_id: Optional[str]) -> None:
+    def _schedule_refresh(cls, service_type: str, name: str, user_id: str | None) -> None:
         if not settings.CONFIG_CENTER_DB_ENABLED or cls._db_session_factory is None:
             return
         try:
@@ -544,9 +533,7 @@ class ConfigManager:
         loop.create_task(cls.refresh_from_db(service_type, name, user_id=user_id))
 
     @classmethod
-    def _load_config_from_db_sync(
-        cls, service_type: str, name: str, user_id: Optional[str]
-    ) -> Optional[ServiceConfig]:
+    def _load_config_from_db_sync(cls, service_type: str, name: str, user_id: str | None) -> ServiceConfig | None:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -554,9 +541,7 @@ class ConfigManager:
         return None
 
     @classmethod
-    async def _load_config_from_db(
-        cls, service_type: str, name: str, user_id: Optional[str]
-    ) -> Optional[ServiceConfig]:
+    async def _load_config_from_db(cls, service_type: str, name: str, user_id: str | None) -> ServiceConfig | None:
         if cls._db_session_factory is None:
             return None
         try:
@@ -587,9 +572,7 @@ class ConfigManager:
             return None
 
     @classmethod
-    def _get_user_cached(
-        cls, service_type: str, name: str, user_id: str, reload: bool
-    ) -> Optional[ServiceConfig]:
+    def _get_user_cached(cls, service_type: str, name: str, user_id: str, reload: bool) -> ServiceConfig | None:
         with cls._lock:
             cached = cls._user_configs.get(service_type, {}).get(user_id, {}).get(name)
             if cached and not reload:
@@ -610,7 +593,7 @@ class ConfigManager:
         cls,
         service_type: str,
         name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """从 settings 加载配置（向后兼容，数据驱动）
 
         根据服务类型和名称，从 app.config.settings 读取对应的配置项。
@@ -637,7 +620,7 @@ class ConfigManager:
 
         # 获取字段映射表
         field_mapping = cls._CONFIG_MAPPING[service_type][name]
-        config_data: Dict[str, Any] = {}
+        config_data: dict[str, Any] = {}
 
         # 数据驱动加载：遍历映射表，从 settings 读取对应的值
         for field_name, settings_attr in field_mapping.items():
@@ -680,7 +663,7 @@ def register_config_schema(
             model: str
     """
 
-    def decorator(cls: Type[ServiceConfig]) -> Type[ServiceConfig]:
+    def decorator(cls: type[ServiceConfig]) -> type[ServiceConfig]:
         ConfigManager.register_schema(service_type, name, cls)
         return cls
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from qcloud_cos import CosConfig, CosS3Client
 from qcloud_cos.cos_exception import CosServiceError
@@ -30,15 +30,11 @@ class COSStorageService(StorageService):
     def provider(self) -> str:
         return "cos"
 
-    def __init__(self, config: Optional[object] = None) -> None:
+    def __init__(self, config: object | None = None) -> None:
         region = get_config_value(config, "region", settings.COS_REGION)
         bucket = get_config_value(config, "bucket", settings.COS_BUCKET)
-        secret_id = get_config_value(
-            config, "secret_id", settings.COS_SECRET_ID or settings.TENCENT_SECRET_ID
-        )
-        secret_key = get_config_value(
-            config, "secret_key", settings.COS_SECRET_KEY or settings.TENCENT_SECRET_KEY
-        )
+        secret_id = get_config_value(config, "secret_id", settings.COS_SECRET_ID or settings.TENCENT_SECRET_ID)
+        secret_key = get_config_value(config, "secret_key", settings.COS_SECRET_KEY or settings.TENCENT_SECRET_KEY)
         use_ssl = get_config_value(config, "use_ssl", settings.COS_USE_SSL)
         public_read = get_config_value(config, "public_read", settings.COS_PUBLIC_READ)
 
@@ -110,9 +106,7 @@ class COSStorageService(StorageService):
         RetryConfig(max_attempts=3, initial_delay=1.0, max_delay=10.0),
         exceptions=(CosServiceError, ConnectionError, TimeoutError),
     )
-    def upload_file(
-        self, object_name: str, file_path: str, content_type: str | None = None
-    ) -> None:
+    def upload_file(self, object_name: str, file_path: str, content_type: str | None = None) -> None:
         resolved_type = content_type or mimetypes.guess_type(file_path)[0]
         content_length = str(Path(file_path).stat().st_size)
         with open(file_path, "rb") as handle:
@@ -154,7 +148,7 @@ class COSStorageService(StorageService):
                 return False
             raise
 
-    def get_file_info(self, object_name: str) -> Dict[str, Any]:
+    def get_file_info(self, object_name: str) -> dict[str, Any]:
         """获取文件元数据
 
         Args:
@@ -173,7 +167,7 @@ class COSStorageService(StorageService):
             "metadata": response.get("x-cos-meta", {}),
         }
 
-    def list_files(self, prefix: str = "", limit: int = 1000) -> List[str]:
+    def list_files(self, prefix: str = "", limit: int = 1000) -> list[str]:
         """列出文件
 
         Args:
@@ -256,9 +250,7 @@ class COSStorageService(StorageService):
             # 检查必要的配置是否存在
             if not self._bucket or not self._region:
                 return False
-            if not self._client:
-                return False
-            return True
+            return self._client
         except Exception:
             return False
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, select
@@ -34,8 +34,8 @@ def _serialize_config(record: ServiceConfig) -> dict[str, Any]:
 
 @router.get("")
 async def list_configs(
-    service_type: Optional[str] = None,
-    provider: Optional[str] = None,
+    service_type: str | None = None,
+    provider: str | None = None,
     db: AsyncSession = Depends(get_db),
     _: CurrentUser = Depends(get_admin_user),
 ) -> Any:
@@ -176,8 +176,8 @@ async def rollback_config(
 
 @router.post("/refresh")
 async def refresh_cache(
-    service_type: Optional[str] = None,
-    provider: Optional[str] = None,
+    service_type: str | None = None,
+    provider: str | None = None,
     _: CurrentUser = Depends(get_admin_user),
 ) -> Any:
     await ConfigManager.refresh_from_db(service_type, provider)
@@ -186,8 +186,8 @@ async def refresh_cache(
 
 @router.get("/me")
 async def list_my_configs(
-    service_type: Optional[str] = None,
-    provider: Optional[str] = None,
+    service_type: str | None = None,
+    provider: str | None = None,
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> Any:

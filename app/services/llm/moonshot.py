@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -42,7 +43,7 @@ class MoonshotLLMService(LLMService):
         ),
     )
 
-    def __init__(self, config: Optional[object] = None) -> None:
+    def __init__(self, config: object | None = None) -> None:
         api_key = get_config_value(config, "api_key", settings.MOONSHOT_API_KEY)
         base_url = get_config_value(config, "base_url", settings.MOONSHOT_BASE_URL)
         model = get_config_value(config, "model", settings.MOONSHOT_MODEL)
@@ -174,31 +175,31 @@ class MoonshotLLMService(LLMService):
         headers = {"Authorization": f"Bearer {self._api_key}"}
 
         try:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client:
-                async with client.stream(
-                    "POST", "/chat/completions", json=payload, headers=headers
-                ) as response:
-                    response.raise_for_status()
+            async with (
+                httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client,
+                client.stream("POST", "/chat/completions", json=payload, headers=headers) as response,
+            ):
+                response.raise_for_status()
 
-                    async for line in response.aiter_lines():
-                        if not line or line.startswith(":"):
-                            continue
+                async for line in response.aiter_lines():
+                    if not line or line.startswith(":"):
+                        continue
 
-                        if line.startswith("data: "):
-                            line = line[6:]
+                    if line.startswith("data: "):
+                        line = line[6:]
 
-                        if line == "[DONE]":
-                            break
+                    if line == "[DONE]":
+                        break
 
-                        try:
-                            chunk_data = json.loads(line)
-                            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                            content = delta.get("content", "")
+                    try:
+                        chunk_data = json.loads(line)
+                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
 
-                            if content:
-                                yield content
-                        except json.JSONDecodeError:
-                            continue
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
         except httpx.HTTPError as exc:
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
@@ -221,9 +222,7 @@ class MoonshotLLMService(LLMService):
         return await self._call_api(payload, headers)
 
     @monitor("llm", "moonshot")
-    async def chat_stream(
-        self, messages: list[dict[str, str]], **kwargs: Any
-    ) -> AsyncIterator[str]:
+    async def chat_stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
         if not messages:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="messages")
 
@@ -237,31 +236,31 @@ class MoonshotLLMService(LLMService):
         headers = {"Authorization": f"Bearer {self._api_key}"}
 
         try:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client:
-                async with client.stream(
-                    "POST", "/chat/completions", json=payload, headers=headers
-                ) as response:
-                    response.raise_for_status()
+            async with (
+                httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client,
+                client.stream("POST", "/chat/completions", json=payload, headers=headers) as response,
+            ):
+                response.raise_for_status()
 
-                    async for line in response.aiter_lines():
-                        if not line or line.startswith(":"):
-                            continue
+                async for line in response.aiter_lines():
+                    if not line or line.startswith(":"):
+                        continue
 
-                        if line.startswith("data: "):
-                            line = line[6:]
+                    if line.startswith("data: "):
+                        line = line[6:]
 
-                        if line == "[DONE]":
-                            break
+                    if line == "[DONE]":
+                        break
 
-                        try:
-                            chunk_data = json.loads(line)
-                            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                            content = delta.get("content", "")
+                    try:
+                        chunk_data = json.loads(line)
+                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
 
-                            if content:
-                                yield content
-                        except json.JSONDecodeError:
-                            continue
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
         except httpx.HTTPError as exc:
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
@@ -270,9 +269,7 @@ class MoonshotLLMService(LLMService):
 
     async def health_check(self) -> bool:
         try:
-            if not self._api_key or not self._base_url or not self._model:
-                return False
-            return True
+            return not (not self._api_key or not self._base_url or not self._model)
         except Exception:
             return False
 

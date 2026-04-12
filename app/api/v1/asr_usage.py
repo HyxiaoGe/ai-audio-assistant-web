@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.encoders import jsonable_encoder
@@ -31,12 +30,12 @@ router = APIRouter(prefix="/asr/usage", tags=["asr-usage"])
 async def get_asr_usage_list(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    provider: Optional[str] = Query(default=None, description="按提供商筛选"),
-    variant: Optional[str] = Query(default=None, description="按变体筛选 (file, file_fast)"),
-    status: Optional[str] = Query(default=None, description="按状态筛选 (success, failed)"),
-    start_date: Optional[datetime] = Query(default=None, description="开始日期"),
-    end_date: Optional[datetime] = Query(default=None, description="结束日期"),
-    task_id: Optional[str] = Query(default=None, description="按任务 ID 筛选"),
+    provider: str | None = Query(default=None, description="按提供商筛选"),
+    variant: str | None = Query(default=None, description="按变体筛选 (file, file_fast)"),
+    status: str | None = Query(default=None, description="按状态筛选 (success, failed)"),
+    start_date: datetime | None = Query(default=None, description="开始日期"),
+    end_date: datetime | None = Query(default=None, description="结束日期"),
+    task_id: str | None = Query(default=None, description="按任务 ID 筛选"),
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
@@ -108,9 +107,9 @@ async def get_asr_usage_list(
 
 @router.get("/summary")
 async def get_asr_usage_summary(
-    start_date: Optional[datetime] = Query(default=None, description="开始日期"),
-    end_date: Optional[datetime] = Query(default=None, description="结束日期"),
-    provider: Optional[str] = Query(default=None, description="按提供商筛选"),
+    start_date: datetime | None = Query(default=None, description="开始日期"),
+    end_date: datetime | None = Query(default=None, description="结束日期"),
+    provider: str | None = Query(default=None, description="按提供商筛选"),
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
@@ -174,9 +173,7 @@ async def get_asr_usage_summary(
             total_duration_seconds=row.total_duration_seconds or 0.0,
             total_estimated_cost=row.total_estimated_cost or 0.0,
             total_actual_cost=row.total_actual_cost,
-            avg_processing_time_ms=(
-                float(row.avg_processing_time_ms) if row.avg_processing_time_ms else None
-            ),
+            avg_processing_time_ms=(float(row.avg_processing_time_ms) if row.avg_processing_time_ms else None),
             # 免费额度分拆汇总
             total_free_quota_consumed=row.total_free_quota_consumed or 0.0,
             total_paid_duration_seconds=row.total_paid_duration_seconds or 0.0,

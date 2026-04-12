@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from celery import shared_task
 from sqlalchemy import func, select
@@ -51,9 +51,7 @@ def _check_asr_quota_available(session, user_id: str) -> bool:
     if not all_providers:
         return False
 
-    has_quota, _ = check_any_provider_available_sync(
-        session, all_providers, user_id, variant="file"
-    )
+    has_quota, _ = check_any_provider_available_sync(session, all_providers, user_id, variant="file")
     return has_quota
 
 
@@ -83,9 +81,9 @@ def _process_single_video(
     subscription: YouTubeSubscription,
     video: YouTubeVideo,
     max_duration: int,
-    language: Optional[str],
-    request_id: Optional[str],
-) -> Dict[str, Any]:
+    language: str | None,
+    request_id: str | None,
+) -> dict[str, Any]:
     """Process a single video for auto-transcription.
 
     Args:
@@ -274,9 +272,9 @@ def process_auto_transcriptions(
     self,
     user_id: str,
     channel_id: str,
-    video_ids: List[str],
-    request_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    video_ids: list[str],
+    request_id: str | None = None,
+) -> dict[str, Any]:
     """Process auto-transcription for newly synced videos.
 
     Called by sync_channel_videos after new videos are discovered.
@@ -290,12 +288,9 @@ def process_auto_transcriptions(
     Returns:
         Dict with results summary
     """
-    logger.info(
-        f"Starting auto-transcription for user {user_id}, "
-        f"channel {channel_id}, {len(video_ids)} videos"
-    )
+    logger.info(f"Starting auto-transcription for user {user_id}, channel {channel_id}, {len(video_ids)} videos")
 
-    results: Dict[str, List[Dict[str, Any]]] = {
+    results: dict[str, list[dict[str, Any]]] = {
         "created": [],
         "skipped": [],
         "failed": [],
@@ -343,8 +338,7 @@ def process_auto_transcriptions(
             processing_count = _get_processing_task_count(session, user_id)
             if processing_count >= MAX_CONCURRENT_AUTO_TASKS:
                 logger.warning(
-                    f"Concurrent task limit reached for user {user_id}: "
-                    f"{processing_count}/{MAX_CONCURRENT_AUTO_TASKS}"
+                    f"Concurrent task limit reached for user {user_id}: {processing_count}/{MAX_CONCURRENT_AUTO_TASKS}"
                 )
                 return {
                     "status": "skipped",
@@ -372,9 +366,7 @@ def process_auto_transcriptions(
                 # Re-check concurrent limit for each video
                 processing_count = _get_processing_task_count(session, user_id)
                 if processing_count >= MAX_CONCURRENT_AUTO_TASKS:
-                    results["skipped"].append(
-                        {"video_id": video_id, "reason": "concurrent_limit_reached"}
-                    )
+                    results["skipped"].append({"video_id": video_id, "reason": "concurrent_limit_reached"})
                     continue
 
                 try:

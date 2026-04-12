@@ -17,7 +17,7 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -87,9 +87,9 @@ ALL_CONTENT_STYLES = [
 # ===================================================================
 # Helpers
 # ===================================================================
-def load_json(path: Path) -> Dict:
+def load_json(path: Path) -> dict:
     """Load a JSON file."""
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -161,7 +161,7 @@ def locale_short(locale: str) -> str:
 # ===================================================================
 
 
-def build_system_role_template(system_data: Dict, locale: str) -> str:
+def build_system_role_template(system_data: dict, locale: str) -> str:
     """Build a Jinja2 conditional system role template from system config.
 
     Combines all content_style roles into {% if/elif/else %} blocks.
@@ -215,7 +215,7 @@ def build_system_role_template(system_data: Dict, locale: str) -> str:
     return "\n".join(lines)
 
 
-def extract_image_requirements_zh(templates: Dict) -> str:
+def extract_image_requirements_zh(templates: dict) -> str:
     """Extract the common Chinese image requirements section from overview templates."""
     # Use the meeting template as reference (most complete version)
     # The section starts with "## 配图要求（必须）" and goes to end
@@ -231,7 +231,7 @@ def extract_image_requirements_zh(templates: Dict) -> str:
     return ""
 
 
-def extract_image_requirements_en(templates: Dict) -> str:
+def extract_image_requirements_en(templates: dict) -> str:
     """Extract the common English image requirements section from overview templates."""
     for style in ["lecture", "podcast", "video"]:
         tpl = templates.get(style, "")
@@ -309,16 +309,10 @@ def process_summary_template(text: str, locale: str) -> str:
     is_zh = locale.startswith("zh")
 
     # Replace image requirements section with variable
-    if is_zh:
-        text = remove_image_req_section_zh(text)
-    else:
-        text = remove_image_req_section_en(text)
+    text = remove_image_req_section_zh(text) if is_zh else remove_image_req_section_en(text)
 
     # Replace format rules section with variable
-    if is_zh:
-        text = remove_format_rules_zh(text)
-    else:
-        text = remove_format_rules_en(text)
+    text = remove_format_rules_zh(text) if is_zh else remove_format_rules_en(text)
 
     # Convert variables
     text = convert_format_vars(text)
@@ -378,8 +372,8 @@ class PromptHubClient:
             timeout=30.0,
         )
         # Cache: slug -> id
-        self._project_ids: Dict[str, str] = {}
-        self._prompt_slugs: Dict[str, set] = {}  # project_slug -> set of prompt slugs
+        self._project_ids: dict[str, str] = {}
+        self._prompt_slugs: dict[str, set] = {}  # project_slug -> set of prompt slugs
 
     def check_connectivity(self) -> bool:
         """Verify PromptHub service is reachable."""
@@ -415,9 +409,7 @@ class PromptHubClient:
         if self.dry_run:
             return
         try:
-            resp = self.client.get(
-                "/api/v1/prompts", params={"project_id": project_id, "page_size": 100}
-            )
+            resp = self.client.get("/api/v1/prompts", params={"project_id": project_id, "page_size": 100})
             resp.raise_for_status()
             data = resp.json()
             prompts = data if isinstance(data, list) else data.get("data", data.get("items", []))
@@ -432,12 +424,10 @@ class PromptHubClient:
             log.warning("Could not fetch existing prompts for %s: %s", project_slug, e)
             self._prompt_slugs[project_slug] = set()
 
-    def create_project(self, slug: str, name: str, description: str) -> Optional[str]:
+    def create_project(self, slug: str, name: str, description: str) -> str | None:
         """Create a project. Returns project ID or None."""
         if slug in self._project_ids:
-            log.info(
-                "  Project '%s' already exists (id=%s), skipping", slug, self._project_ids[slug]
-            )
+            log.info("  Project '%s' already exists (id=%s), skipping", slug, self._project_ids[slug])
             return self._project_ids[slug]
 
         payload = {"slug": slug, "name": name, "description": description}
@@ -475,10 +465,10 @@ class PromptHubClient:
         name: str,
         content: str,
         description: str = "",
-        variables: Optional[List[Dict[str, Any]]] = None,
-        tags: Optional[List[str]] = None,
+        variables: list[dict[str, Any]] | None = None,
+        tags: list[str] | None = None,
         is_shared: bool = False,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Create a prompt. Returns prompt ID or None."""
         existing = self._prompt_slugs.get(project_slug, set())
         if slug in existing:
@@ -490,7 +480,7 @@ class PromptHubClient:
             log.error("    No project_id for '%s', cannot create prompt '%s'", project_slug, slug)
             return None
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "project_id": project_id,
             "slug": slug,
             "name": name,
@@ -772,10 +762,7 @@ def step_create_summary(client: PromptHubClient) -> int:
             slug = f"summary-keypoints-{style}-{loc_short}"
             content = convert_format_vars(tpl)
             # key_points don't have image requirements, but may have format rules
-            if locale.startswith("zh"):
-                content = remove_format_rules_zh(content)
-            else:
-                content = remove_format_rules_en(content)
+            content = remove_format_rules_zh(content) if locale.startswith("zh") else remove_format_rules_en(content)
             content = content.strip()
             tags = ["summary", "key_points", style, locale, temp_tag, tokens_tag]
             name = f"Summary Key Points ({style}, {loc_short})"
@@ -797,10 +784,7 @@ def step_create_summary(client: PromptHubClient) -> int:
         if tpl:
             slug = f"summary-actionitems-{loc_short}"
             content = convert_format_vars(tpl)
-            if locale.startswith("zh"):
-                content = remove_format_rules_zh(content)
-            else:
-                content = remove_format_rules_en(content)
+            content = remove_format_rules_zh(content) if locale.startswith("zh") else remove_format_rules_en(content)
             content = content.strip()
             mp = model_params.get("action_items", {})
             temp_tag = f"temp-{mp.get('temperature', 0.3)}"
@@ -996,7 +980,7 @@ def step_create_images(client: PromptHubClient) -> int:
     return created
 
 
-def step_verify(client: PromptHubClient, counts: Dict[str, int]) -> None:
+def step_verify(client: PromptHubClient, counts: dict[str, int]) -> None:
     """Step 9: Verify all prompts were created."""
     log.info("=" * 60)
     log.info("Step 9: Verification")

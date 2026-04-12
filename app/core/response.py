@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from contextvars import ContextVar, Token
 from typing import Optional
@@ -8,14 +8,14 @@ from fastapi.responses import JSONResponse
 
 DataPayload = Optional[object]
 
-_request_id_ctx: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+_request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 
-def set_request_id(trace_id: str) -> Token[Optional[str]]:
+def set_request_id(trace_id: str) -> Token[str | None]:
     return _request_id_ctx.set(trace_id)
 
 
-def reset_request_id(token: Token[Optional[str]]) -> None:
+def reset_request_id(token: Token[str | None]) -> None:
     _request_id_ctx.reset(token)
 
 

@@ -19,9 +19,11 @@ from app.core.response import error
 from app.core.smart_factory import SelectionStrategy, SmartFactory, SmartFactoryConfig
 from app.db import async_session_factory
 from app.i18n.codes import ErrorCode
-from app.services.asr import aliyun  # noqa: F401
-from app.services.asr import tencent  # noqa: F401
-from app.services.asr import volcengine  # noqa: F401
+from app.services.asr import (
+    aliyun,  # noqa: F401
+    tencent,  # noqa: F401
+    volcengine,  # noqa: F401
+)
 from app.services.asr import configs as asr_configs  # noqa: F401
 
 # 导入所有服务模块以触发 @register_service 装饰器
@@ -41,9 +43,7 @@ def create_app() -> FastAPI:
         "http://127.0.0.1:3000",
     ]
     if settings.CORS_ORIGINS:
-        cors_origins.extend(
-            origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()
-        )
+        cors_origins.extend(origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip())
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
@@ -71,9 +71,7 @@ def create_app() -> FastAPI:
             )
         )
         MonitoringSystem.get_instance().start()
-        ConfigManager.configure_db(
-            async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL
-        )
+        ConfigManager.configure_db(async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL)
         if settings.CONFIG_CENTER_DB_ENABLED:
             await ConfigManager.refresh_from_db()
 
@@ -105,8 +103,7 @@ def create_app() -> FastAPI:
 
         # 记录详细的异常信息
         logger.exception(
-            f"Unhandled exception in {request.method} {request.url.path}: "
-            f"{exc.__class__.__name__}: {str(exc)}"
+            f"Unhandled exception in {request.method} {request.url.path}: {exc.__class__.__name__}: {str(exc)}"
         )
 
         locale = getattr(request.state, "locale", "zh")
