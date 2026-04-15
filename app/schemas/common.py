@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
 T = TypeVar("T")
 
 
-class PageResponse[T](BaseModel):
+class PageResponse(BaseModel, Generic[T]):  # noqa: UP046
     items: list[T]
     total: int
     page: int
