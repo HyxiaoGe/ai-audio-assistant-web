@@ -1,18 +1,9 @@
 from __future__ import annotations
 
-from app.services.llm import configs as _configs  # noqa: F401
 from app.services.llm.base import LLMService
-from app.services.llm.deepseek import DeepSeekLLMService
-from app.services.llm.doubao import DoubaoLLMService
-from app.services.llm.moonshot import MoonshotLLMService
-from app.services.llm.openrouter import OpenRouterLLMService
-from app.services.llm.qwen import QwenLLMService
+from app.services.llm.proxy import ProxyLLMService
 
 __all__ = [
     "LLMService",
-    "DeepSeekLLMService",
-    "DoubaoLLMService",
-    "QwenLLMService",
-    "MoonshotLLMService",
-    "OpenRouterLLMService",
+    "ProxyLLMService",
 ]

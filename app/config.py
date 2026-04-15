@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     OPENROUTER_APP_TITLE: str | None = Field(default=None)
     OPENROUTER_DYNAMIC_MODELS: bool = Field(default=False)
 
+    # LiteLLM Proxy
+    LITELLM_BASE_URL: str = Field(default="http://litellm-proxy:4000")
+    LITELLM_API_KEY: str | None = Field(default=None)
+    LITELLM_MODEL: str = Field(default="deepseek/deepseek-chat")
+    LITELLM_MAX_TOKENS: int = Field(default=4096)
+
     OPENAI_API_KEY: str | None = Field(default=None)
     OPENAI_BASE_URL: str | None = Field(default="https://api.openai.com/v1")
 

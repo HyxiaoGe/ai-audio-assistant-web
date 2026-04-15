@@ -28,8 +28,7 @@ from app.services.asr import configs as asr_configs  # noqa: F401
 
 # 导入所有服务模块以触发 @register_service 装饰器
 # 必须在模块顶层导入，而不是在函数内部，这样装饰器才会正确执行
-from app.services.llm import configs as llm_configs  # noqa: F401
-from app.services.llm import deepseek, doubao, moonshot, openrouter, qwen  # noqa: F401
+from app.services.llm import proxy as _llm_proxy  # noqa: F401
 from app.services.storage import configs as storage_configs  # noqa: F401
 from app.services.storage import cos, minio, oss, tos  # noqa: F401
 
