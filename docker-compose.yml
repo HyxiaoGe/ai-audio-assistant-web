@@ -30,7 +30,7 @@ services:
 
   worker:
     build: *default-build
-    command: celery -A worker.celery_app worker --loglevel=info
+    command: celery -A worker.celery_app worker --loglevel=info --autoscale=8,1
     env_file: .env
     environment:
       TZ: UTC
