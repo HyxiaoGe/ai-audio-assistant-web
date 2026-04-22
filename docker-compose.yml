@@ -11,6 +11,7 @@ services:
     env_file: .env
     environment:
       TZ: UTC
+      ENABLE_DOCS: "false"
       DATABASE_URL: postgresql+asyncpg://user:pass@192.168.1.10:5432/audio_assistant
       REDIS_URL: redis://192.168.1.10:6379/0
       MINIO_ENDPOINT: 192.168.1.10:9000
