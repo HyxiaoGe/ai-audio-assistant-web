@@ -7,6 +7,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# 换 apt 源到阿里云镜像，避免 Debian 官方 Fastly CDN 在国内不稳定。
+# 兼容 Debian 12+ 的 deb822 格式（sources.list.d/debian.sources）和老的 sources.list。
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g; s|http://security.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources; \
+    fi && \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g; s|http://security.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list; \
+    fi
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
