@@ -1,0 +1,198 @@
+name: AI Audio Web Build & Deploy
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ai-audio-web-build-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build on Windows runner
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 40
+    outputs:
+      started_at: ${{ steps.pipeline_start.outputs.started_at }}
+      runner_name: ${{ steps.pipeline_start.outputs.runner_name }}
+    env:
+      IMAGE_NAME: ghcr.io/hyxiaoge/ai-audio-assistant-web
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      - name: Record pipeline start
+        id: pipeline_start
+        run: |
+          for /f %%i in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()"') do echo started_at=%%i>>%GITHUB_OUTPUT%
+          echo runner_name=${{ runner.name }}>>%GITHUB_OUTPUT%
+
+      - name: Push CI/CD active metric
+        if: github.ref == 'refs/heads/master'
+        continue-on-error: true
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          $metrics = @"
+          # HELP cicd_pipeline_active Whether a CI/CD pipeline is currently active (1=true, 0=false).
+          # TYPE cicd_pipeline_active gauge
+          cicd_pipeline_active{project="ai-audio-assistant-web",branch="$env:GITHUB_REF_NAME",environment="dev",runner="${{ runner.name }}"} 1
+          # HELP cicd_pipeline_active_timestamp_seconds Timestamp of the latest CI/CD active-state update.
+          # TYPE cicd_pipeline_active_timestamp_seconds gauge
+          cicd_pipeline_active_timestamp_seconds{project="ai-audio-assistant-web",branch="$env:GITHUB_REF_NAME",environment="dev",runner="${{ runner.name }}"} $now
+          "@
+          $body = (($metrics -replace "`r`n", "`n").Trim() + "`n")
+          $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+          Invoke-WebRequest -UseBasicParsing -Method Post -Uri "http://192.168.1.10:9092/metrics/job/cicd_active/project_key/ai-audio-assistant-web/branch_key/master/environment_key/dev" -ContentType "text/plain; version=0.0.4" -Body $bytes
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify Docker access
+        run: |
+          docker version
+          docker ps
+
+      - name: Build Docker image
+        run: |
+          docker build -t "%IMAGE_NAME%:%GITHUB_SHA%" .
+
+      - name: Lint in image
+        run: |
+          docker run --rm "%IMAGE_NAME%:%GITHUB_SHA%" sh -lc "pip install --no-cache-dir ruff && ruff check app/ worker/ tests/"
+
+      - name: Run tests
+        timeout-minutes: 8
+        run: |
+          docker run --rm "%IMAGE_NAME%:%GITHUB_SHA%" sh -lc "pip install --no-cache-dir pytest pytest-asyncio pytest-mock && pytest tests/ -v"
+
+      - name: Login to GHCR
+        run: echo %GITHUB_TOKEN% | docker login ghcr.io -u %GITHUB_ACTOR% --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image
+        run: docker push "%IMAGE_NAME%:%GITHUB_SHA%"
+
+      - name: Cleanup local Docker artifacts
+        if: always()
+        run: |
+          docker image rm "%IMAGE_NAME%:%GITHUB_SHA%" 2>NUL
+          docker builder prune --filter "until=72h" -f
+
+  deploy-dev:
+    name: Deploy master on dev server
+    if: github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 15
+
+    steps:
+      - name: Record deploy start time
+        run: echo "DEPLOY_START=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Login to GHCR
+        run: echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply alembic migrations
+        run: |
+          cd ~/project/ai-audio-assistant-web
+          set -a
+          source .env
+          set +a
+          docker pull ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}
+          docker run --rm \
+            --network ai-audio-network \
+            -e DATABASE_URL="${DATABASE_URL}" \
+            ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }} \
+            alembic upgrade head
+
+      - name: Pull and restart api/worker/beat
+        run: |
+          cd ~/project/ai-audio-assistant-web
+          docker pull ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}
+          cat > docker-compose.ai-audio-web-ghcr.yml <<'EOF'
+          x-common: &common
+            image: ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}
+            env_file: .env
+            environment:
+              TZ: UTC
+            restart: unless-stopped
+            volumes:
+              - ./data:/app/data
+            networks:
+              - ai-audio-network
+
+          services:
+            api:
+              <<: *common
+              container_name: ai-audio-assistant-web-api
+              command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+              ports:
+                - "8088:8000"
+              mem_limit: 384m
+
+            worker:
+              <<: *common
+              container_name: ai-audio-assistant-web-worker
+              command: celery -A worker.celery_app worker --loglevel=info --autoscale=8,1
+              mem_limit: 1g
+
+            beat:
+              <<: *common
+              container_name: ai-audio-assistant-web-beat
+              command: celery -A worker.celery_app beat --loglevel=info
+              mem_limit: 192m
+
+          networks:
+            ai-audio-network:
+              external: true
+          EOF
+          # 兜底：清掉旧 compose project 持有的容器，避免首次切换 GHCR 时容器名冲突
+          docker rm -f ai-audio-assistant-web-api-1 ai-audio-assistant-web-worker-1 ai-audio-assistant-web-beat-1 2>/dev/null || true
+          docker rm -f ai-audio-assistant-web-api ai-audio-assistant-web-worker ai-audio-assistant-web-beat 2>/dev/null || true
+          docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d
+
+      - name: Verify health
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8088/api/v1/health | grep -q '"status":"ok"'; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs --tail=120 ai-audio-assistant-web-api || true
+          exit 1
+
+      - name: Cleanup old images
+        if: always()
+        run: |
+          current="ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}"
+          docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' ghcr.io/hyxiaoge/ai-audio-assistant-web \
+            | awk -v current="$current" '$1 != current {print $2}' \
+            | sort -u \
+            | xargs -r docker rmi || true
+
+      - name: Push CI/CD metrics
+        if: always()
+        run: |
+          bash ~/scripts/push-cicd-metrics.sh \
+            ai-audio-assistant-web \
+            "${{ github.ref_name }}" \
+            dev \
+            "${{ job.status }}" \
+            "${{ needs.build.outputs.started_at }}" \
+            "ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}" \
+            "${{ github.sha }}" \
+            "${{ needs.build.outputs.runner_name }}" \
+            ai-audio-assistant-web \
+            "${{ env.DEPLOY_START }}"

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from app.services.llm.doubao import DoubaoLLMService
 
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
-from app.services.llm.doubao import DoubaoLLMService
 
 
 class _FakeResponse:
