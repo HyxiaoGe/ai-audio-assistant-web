@@ -105,13 +105,12 @@ jobs:
       - name: Apply alembic migrations
         run: |
           cd ~/project/ai-audio-assistant-web
-          set -a
-          source .env
-          set +a
           docker pull ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}
+          # 用 docker --env-file 让 docker 自己解析 .env，而不是 bash source。
+          # bash source 会把 YOUTUBE_OUTPUT_TEMPLATE=%(id)s.%(ext)s 这类含 ( 的值当 subshell 启动失败。
           docker run --rm \
             --network ai-audio-network \
-            -e DATABASE_URL="${DATABASE_URL}" \
+            --env-file .env \
             ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }} \
             alembic upgrade head
 
