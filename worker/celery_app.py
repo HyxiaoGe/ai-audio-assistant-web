@@ -86,4 +86,5 @@ from worker.tasks import (
     sync_youtube_subscriptions,  # noqa: F401, E402
     sync_youtube_videos,  # noqa: F401, E402
     youtube_auto_transcribe,  # noqa: F401, E402
+    youtube_summary_style_recommendation,  # noqa: F401, E402
 )

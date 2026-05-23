@@ -33,6 +33,8 @@ from app.schemas.youtube import (
     YouTubeDisconnectResponse,
     YouTubeSubscriptionItem,
     YouTubeSubscriptionListResponse,
+    YouTubeSummaryStylePrewarmRequest,
+    YouTubeSummaryStylePrewarmResponse,
     YouTubeSummaryStyleRecommendationResponse,
     YouTubeSyncOverview,
     YouTubeSyncResponse,
@@ -876,6 +878,58 @@ async def get_video_summary_style_recommendation(
                 confidence=recommendation.confidence,
                 reason=recommendation.reason,
                 cached=recommendation.cached,
+            )
+        )
+    )
+
+
+@router.post("/videos/summary-style-recommendations/prewarm")
+async def prewarm_video_summary_style_recommendations(
+    payload: YouTubeSummaryStylePrewarmRequest,
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+) -> JSONResponse:
+    """Queue summary style recommendation prewarming for cached YouTube videos."""
+    unique_video_ids: list[str] = []
+    seen: set[str] = set()
+    for video_id in payload.video_ids:
+        clean_video_id = video_id.strip()
+        if not clean_video_id or clean_video_id in seen:
+            continue
+        seen.add(clean_video_id)
+        unique_video_ids.append(clean_video_id)
+
+    if not unique_video_ids:
+        return success(
+            data=jsonable_encoder(
+                YouTubeSummaryStylePrewarmResponse(
+                    task_id="",
+                    queued_count=0,
+                    skipped_count=len(payload.video_ids),
+                )
+            )
+        )
+
+    from worker.tasks.youtube_summary_style_recommendation import (
+        prewarm_youtube_summary_style_recommendations,
+    )
+
+    locale = getattr(request.state, "locale", "zh")
+    trace_id = getattr(request.state, "trace_id", None)
+    task = prewarm_youtube_summary_style_recommendations.delay(
+        user_id=user.id,
+        video_ids=unique_video_ids,
+        locale=locale,
+        limit=min(20, len(unique_video_ids)),
+        request_id=trace_id,
+    )
+
+    return success(
+        data=jsonable_encoder(
+            YouTubeSummaryStylePrewarmResponse(
+                task_id=task.id,
+                queued_count=len(unique_video_ids),
+                skipped_count=len(payload.video_ids) - len(unique_video_ids),
             )
         )
     )

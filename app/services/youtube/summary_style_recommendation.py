@@ -4,23 +4,75 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.exceptions import BusinessError
+from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 from app.models.youtube_subscription import YouTubeSubscription
 from app.models.youtube_summary_style_recommendation import YouTubeSummaryStyleRecommendation
 from app.models.youtube_video import YouTubeVideo
+from app.services.llm.base import LLMService
 
-ALGORITHM_VERSION = "summary-style-recommender-v1"
+logger = logging.getLogger(__name__)
 
-TITLE_WEIGHT = 3
-DESCRIPTION_WEIGHT = 1
-CHANNEL_WEIGHT = 2
+ALGORITHM_VERSION = "summary-style-llm-v1"
+
+STYLE_CATALOG: dict[str, dict[str, str]] = {
+    "meeting": {
+        "zh": "会议、讨论、头脑风暴；关注议题、决议、行动项、参会者观点。",
+        "en": "Meetings, discussions, brainstorming; focus on agenda, decisions, action items, viewpoints.",
+    },
+    "lecture": {
+        "zh": "讲座、课程、培训内容；关注知识点、核心概念、学习要点。",
+        "en": "Lectures, courses, training; focus on knowledge, concepts, learning points.",
+    },
+    "podcast": {
+        "zh": "播客节目、圆桌、长对话；关注核心观点、精彩片段、讨论亮点。",
+        "en": "Podcasts, roundtables, long conversations; focus on opinions, highlights, discussion points.",
+    },
+    "interview": {
+        "zh": "采访、访谈、对话节目；关注嘉宾观点、问答精华、关键洞见。",
+        "en": "Interviews and Q&A conversations; focus on guest insights and key answers.",
+    },
+    "tutorial": {
+        "zh": "操作教程、使用指南、How-to 视频；关注操作步骤、注意事项、技巧要点。",
+        "en": "How-to guides and tutorials; focus on steps, caveats, practical techniques.",
+    },
+    "review": {
+        "zh": "产品评测、体验分享、对比测评；关注优缺点、性能数据、推荐结论。",
+        "en": "Reviews and comparisons; focus on pros, cons, metrics, final recommendation.",
+    },
+    "news": {
+        "zh": "新闻报道、时事评论、资讯播报；关注核心事件、关键数据、各方观点。",
+        "en": "News, current affairs, updates; focus on events, data, and perspectives.",
+    },
+    "explainer": {
+        "zh": "科普视频、知识解读、概念讲解；关注核心概念、原理说明、实际应用。",
+        "en": "Explainers and educational analysis; focus on concepts, principles, applications.",
+    },
+    "documentary": {
+        "zh": "纪录片、专题片、深度报道；关注主题背景、关键事件、人物故事。",
+        "en": "Documentaries and feature reports; focus on context, events, and human stories.",
+    },
+    "video": {
+        "zh": "视频教程、解说视频或难以归入特定垂类的视频内容；关注主题亮点、关键信息。",
+        "en": "General video commentary or videos that do not fit a narrower style; focus on highlights.",
+    },
+    "general": {
+        "zh": "通用内容、其他类型；关注核心信息、关键要点。",
+        "en": "General or miscellaneous content; focus on core information and key points.",
+    },
+}
+
+ALLOWED_STYLES = tuple(STYLE_CATALOG)
 
 
 @dataclass(frozen=True)
@@ -29,165 +81,6 @@ class SummaryStyleRecommendationResult:
     confidence: float
     reason: str
     cached: bool = False
-
-
-@dataclass(frozen=True)
-class _StyleRule:
-    keywords: tuple[str, ...]
-    zh_reason: str
-    en_reason: str
-
-
-STYLE_RULES: dict[str, _StyleRule] = {
-    "tutorial": _StyleRule(
-        keywords=(
-            "how to",
-            "tutorial",
-            "guide",
-            "step by step",
-            "walkthrough",
-            "setup",
-            "tips",
-            "教程",
-            "指南",
-            "入门",
-            "实战",
-            "步骤",
-            "上手",
-            "配置",
-        ),
-        zh_reason="标题或描述呈现教程/步骤特征，适合按操作流程提炼。",
-        en_reason="The title or description has tutorial and step-by-step signals.",
-    ),
-    "review": _StyleRule(
-        keywords=(
-            "review",
-            "vs",
-            "versus",
-            "comparison",
-            "benchmark",
-            "hands-on",
-            "pros",
-            "cons",
-            "评测",
-            "测评",
-            "对比",
-            "体验",
-            "开箱",
-            "优缺点",
-        ),
-        zh_reason="内容带有评测/对比特征，适合突出优缺点和结论。",
-        en_reason="The metadata looks like a review or comparison.",
-    ),
-    "news": _StyleRule(
-        keywords=(
-            "news",
-            "breaking",
-            "announced",
-            "release",
-            "update",
-            "latest",
-            "today",
-            "新闻",
-            "时事",
-            "发布",
-            "更新",
-            "最新",
-            "宣布",
-            "报道",
-        ),
-        zh_reason="内容带有新闻/更新特征，适合聚焦事件、数据和各方观点。",
-        en_reason="The metadata suggests news, releases, or current updates.",
-    ),
-    "interview": _StyleRule(
-        keywords=(
-            "interview",
-            "q&a",
-            "qa",
-            "conversation",
-            "guest",
-            "访谈",
-            "采访",
-            "对谈",
-            "问答",
-            "嘉宾",
-        ),
-        zh_reason="内容呈现访谈/问答特征，适合提炼嘉宾观点和关键问答。",
-        en_reason="The metadata suggests an interview or Q&A format.",
-    ),
-    "podcast": _StyleRule(
-        keywords=(
-            "podcast",
-            "episode",
-            "ep.",
-            "talk show",
-            "roundtable",
-            "播客",
-            "节目",
-            "圆桌",
-            "闲聊",
-        ),
-        zh_reason="内容呈现播客/对话节目特征，适合提炼观点和讨论亮点。",
-        en_reason="The metadata suggests a podcast or discussion episode.",
-    ),
-    "lecture": _StyleRule(
-        keywords=(
-            "lecture",
-            "course",
-            "lesson",
-            "class",
-            "seminar",
-            "training",
-            "课程",
-            "讲座",
-            "公开课",
-            "培训",
-            "课堂",
-        ),
-        zh_reason="内容呈现课程/讲座特征，适合提炼知识点和学习要点。",
-        en_reason="The metadata suggests lecture or course content.",
-    ),
-    "explainer": _StyleRule(
-        keywords=(
-            "explained",
-            "explain",
-            "why",
-            "what is",
-            "deep dive",
-            "解析",
-            "解读",
-            "科普",
-            "原理",
-            "为什么",
-            "是什么",
-        ),
-        zh_reason="内容呈现知识解读/科普特征，适合突出概念、原理和应用。",
-        en_reason="The metadata suggests an explainer or educational analysis.",
-    ),
-    "documentary": _StyleRule(
-        keywords=(
-            "documentary",
-            "history",
-            "story of",
-            "full story",
-            "纪录片",
-            "专题",
-            "深度报道",
-            "历史",
-            "故事",
-        ),
-        zh_reason="内容呈现纪录片/专题特征，适合梳理背景、事件和人物线索。",
-        en_reason="The metadata suggests documentary or feature content.",
-    ),
-}
-
-
-def _normalize_text(value: str | None) -> str:
-    return (value or "").lower()
-
-
-def _score_keywords(text: str, keywords: tuple[str, ...], weight: int) -> int:
-    return sum(weight for keyword in keywords if keyword in text)
 
 
 def build_video_metadata_hash(
@@ -207,43 +100,153 @@ def build_video_metadata_hash(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def recommend_style_from_metadata(
+def _trim_text(value: str | None, limit: int) -> str:
+    text = (value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _duration_label(duration_seconds: int | None) -> str | None:
+    if duration_seconds is None:
+        return None
+    hours, remainder = divmod(duration_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _style_catalog_text(locale: str) -> str:
+    lang = "zh" if locale.startswith("zh") else "en"
+    return "\n".join(f"- {style}: {details[lang]}" for style, details in STYLE_CATALOG.items())
+
+
+def _build_llm_messages(
     *,
     title: str,
     description: str | None,
     channel_title: str | None,
     duration_seconds: int | None,
     locale: str = "zh",
-) -> SummaryStyleRecommendationResult:
-    title_text = _normalize_text(title)
-    description_text = _normalize_text(description)
-    channel_text = _normalize_text(channel_title)
+) -> list[dict[str, str]]:
+    reason_language = "Chinese" if locale.startswith("zh") else "English"
+    system = (
+        "You recommend the best summary style for a YouTube video before transcription. "
+        "Use only the provided metadata; do not summarize the video. "
+        "Choose exactly one allowed style id. Return valid JSON only."
+    )
+    payload = {
+        "allowed_styles": _style_catalog_text(locale),
+        "video_metadata": {
+            "title": _trim_text(title, 300),
+            "description": _trim_text(description, 1500),
+            "channel_title": _trim_text(channel_title, 120),
+            "duration_seconds": duration_seconds,
+            "duration_label": _duration_label(duration_seconds),
+        },
+        "output_schema": {
+            "style": f"one of: {', '.join(ALLOWED_STYLES)}",
+            "confidence": "number from 0 to 1",
+            "reason": f"short reason in {reason_language}",
+        },
+    }
+    user = (
+        "Recommend the most appropriate summary style for this video metadata. "
+        "Return exactly one JSON object matching the schema, with no markdown or extra text.\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
 
-    scores: dict[str, int] = {}
-    for style, rule in STYLE_RULES.items():
-        score = 0
-        score += _score_keywords(title_text, rule.keywords, TITLE_WEIGHT)
-        score += _score_keywords(description_text, rule.keywords, DESCRIPTION_WEIGHT)
-        score += _score_keywords(channel_text, rule.keywords, CHANNEL_WEIGHT)
-        scores[style] = score
 
-    if duration_seconds and duration_seconds >= 2400:
-        scores["podcast"] += 1
-        scores["documentary"] += 1
-
-    best_style, best_score = max(scores.items(), key=lambda item: item[1])
-    if best_score <= 0:
-        reason = (
-            "未识别到明显内容类型，使用通用摘要结构。"
-            if locale.startswith("zh")
-            else "No strong content-type signal was found, so general summary is recommended."
+def _extract_json_object(raw: str) -> dict[str, Any]:
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end <= start:
+        raise BusinessError(
+            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+            reason="LLM recommendation response did not contain a JSON object",
         )
-        return SummaryStyleRecommendationResult(style="general", confidence=0.4, reason=reason)
+    try:
+        parsed = json.loads(raw[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise BusinessError(
+            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+            reason="LLM recommendation response was not valid JSON",
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise BusinessError(
+            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+            reason="LLM recommendation response JSON was not an object",
+        )
+    return parsed
 
-    confidence = min(0.95, round(0.5 + best_score * 0.08, 2))
-    rule = STYLE_RULES[best_style]
-    reason = rule.zh_reason if locale.startswith("zh") else rule.en_reason
-    return SummaryStyleRecommendationResult(style=best_style, confidence=confidence, reason=reason)
+
+def _parse_confidence(value: Any) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError) as exc:
+        raise BusinessError(
+            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+            reason="LLM recommendation confidence was not numeric",
+        ) from exc
+    if confidence > 1 and confidence <= 100:
+        confidence = confidence / 100
+    return round(min(1.0, max(0.0, confidence)), 2)
+
+
+def _parse_llm_recommendation(raw: str, locale: str) -> SummaryStyleRecommendationResult:
+    payload = _extract_json_object(raw.strip())
+    style = str(payload.get("style") or "").strip().lower()
+    if style not in ALLOWED_STYLES:
+        raise BusinessError(
+            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+            reason=f"LLM recommendation style is not supported: {style or '<empty>'}",
+        )
+    confidence = _parse_confidence(payload.get("confidence"))
+    reason = str(payload.get("reason") or "").strip()
+    if not reason:
+        reason = "AI 推荐该摘要风格。" if locale.startswith("zh") else "AI recommended this summary style."
+    return SummaryStyleRecommendationResult(
+        style=style,
+        confidence=confidence,
+        reason=reason,
+        cached=False,
+    )
+
+
+async def _get_summary_style_llm_service(user_id: str) -> LLMService:
+    return await SmartFactory.get_service(
+        "llm",
+        provider="proxy",
+        model_id=settings.LITELLM_MODEL,
+        user_id=user_id,
+    )
+
+
+async def _recommend_style_with_llm(
+    *,
+    llm_service: LLMService,
+    title: str,
+    description: str | None,
+    channel_title: str | None,
+    duration_seconds: int | None,
+    locale: str,
+) -> SummaryStyleRecommendationResult:
+    messages = _build_llm_messages(
+        title=title,
+        description=description,
+        channel_title=channel_title,
+        duration_seconds=duration_seconds,
+        locale=locale,
+    )
+    raw = await llm_service.chat(messages, max_tokens=300, temperature=0.2)
+    return _parse_llm_recommendation(raw, locale)
 
 
 async def _get_video(db: AsyncSession, user_id: str, video_id: str) -> YouTubeVideo | None:
@@ -290,6 +293,7 @@ async def recommend_summary_style_for_video(
     video_id: str,
     *,
     locale: str = "zh",
+    llm_service: LLMService | None = None,
 ) -> SummaryStyleRecommendationResult:
     video = await _get_video(db, user_id, video_id)
     if not video:
@@ -318,7 +322,9 @@ async def recommend_summary_style_for_video(
             cached=True,
         )
 
-    recommendation = recommend_style_from_metadata(
+    llm = llm_service or await _get_summary_style_llm_service(user_id)
+    recommendation = await _recommend_style_with_llm(
+        llm_service=llm,
         title=video.title,
         description=video.description,
         channel_title=channel_title,
@@ -355,3 +361,62 @@ async def recommend_summary_style_for_video(
             )
         raise
     return recommendation
+
+
+async def prewarm_summary_styles_for_videos(
+    db: AsyncSession,
+    user_id: str,
+    video_ids: list[str],
+    *,
+    locale: str = "zh",
+    limit: int = 20,
+    llm_service: LLMService | None = None,
+) -> dict[str, int]:
+    """Prewarm summary style recommendations for a bounded set of cached videos."""
+    unique_video_ids: list[str] = []
+    seen: set[str] = set()
+    for video_id in video_ids:
+        clean_video_id = str(video_id or "").strip()
+        if not clean_video_id or clean_video_id in seen:
+            continue
+        seen.add(clean_video_id)
+        unique_video_ids.append(clean_video_id)
+        if len(unique_video_ids) >= limit:
+            break
+
+    stats = {
+        "requested_count": len(video_ids),
+        "queued_count": len(unique_video_ids),
+        "generated_count": 0,
+        "cached_count": 0,
+        "failed_count": 0,
+    }
+    if not unique_video_ids:
+        return stats
+
+    llm = llm_service or await _get_summary_style_llm_service(user_id)
+    for video_id in unique_video_ids:
+        try:
+            recommendation = await recommend_summary_style_for_video(
+                db,
+                user_id,
+                video_id,
+                locale=locale,
+                llm_service=llm,
+            )
+            if recommendation.cached:
+                stats["cached_count"] += 1
+            else:
+                stats["generated_count"] += 1
+        except BusinessError as exc:
+            stats["failed_count"] += 1
+            logger.warning(
+                "Failed to prewarm summary style recommendation for video %s: %s",
+                video_id,
+                exc.code,
+            )
+        except Exception:
+            stats["failed_count"] += 1
+            logger.exception("Unexpected error prewarming summary style recommendation for video %s", video_id)
+
+    return stats

@@ -470,23 +470,41 @@ def sync_channel_videos(
             )
             publish_user_notification_sync(user_id, notification)
 
-            # Trigger auto-transcription for new videos if enabled
-            if synced_count > 0 and subscription.auto_transcribe:
-                new_video_ids = [v["video_id"] for v in all_videos]
-                if new_video_ids:
-                    from worker.tasks.youtube_auto_transcribe import (
-                        process_auto_transcriptions,
+            new_video_ids = [v["video_id"] for v in all_videos if v.get("video_id")]
+            if synced_count > 0 and new_video_ids:
+                try:
+                    from worker.tasks.youtube_summary_style_recommendation import (
+                        prewarm_youtube_summary_style_recommendations,
                     )
 
-                    process_auto_transcriptions.delay(
+                    prewarm_youtube_summary_style_recommendations.delay(
                         user_id=user_id,
-                        channel_id=channel_id,
-                        video_ids=new_video_ids,
+                        video_ids=new_video_ids[:20],
+                        locale="zh",
+                        limit=20,
                         request_id=request_id,
                     )
                     logger.info(
-                        f"Triggered auto-transcription for {len(new_video_ids)} videos from channel {channel_id}"
+                        "Queued summary style recommendation prewarm for %s videos from channel %s",
+                        min(len(new_video_ids), 20),
+                        channel_id,
                     )
+                except Exception:
+                    logger.exception("Failed to queue summary style recommendation prewarm")
+
+            # Trigger auto-transcription for new videos if enabled
+            if synced_count > 0 and subscription.auto_transcribe and new_video_ids:
+                from worker.tasks.youtube_auto_transcribe import (
+                    process_auto_transcriptions,
+                )
+
+                process_auto_transcriptions.delay(
+                    user_id=user_id,
+                    channel_id=channel_id,
+                    video_ids=new_video_ids,
+                    request_id=request_id,
+                )
+                logger.info(f"Triggered auto-transcription for {len(new_video_ids)} videos from channel {channel_id}")
 
             return {
                 "status": "success",

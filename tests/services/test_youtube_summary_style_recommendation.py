@@ -14,7 +14,7 @@ from app.models.youtube_video import YouTubeVideo
 from app.services.youtube.summary_style_recommendation import (
     ALGORITHM_VERSION,
     build_video_metadata_hash,
-    recommend_style_from_metadata,
+    prewarm_summary_styles_for_videos,
     recommend_summary_style_for_video,
 )
 
@@ -50,6 +50,21 @@ class _FakeSession:
 
     async def rollback(self) -> None:
         self.rolled_back = True
+
+
+class _FakeLLM:
+    provider = "proxy"
+    model_name = "test-model"
+
+    def __init__(self, *responses: str) -> None:
+        self._responses = list(responses)
+        self.calls: list[tuple[list[dict[str, str]], dict[str, Any]]] = []
+
+    async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
+        self.calls.append((messages, kwargs))
+        if not self._responses:
+            raise AssertionError("Unexpected LLM call")
+        return self._responses.pop(0)
 
 
 def _video(**overrides: Any) -> YouTubeVideo:
@@ -88,20 +103,6 @@ def _subscription(**overrides: Any) -> YouTubeSubscription:
         last_synced_at=overrides.pop("last_synced_at", now),
         **overrides,
     )
-
-
-def test_recommend_style_from_metadata_prefers_tutorial_for_how_to_content() -> None:
-    result = recommend_style_from_metadata(
-        title="How to build a reliable FastAPI upload workflow",
-        description="A step-by-step tutorial with setup tips and examples.",
-        channel_title="Engineering Tutorials",
-        duration_seconds=900,
-        locale="en",
-    )
-
-    assert result.style == "tutorial"
-    assert result.confidence >= 0.7
-    assert "tutorial" in result.reason.lower()
 
 
 def test_metadata_hash_changes_when_relevant_video_metadata_changes() -> None:
@@ -153,15 +154,29 @@ async def test_recommend_summary_style_for_video_returns_cached_result() -> None
 
 
 @pytest.mark.asyncio
-async def test_recommend_summary_style_for_video_creates_cache_record_on_miss() -> None:
+async def test_recommend_summary_style_for_video_uses_llm_and_creates_cache_record_on_miss() -> None:
     video = _video()
     subscription = _subscription()
     session = _FakeSession(video, subscription, None)
+    llm = _FakeLLM('{"style":"tutorial","confidence":0.84,"reason":"The metadata is clearly instructional."}')
 
-    result = await recommend_summary_style_for_video(session, video.user_id, video.video_id, locale="en")
+    result = await recommend_summary_style_for_video(
+        session,
+        video.user_id,
+        video.video_id,
+        locale="en",
+        llm_service=llm,
+    )
 
     assert result.style == "tutorial"
+    assert result.confidence == 0.84
+    assert result.reason == "The metadata is clearly instructional."
     assert result.cached is False
+    assert len(llm.calls) == 1
+    messages, kwargs = llm.calls[0]
+    assert kwargs == {"max_tokens": 300, "temperature": 0.2}
+    assert "How to build a reliable FastAPI upload workflow" in messages[-1]["content"]
+    assert "tutorial" in messages[-1]["content"]
     assert session.committed is True
     assert len(session.added) == 1
     added = session.added[0]
@@ -170,6 +185,27 @@ async def test_recommend_summary_style_for_video_creates_cache_record_on_miss() 
     assert added.video_id == video.video_id
     assert added.style == "tutorial"
     assert added.algorithm_version == ALGORITHM_VERSION
+
+
+@pytest.mark.asyncio
+async def test_recommend_summary_style_for_video_rejects_invalid_llm_style() -> None:
+    video = _video()
+    subscription = _subscription()
+    session = _FakeSession(video, subscription, None)
+    llm = _FakeLLM('{"style":"invalid-style","confidence":0.7,"reason":"Nope"}')
+
+    with pytest.raises(BusinessError) as exc_info:
+        await recommend_summary_style_for_video(
+            session,
+            video.user_id,
+            video.video_id,
+            locale="en",
+            llm_service=llm,
+        )
+
+    assert exc_info.value.code == ErrorCode.AI_SUMMARY_GENERATION_FAILED
+    assert session.added == []
+    assert session.committed is False
 
 
 @pytest.mark.asyncio
@@ -198,13 +234,51 @@ async def test_recommend_summary_style_for_video_returns_concurrent_cached_resul
         cached,
         commit_error=IntegrityError("insert", {}, Exception("duplicate key")),
     )
+    llm = _FakeLLM('{"style":"tutorial","confidence":0.84,"reason":"The metadata is clearly instructional."}')
 
-    result = await recommend_summary_style_for_video(session, video.user_id, video.video_id, locale="en")
+    result = await recommend_summary_style_for_video(
+        session,
+        video.user_id,
+        video.video_id,
+        locale="en",
+        llm_service=llm,
+    )
 
     assert result.style == "tutorial"
     assert result.reason == "Concurrent cached recommendation"
     assert result.cached is True
     assert session.rolled_back is True
+
+
+@pytest.mark.asyncio
+async def test_prewarm_summary_styles_for_videos_dedupes_and_limits_work() -> None:
+    first = _video(video_id="yt-1")
+    second = _video(video_id="yt-2", title="Product review: Camera X")
+    subscription = _subscription()
+    session = _FakeSession(first, subscription, None, second, subscription, None)
+    llm = _FakeLLM(
+        '{"style":"tutorial","confidence":0.81,"reason":"Instructional metadata."}',
+        '{"style":"review","confidence":0.76,"reason":"Review metadata."}',
+    )
+
+    result = await prewarm_summary_styles_for_videos(
+        session,
+        first.user_id,
+        ["yt-1", "yt-1", "yt-2", "yt-3"],
+        locale="en",
+        limit=2,
+        llm_service=llm,
+    )
+
+    assert result == {
+        "requested_count": 4,
+        "queued_count": 2,
+        "generated_count": 2,
+        "cached_count": 0,
+        "failed_count": 0,
+    }
+    assert len(llm.calls) == 2
+    assert [record.video_id for record in session.added] == ["yt-1", "yt-2"]
 
 
 @pytest.mark.asyncio

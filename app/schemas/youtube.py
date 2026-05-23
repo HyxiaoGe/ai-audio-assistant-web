@@ -164,6 +164,20 @@ class YouTubeSummaryStyleRecommendationResponse(BaseModel):
     cached: bool
 
 
+class YouTubeSummaryStylePrewarmRequest(BaseModel):
+    """Request for prewarming YouTube summary style recommendations."""
+
+    video_ids: list[str] = Field(..., min_length=1, max_length=50)
+
+
+class YouTubeSummaryStylePrewarmResponse(BaseModel):
+    """Response for queued YouTube summary style recommendation prewarm."""
+
+    task_id: str
+    queued_count: int
+    skipped_count: int = 0
+
+
 class YouTubeChannelSyncStatus(BaseModel):
     """Channel sync status."""
 
