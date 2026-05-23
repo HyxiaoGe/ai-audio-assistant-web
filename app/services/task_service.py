@@ -22,6 +22,7 @@ from app.i18n.codes import ErrorCode
 from app.models.task import Task
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem
 from app.services.asr_quota_service import check_any_provider_available
+from app.services.media_url import build_media_download_url
 
 logger = logging.getLogger(__name__)
 
@@ -433,10 +434,9 @@ class TaskService:
         if task is None:
             raise BusinessError(ErrorCode.TASK_NOT_FOUND)
 
-        # 生成音频播放 URL（相对路径，通过 nginx same-origin 代理）
         audio_url = None
         if task.source_key:
-            audio_url = f"/api/v1/media/{task.source_key}"
+            audio_url = await build_media_download_url(task.source_key, user.id)
 
         # 构建阶段信息
         from app.schemas.task import TaskStageResponse

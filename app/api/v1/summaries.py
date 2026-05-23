@@ -24,6 +24,7 @@ from app.schemas.summary import (
     VisualSummaryRequest,
     VisualSummaryResponse,
 )
+from app.services.media_url import build_media_download_url
 
 router = APIRouter(prefix="/summaries")
 
@@ -51,23 +52,27 @@ async def get_summaries(
     summary_result = await db.execute(summary_stmt)
     summaries = summary_result.scalars().all()
 
-    items = [
-        SummaryItem(
-            id=str(s.id),
-            summary_type=s.summary_type,
-            version=s.version,
-            is_active=s.is_active,
-            content=s.content,
-            model_used=s.model_used,
-            prompt_version=s.prompt_version,
-            token_count=s.token_count,
-            created_at=s.created_at,
-            visual_format=s.visual_format,
-            image_url=f"/api/v1/media/{s.image_key}" if s.image_key else None,
-            image_model_used=s.image_model_used,
+    items = []
+    for summary in summaries:
+        image_url = None
+        if summary.image_key:
+            image_url = await build_media_download_url(summary.image_key, user.id)
+        items.append(
+            SummaryItem(
+                id=str(summary.id),
+                summary_type=summary.summary_type,
+                version=summary.version,
+                is_active=summary.is_active,
+                content=summary.content,
+                model_used=summary.model_used,
+                prompt_version=summary.prompt_version,
+                token_count=summary.token_count,
+                created_at=summary.created_at,
+                visual_format=summary.visual_format,
+                image_url=image_url,
+                image_model_used=summary.image_model_used,
+            )
         )
-        for s in summaries
-    ]
 
     response = SummaryListResponse(task_id=task_id, total=len(items), items=items)
     return success(data=jsonable_encoder(response))
@@ -775,7 +780,7 @@ async def get_visual_summary(
         visual_type=visual_type,
         format=summary.visual_format or "mermaid",
         content=summary.visual_content or summary.content,
-        image_url=f"/api/v1/media/{summary.image_key}" if summary.image_key else None,
+        image_url=await build_media_download_url(summary.image_key, user.id) if summary.image_key else None,
         model_used=summary.model_used,
         token_count=summary.token_count,
         created_at=summary.created_at,

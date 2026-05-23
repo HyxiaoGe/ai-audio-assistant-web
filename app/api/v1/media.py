@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from app.core.exceptions import BusinessError
 from app.core.smart_factory import SmartFactory
+from app.i18n.codes import ErrorCode
 
 logger = logging.getLogger("app.api.media")
 
@@ -29,7 +31,7 @@ async def stream_media(file_path: str, request: Request) -> StreamingResponse:
         StreamingResponse with the media file content
 
     Raises:
-        HTTPException: If file not found or access denied
+        BusinessError: If file not found or storage is unavailable
     """
     try:
         from app.config import settings
@@ -38,7 +40,7 @@ async def stream_media(file_path: str, request: Request) -> StreamingResponse:
         minio_storage = await SmartFactory.get_service("storage", provider="minio")
         bucket = settings.MINIO_BUCKET
         if not bucket:
-            raise HTTPException(status_code=500, detail="Storage not configured")
+            raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR)
 
         # Get file metadata
         try:
@@ -47,7 +49,7 @@ async def stream_media(file_path: str, request: Request) -> StreamingResponse:
             content_type = stat.content_type or "application/octet-stream"
         except Exception as e:
             logger.warning(f"File not found: {file_path}, error: {e}")
-            raise HTTPException(status_code=404, detail="File not found")
+            raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
         # Handle range requests (for video/audio seeking)
         range_header = request.headers.get("range")
@@ -109,8 +111,8 @@ async def stream_media(file_path: str, request: Request) -> StreamingResponse:
                 media_type=content_type,
             )
 
-    except HTTPException:
+    except BusinessError:
         raise
     except Exception as e:
         logger.exception(f"Error streaming media file {file_path}: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR)

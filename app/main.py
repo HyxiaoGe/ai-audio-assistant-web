@@ -1,6 +1,6 @@
 import os
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError
@@ -33,6 +33,24 @@ from app.services.asr import configs as asr_configs  # noqa: F401
 from app.services.llm import proxy as _llm_proxy  # noqa: F401
 from app.services.storage import configs as storage_configs  # noqa: F401
 from app.services.storage import cos, minio, oss, tos  # noqa: F401
+
+
+def _http_status_error_code(status_code: int) -> ErrorCode:
+    if status_code == 401:
+        return ErrorCode.AUTH_TOKEN_INVALID
+    if status_code == 403:
+        return ErrorCode.PERMISSION_DENIED
+    if status_code == 404:
+        return ErrorCode.RESOURCE_NOT_FOUND
+    if 400 <= status_code < 500:
+        return ErrorCode.INVALID_PARAMETER
+    return ErrorCode.INTERNAL_SERVER_ERROR
+
+
+def _http_exception_message(exc: HTTPException, locale: str, code: ErrorCode) -> str:
+    if isinstance(exc.detail, str) and exc.detail:
+        return exc.detail
+    return get_message(code, locale, detail=str(exc.detail))
 
 
 def create_app() -> FastAPI:
@@ -92,6 +110,13 @@ def create_app() -> FastAPI:
         locale = getattr(request.state, "locale", "zh")
         message = get_message(exc.code, locale, **exc.kwargs)
         return error(exc.code.value, message)
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        locale = getattr(request.state, "locale", "zh")
+        code = _http_status_error_code(exc.status_code)
+        message = _http_exception_message(exc, locale, code)
+        return error(code.value, message)
 
     @app.exception_handler(DBAPIError)
     async def database_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:

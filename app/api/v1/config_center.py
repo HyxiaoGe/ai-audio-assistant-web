@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,7 +61,7 @@ async def get_config(
     )
     record = (await db.execute(stmt)).scalar_one_or_none()
     if record is None:
-        raise HTTPException(status_code=404, detail="Config not found")
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
     return success(data=_serialize_config(record))
 
 
@@ -136,7 +136,7 @@ async def rollback_config(
     )
     record = (await db.execute(stmt)).scalar_one_or_none()
     if record is None:
-        raise HTTPException(status_code=404, detail="Config not found")
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
     history_stmt = select(ServiceConfigHistory).where(
         ServiceConfigHistory.service_type == service_type,
@@ -148,7 +148,7 @@ async def rollback_config(
     history_stmt = history_stmt.order_by(desc(ServiceConfigHistory.version))
     history = (await db.execute(history_stmt)).scalars().first()
     if history is None:
-        raise HTTPException(status_code=404, detail="No history available for rollback")
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
     db.add(
         ServiceConfigHistory(
@@ -214,7 +214,7 @@ async def get_my_config(
     )
     record = (await db.execute(stmt)).scalar_one_or_none()
     if record is None:
-        raise HTTPException(status_code=404, detail="Config not found")
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
     return success(data=_serialize_config(record))
 
 
@@ -289,7 +289,7 @@ async def rollback_my_config(
     )
     record = (await db.execute(stmt)).scalar_one_or_none()
     if record is None:
-        raise HTTPException(status_code=404, detail="Config not found")
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
     history_stmt = select(ServiceConfigHistory).where(
         ServiceConfigHistory.service_type == service_type,
@@ -301,7 +301,7 @@ async def rollback_my_config(
     history_stmt = history_stmt.order_by(desc(ServiceConfigHistory.version))
     history = (await db.execute(history_stmt)).scalars().first()
     if history is None:
-        raise HTTPException(status_code=404, detail="No history available for rollback")
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
     db.add(
         ServiceConfigHistory(

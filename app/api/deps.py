@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, Query
+from fastapi import Depends, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessError
@@ -60,7 +60,7 @@ def is_admin_user(user: CurrentUser) -> bool:
 
 async def get_admin_user(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     if not is_admin_user(user):
-        raise HTTPException(status_code=403, detail="Admin access required")
+        raise BusinessError(ErrorCode.PERMISSION_DENIED)
     return user
 
 

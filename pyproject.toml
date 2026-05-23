@@ -46,6 +46,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     # Testing
+    "aiosqlite>=0.21.0",
     "pytest>=7.4.4",
     "pytest-asyncio>=0.23.3",
     "pytest-cov>=4.1.0",

@@ -16,6 +16,7 @@
   "40401": "Task not found",
   "40402": "Transcript not found",
   "40403": "Summary not found",
+  "40499": "Resource not found",
   "40900": "Task with same content already exists",
   "40901": "Task is being processed, please do not resubmit",
   "40902": "Task already completed, cannot reprocess",

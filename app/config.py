@@ -129,6 +129,7 @@ class Settings(BaseSettings):
     UPLOAD_ALLOWED_EXTENSIONS: str | None = Field(default=None)
     UPLOAD_MAX_SIZE_BYTES: int | None = Field(default=None)
     UPLOAD_PRESIGN_EXPIRES: int | None = Field(default=None)
+    MEDIA_DOWNLOAD_EXPIRES: int = Field(default=3600)
 
     YOUTUBE_DOWNLOAD_DIR: str | None = Field(default=None)
     YOUTUBE_OUTPUT_TEMPLATE: str | None = Field(default=None)
