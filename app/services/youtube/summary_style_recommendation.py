@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessError
@@ -335,5 +336,22 @@ async def recommend_summary_style_for_video(
             reason=recommendation.reason,
         )
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        cached = await _get_cached_recommendation(
+            db,
+            user_id=user_id,
+            video_id=video_id,
+            metadata_hash=metadata_hash,
+        )
+        if cached:
+            return SummaryStyleRecommendationResult(
+                style=cached.style,
+                confidence=cached.confidence,
+                reason=cached.reason,
+                cached=True,
+            )
+        raise
     return recommendation

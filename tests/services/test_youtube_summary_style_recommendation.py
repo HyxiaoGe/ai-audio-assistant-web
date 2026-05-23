@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
@@ -27,10 +28,12 @@ class _ScalarResult:
 
 
 class _FakeSession:
-    def __init__(self, *results: Any) -> None:
+    def __init__(self, *results: Any, commit_error: Exception | None = None) -> None:
         self._results = list(results)
+        self._commit_error = commit_error
         self.added: list[Any] = []
         self.committed = False
+        self.rolled_back = False
 
     async def execute(self, query: object) -> _ScalarResult:
         if not self._results:
@@ -41,7 +44,12 @@ class _FakeSession:
         self.added.append(value)
 
     async def commit(self) -> None:
+        if self._commit_error:
+            raise self._commit_error
         self.committed = True
+
+    async def rollback(self) -> None:
+        self.rolled_back = True
 
 
 def _video(**overrides: Any) -> YouTubeVideo:
@@ -162,6 +170,41 @@ async def test_recommend_summary_style_for_video_creates_cache_record_on_miss() 
     assert added.video_id == video.video_id
     assert added.style == "tutorial"
     assert added.algorithm_version == ALGORITHM_VERSION
+
+
+@pytest.mark.asyncio
+async def test_recommend_summary_style_for_video_returns_concurrent_cached_result() -> None:
+    video = _video()
+    subscription = _subscription()
+    metadata_hash = build_video_metadata_hash(
+        title=video.title,
+        description=video.description,
+        channel_title=subscription.channel_title,
+        duration_seconds=video.duration_seconds,
+    )
+    cached = YouTubeSummaryStyleRecommendation(
+        user_id=video.user_id,
+        video_id=video.video_id,
+        metadata_hash=metadata_hash,
+        algorithm_version=ALGORITHM_VERSION,
+        style="tutorial",
+        confidence=0.88,
+        reason="Concurrent cached recommendation",
+    )
+    session = _FakeSession(
+        video,
+        subscription,
+        None,
+        cached,
+        commit_error=IntegrityError("insert", {}, Exception("duplicate key")),
+    )
+
+    result = await recommend_summary_style_for_video(session, video.user_id, video.video_id, locale="en")
+
+    assert result.style == "tutorial"
+    assert result.reason == "Concurrent cached recommendation"
+    assert result.cached is True
+    assert session.rolled_back is True
 
 
 @pytest.mark.asyncio
