@@ -7,7 +7,7 @@ import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
@@ -33,6 +33,7 @@ from app.schemas.youtube import (
     YouTubeDisconnectResponse,
     YouTubeSubscriptionItem,
     YouTubeSubscriptionListResponse,
+    YouTubeSummaryStyleRecommendationResponse,
     YouTubeSyncOverview,
     YouTubeSyncResponse,
     YouTubeTaskStatusResponse,
@@ -46,6 +47,7 @@ from app.services.youtube import (
     YouTubeSubscriptionService,
     YouTubeVideoService,
 )
+from app.services.youtube.summary_style_recommendation import recommend_summary_style_for_video
 
 logger = logging.getLogger("app.api.youtube")
 
@@ -852,6 +854,28 @@ async def sync_channel_videos(
             YouTubeSyncResponse(
                 task_id=task.id,
                 message=f"Video sync started for channel {subscription.channel_title}",
+            )
+        )
+    )
+
+
+@router.get("/videos/{video_id}/summary-style-recommendation")
+async def get_video_summary_style_recommendation(
+    video_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> JSONResponse:
+    """Recommend a summary style for a cached YouTube video."""
+    locale = getattr(request.state, "locale", "zh")
+    recommendation = await recommend_summary_style_for_video(db, user.id, video_id, locale=locale)
+    return success(
+        data=jsonable_encoder(
+            YouTubeSummaryStyleRecommendationResponse(
+                style=recommendation.style,
+                confidence=recommendation.confidence,
+                reason=recommendation.reason,
+                cached=recommendation.cached,
             )
         )
     )

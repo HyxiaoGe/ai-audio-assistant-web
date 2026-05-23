@@ -155,6 +155,15 @@ class YouTubeVideoListResponse(BaseModel):
     syncing: bool = False  # True if background sync was triggered
 
 
+class YouTubeSummaryStyleRecommendationResponse(BaseModel):
+    """Response for YouTube summary style recommendation."""
+
+    style: str
+    confidence: float
+    reason: str
+    cached: bool
+
+
 class YouTubeChannelSyncStatus(BaseModel):
     """Channel sync status."""
 

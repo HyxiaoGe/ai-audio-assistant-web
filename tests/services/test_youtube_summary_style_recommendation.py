@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+
+from app.core.exceptions import BusinessError
+from app.i18n.codes import ErrorCode
+from app.models.youtube_subscription import YouTubeSubscription
+from app.models.youtube_summary_style_recommendation import YouTubeSummaryStyleRecommendation
+from app.models.youtube_video import YouTubeVideo
+from app.services.youtube.summary_style_recommendation import (
+    ALGORITHM_VERSION,
+    build_video_metadata_hash,
+    recommend_style_from_metadata,
+    recommend_summary_style_for_video,
+)
+
+
+class _ScalarResult:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def scalar_one_or_none(self) -> Any:
+        return self._value
+
+
+class _FakeSession:
+    def __init__(self, *results: Any) -> None:
+        self._results = list(results)
+        self.added: list[Any] = []
+        self.committed = False
+
+    async def execute(self, query: object) -> _ScalarResult:
+        if not self._results:
+            raise AssertionError(f"Unexpected query: {query}")
+        return _ScalarResult(self._results.pop(0))
+
+    def add(self, value: Any) -> None:
+        self.added.append(value)
+
+    async def commit(self) -> None:
+        self.committed = True
+
+
+def _video(**overrides: Any) -> YouTubeVideo:
+    now = datetime(2026, 5, 23, tzinfo=UTC)
+    return YouTubeVideo(
+        id=overrides.pop("id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        subscription_id=overrides.pop("subscription_id", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+        user_id=overrides.pop("user_id", "cccccccc-cccc-cccc-cccc-cccccccccccc"),
+        video_id=overrides.pop("video_id", "yt-123"),
+        channel_id=overrides.pop("channel_id", "channel-1"),
+        title=overrides.pop("title", "How to build a reliable FastAPI upload workflow"),
+        description=overrides.pop("description", "A step-by-step tutorial with setup tips and examples."),
+        thumbnail_url=overrides.pop("thumbnail_url", None),
+        published_at=overrides.pop("published_at", now),
+        duration_seconds=overrides.pop("duration_seconds", 900),
+        view_count=overrides.pop("view_count", None),
+        like_count=overrides.pop("like_count", None),
+        comment_count=overrides.pop("comment_count", None),
+        last_synced_at=overrides.pop("last_synced_at", now),
+        created_at=overrides.pop("created_at", now),
+        updated_at=overrides.pop("updated_at", now),
+        **overrides,
+    )
+
+
+def _subscription(**overrides: Any) -> YouTubeSubscription:
+    now = datetime(2026, 5, 23, tzinfo=UTC)
+    return YouTubeSubscription(
+        id=overrides.pop("id", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+        user_id=overrides.pop("user_id", "cccccccc-cccc-cccc-cccc-cccccccccccc"),
+        channel_id=overrides.pop("channel_id", "channel-1"),
+        channel_title=overrides.pop("channel_title", "Engineering Tutorials"),
+        channel_thumbnail=overrides.pop("channel_thumbnail", None),
+        channel_description=overrides.pop("channel_description", "Practical software tutorials."),
+        subscribed_at=overrides.pop("subscribed_at", now),
+        last_synced_at=overrides.pop("last_synced_at", now),
+        **overrides,
+    )
+
+
+def test_recommend_style_from_metadata_prefers_tutorial_for_how_to_content() -> None:
+    result = recommend_style_from_metadata(
+        title="How to build a reliable FastAPI upload workflow",
+        description="A step-by-step tutorial with setup tips and examples.",
+        channel_title="Engineering Tutorials",
+        duration_seconds=900,
+        locale="en",
+    )
+
+    assert result.style == "tutorial"
+    assert result.confidence >= 0.7
+    assert "tutorial" in result.reason.lower()
+
+
+def test_metadata_hash_changes_when_relevant_video_metadata_changes() -> None:
+    original = build_video_metadata_hash(
+        title="FastAPI upload tutorial",
+        description="Step-by-step guide",
+        channel_title="Engineering Tutorials",
+        duration_seconds=900,
+    )
+    changed = build_video_metadata_hash(
+        title="FastAPI upload tutorial updated",
+        description="Step-by-step guide",
+        channel_title="Engineering Tutorials",
+        duration_seconds=900,
+    )
+
+    assert original != changed
+
+
+@pytest.mark.asyncio
+async def test_recommend_summary_style_for_video_returns_cached_result() -> None:
+    video = _video()
+    subscription = _subscription()
+    metadata_hash = build_video_metadata_hash(
+        title=video.title,
+        description=video.description,
+        channel_title=subscription.channel_title,
+        duration_seconds=video.duration_seconds,
+    )
+    cached = YouTubeSummaryStyleRecommendation(
+        user_id=video.user_id,
+        video_id=video.video_id,
+        metadata_hash=metadata_hash,
+        algorithm_version=ALGORITHM_VERSION,
+        style="tutorial",
+        confidence=0.88,
+        reason="Cached recommendation",
+    )
+    session = _FakeSession(video, subscription, cached)
+
+    result = await recommend_summary_style_for_video(session, video.user_id, video.video_id, locale="en")
+
+    assert result.style == "tutorial"
+    assert result.confidence == 0.88
+    assert result.reason == "Cached recommendation"
+    assert result.cached is True
+    assert session.added == []
+    assert session.committed is False
+
+
+@pytest.mark.asyncio
+async def test_recommend_summary_style_for_video_creates_cache_record_on_miss() -> None:
+    video = _video()
+    subscription = _subscription()
+    session = _FakeSession(video, subscription, None)
+
+    result = await recommend_summary_style_for_video(session, video.user_id, video.video_id, locale="en")
+
+    assert result.style == "tutorial"
+    assert result.cached is False
+    assert session.committed is True
+    assert len(session.added) == 1
+    added = session.added[0]
+    assert isinstance(added, YouTubeSummaryStyleRecommendation)
+    assert added.user_id == video.user_id
+    assert added.video_id == video.video_id
+    assert added.style == "tutorial"
+    assert added.algorithm_version == ALGORITHM_VERSION
+
+
+@pytest.mark.asyncio
+async def test_recommend_summary_style_for_video_raises_when_video_not_found() -> None:
+    session = _FakeSession(None)
+
+    with pytest.raises(BusinessError) as exc_info:
+        await recommend_summary_style_for_video(
+            session,
+            "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            "missing-video",
+            locale="en",
+        )
+
+    assert exc_info.value.code == ErrorCode.YOUTUBE_VIDEO_NOT_FOUND
