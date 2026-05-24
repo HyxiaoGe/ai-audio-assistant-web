@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     LITELLM_MODEL: str = Field(default="deepseek/deepseek-chat")
     LITELLM_MAX_TOKENS: int = Field(default=4096)
 
+    # 远程 image-service（独立部署的 Gemini 生图服务）
+    IMAGE_SERVICE_BASE_URL: str | None = Field(default=None)
+    IMAGE_SERVICE_API_KEY: str | None = Field(default=None)
+    IMAGE_SERVICE_DEFAULT_MODEL: str = Field(default="gemini-3-pro-image-preview")
+
     OPENAI_API_KEY: str | None = Field(default=None)
     OPENAI_BASE_URL: str | None = Field(default="https://api.openai.com/v1")
 

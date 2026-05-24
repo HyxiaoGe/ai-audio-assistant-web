@@ -69,6 +69,7 @@ from app.services.asr import configs as asr_configs  # noqa: F401, E402
 
 # Import all service modules to trigger @register_service decorators
 # This ensures services are registered in the ServiceRegistry
+from app.services.llm import image_service as _llm_image_service  # noqa: F401, E402
 from app.services.llm import proxy as _llm_proxy  # noqa: F401, E402
 from app.services.storage import configs as storage_configs  # noqa: F401, E402
 from app.services.storage import cos, minio, oss, tos  # noqa: F401, E402

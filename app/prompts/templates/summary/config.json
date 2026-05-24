@@ -7,8 +7,8 @@
       "timeout_seconds": 300,
       "supported_summary_types": ["overview"],
       "image_model": {
-        "provider": "openrouter",
-        "model_id": "google/gemini-3-pro-image-preview"
+        "provider": "image_service",
+        "model_id": "gemini-3-pro-image-preview"
       }
     }
   },

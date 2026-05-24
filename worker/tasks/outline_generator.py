@@ -18,9 +18,9 @@ from app.utils.transcript_processor import TranscriptProcessor
 
 logger = logging.getLogger(__name__)
 
-# 默认的图像生成模型
-DEFAULT_IMAGE_MODEL = "google/gemini-3-pro-image-preview"
-DEFAULT_PROVIDER = "openrouter"
+# 默认的图像生成模型（走远程 image-service，参见 app/services/llm/image_service.py）
+DEFAULT_IMAGE_MODEL = "gemini-3-pro-image-preview"
+DEFAULT_PROVIDER = "image_service"
 
 
 async def upload_outline_image(
@@ -81,8 +81,8 @@ async def generate_outline_summary(
         content_style: 内容风格 (meeting/lecture/podcast/video/general)
         session: 数据库会话
         user_id: 用户 ID
-        provider: LLM provider（默认 openrouter）
-        model_id: 图像生成模型 ID（默认 google/gemini-3-pro-image-preview）
+        provider: LLM provider（默认 image_service，远程 Gemini 中间件）
+        model_id: 图像生成模型 ID（默认 gemini-3-pro-image-preview）
         image_format: 图片格式 (png)
 
     Returns:
@@ -128,7 +128,7 @@ async def generate_outline_summary(
 
     logger.info(f"Task {task_id}: Using image model - provider: {actual_provider}, model: {actual_model}")
 
-    # 获取 OpenRouter 服务（支持图像生成）
+    # 获取生图服务（默认走远程 image-service → Gemini）
     llm_service = await SmartFactory.get_service("llm", provider=actual_provider, model_id=actual_model)
 
     # ===== Step 5: 生成大纲图片 =====

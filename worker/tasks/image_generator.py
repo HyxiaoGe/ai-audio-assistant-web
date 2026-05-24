@@ -367,8 +367,8 @@ async def generate_single_image(
         # 5. 获取配置和 LLM 服务
         config = get_auto_images_config()
         image_model = config.get("image_model", {})
-        provider = image_model.get("provider", "openrouter")
-        model_id = image_model.get("model_id", "google/gemini-2.0-flash-exp:free")
+        provider = image_model.get("provider", "image_service")
+        model_id = image_model.get("model_id", "gemini-3-pro-image-preview")
 
         llm_service = await SmartFactory.get_service(
             "llm",
