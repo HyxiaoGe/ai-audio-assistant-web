@@ -66,6 +66,15 @@ def _select_default_llm_provider() -> str:
     return providers[0]
 
 
+def _default_model_id_for_provider(provider: str, user_id: str | None) -> str:
+    configured_model = _load_llm_model_id(provider, user_id)
+    if configured_model:
+        return configured_model
+    if provider == "proxy":
+        return settings.LITELLM_MODEL
+    return provider
+
+
 def _resolve_llm_selection(task: Task, user_id: str | None) -> tuple[str, str]:
     options = task.options or {}
     raw_provider = options.get("llm_provider") or options.get("provider")
@@ -73,10 +82,10 @@ def _resolve_llm_selection(task: Task, user_id: str | None) -> tuple[str, str]:
     provider = raw_provider if isinstance(raw_provider, str) else None
     model_id = raw_model_id if isinstance(raw_model_id, str) else None
     if provider:
-        model_id = model_id or _load_llm_model_id(provider, user_id) or provider
+        model_id = model_id or _default_model_id_for_provider(provider, user_id)
         return provider, model_id
     provider = _select_default_llm_provider()
-    model_id = _load_llm_model_id(provider, user_id) or provider
+    model_id = _default_model_id_for_provider(provider, user_id)
     return provider, model_id
 
 
