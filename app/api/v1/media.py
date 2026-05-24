@@ -1,12 +1,21 @@
 """Media file streaming endpoint.
 
-Proxies media files from storage (MinIO) to frontend, hiding storage implementation details.
+Proxies media files from whatever storage backend hosts them, so the frontend
+sees a single same-origin URL (`/api/v1/media/<key>`) regardless of provider.
+Avoids cross-origin CORS issues from cloud storage hosts like TOS/COS/OSS.
+
+Implementation strategy: internally generate a short-lived presigned URL via the
+storage service, then proxy GET it with `httpx.AsyncClient.stream`. Forwards
+Range requests transparently for audio/video seeking.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from collections.abc import AsyncIterator
 
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
@@ -18,101 +27,94 @@ logger = logging.getLogger("app.api.media")
 
 router = APIRouter()
 
+# 预签名 URL 仅用于服务端立即代理，60 秒足够
+_PRESIGN_EXPIRES = 60
+# 单次代理请求最长 10 分钟（覆盖大体积音频/视频）
+_PROXY_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
+_CHUNK_SIZE = 64 * 1024
+
+_FORWARD_RESPONSE_HEADERS = {
+    "content-type",
+    "content-length",
+    "content-range",
+    "accept-ranges",
+    "last-modified",
+    "etag",
+    "cache-control",
+}
+
 
 @router.get("/{file_path:path}")
 async def stream_media(file_path: str, request: Request) -> StreamingResponse:
-    """Stream media file from storage.
+    """Stream a media file from whatever storage backend hosts it.
 
-    Args:
-        file_path: Relative path to the media file (e.g., "uploads/youtube/2025/12/xxx.wav")
-        request: FastAPI request object (for range requests support)
-
-    Returns:
-        StreamingResponse with the media file content
-
-    Raises:
-        BusinessError: If file not found or storage is unavailable
+    Unauthenticated by design — the `<audio>` / `<img>` element used by the
+    browser cannot send Authorization headers; security relies on object keys
+    being UUID-prefixed (effectively unguessable).
     """
     try:
-        from app.config import settings
+        storage = await SmartFactory.get_service("storage")
+    except Exception as exc:
+        logger.warning("Failed to acquire storage for media proxy: %s", exc)
+        raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR) from exc
 
-        # 使用 SmartFactory 获取 MinIO storage
-        minio_storage = await SmartFactory.get_service("storage", provider="minio")
-        bucket = settings.MINIO_BUCKET
-        if not bucket:
-            raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR)
+    try:
+        presigned = storage.generate_presigned_url(file_path, _PRESIGN_EXPIRES)
+    except Exception as exc:
+        logger.warning("presign failed for %s on %s: %s", file_path, getattr(storage, "provider", "?"), exc)
+        raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR) from exc
 
-        # Get file metadata
-        try:
-            stat = minio_storage._client.stat_object(bucket, file_path)
-            file_size = stat.size
-            content_type = stat.content_type or "application/octet-stream"
-        except Exception as e:
-            logger.warning(f"File not found: {file_path}, error: {e}")
-            raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+    forward_headers: dict[str, str] = {}
+    range_header = request.headers.get("range")
+    if range_header:
+        forward_headers["Range"] = range_header
 
-        # Handle range requests (for video/audio seeking)
-        range_header = request.headers.get("range")
-        if range_header:
-            # Parse range header: "bytes=start-end"
-            range_value = range_header.replace("bytes=", "")
-            range_parts = range_value.split("-")
-            start = int(range_parts[0]) if range_parts[0] else 0
-            end = int(range_parts[1]) if len(range_parts) > 1 and range_parts[1] else file_size - 1
+    client = httpx.AsyncClient(timeout=_PROXY_TIMEOUT, follow_redirects=True)
+    try:
+        upstream = await client.send(
+            client.build_request("GET", presigned, headers=forward_headers),
+            stream=True,
+        )
+    except httpx.HTTPError as exc:
+        await client.aclose()
+        logger.warning("upstream GET failed for %s: %s", file_path, exc)
+        raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR) from exc
 
-            # Get partial content
-            response = minio_storage._client.get_object(
-                bucket,
-                file_path,
-                offset=start,
-                length=end - start + 1,
-            )
+    if upstream.status_code == 404:
+        await upstream.aclose()
+        await client.aclose()
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
-            def iter_content():
-                try:
-                    yield from response.stream(8192)
-                finally:
-                    response.close()
-                    response.release_conn()
-
-            headers = {
-                "Content-Range": f"bytes {start}-{end}/{file_size}",
-                "Accept-Ranges": "bytes",
-                "Content-Length": str(end - start + 1),
-                "Content-Type": content_type,
-            }
-
-            return StreamingResponse(
-                iter_content(),
-                status_code=206,  # Partial Content
-                headers=headers,
-                media_type=content_type,
-            )
-        else:
-            # Full file download
-            response = minio_storage._client.get_object(bucket, file_path)
-
-            def iter_content():
-                try:
-                    yield from response.stream(8192)
-                finally:
-                    response.close()
-                    response.release_conn()
-
-            headers = {
-                "Content-Length": str(file_size),
-                "Accept-Ranges": "bytes",
-                "Content-Type": content_type,
-            }
-
-            return StreamingResponse(
-                iter_content(),
-                headers=headers,
-                media_type=content_type,
-            )
-
-    except BusinessError:
-        raise
-    except Exception as e:
-        logger.exception(f"Error streaming media file {file_path}: {e}")
+    if upstream.status_code >= 400:
+        body_preview = ""
+        with contextlib.suppress(Exception):
+            body_preview = (await upstream.aread()).decode("utf-8", errors="replace")[:200]
+        await upstream.aclose()
+        await client.aclose()
+        logger.warning(
+            "upstream returned %s for %s: %s",
+            upstream.status_code,
+            file_path,
+            body_preview,
+        )
         raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR)
+
+    response_headers = {
+        k: v for k, v in upstream.headers.items() if k.lower() in _FORWARD_RESPONSE_HEADERS
+    }
+    media_type = response_headers.get("content-type") or "application/octet-stream"
+
+    async def iter_body() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in upstream.aiter_bytes(_CHUNK_SIZE):
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        iter_body(),
+        status_code=upstream.status_code,
+        headers=response_headers,
+        media_type=media_type,
+    )

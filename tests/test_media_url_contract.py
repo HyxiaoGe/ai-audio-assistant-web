@@ -9,7 +9,6 @@ from app.api.deps import CurrentUser
 from app.api.v1 import summaries as summaries_api
 from app.models.summary import Summary
 from app.models.task import Task
-from app.services import task_service
 from app.services.task_service import TaskService
 
 
@@ -79,25 +78,17 @@ def _summary(**overrides: Any) -> Summary:
 
 
 @pytest.mark.asyncio
-async def test_task_detail_returns_backend_resolved_audio_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_media_url(object_key: str, user_id: str) -> str:
-        return f"https://storage.local/{user_id}/{object_key}?signature=download"
-
-    monkeypatch.setattr(task_service, "build_media_download_url", fake_media_url, raising=False)
-
+async def test_task_detail_returns_relative_audio_url() -> None:
+    """Audio URL must be a same-origin /api/v1/media/... path so the
+    browser hits nginx → audio-backend (avoiding cross-origin CORS to cloud storage)."""
     user = CurrentUser(id="22222222-2222-2222-2222-222222222222", email="user@example.com")
     result = await TaskService.get_task_detail(_SequenceSession(_task()), user, "11111111-1111-1111-1111-111111111111")
 
-    assert result.audio_url == "https://storage.local/22222222-2222-2222-2222-222222222222/upload/user/demo.wav?signature=download"
+    assert result.audio_url == "/api/v1/media/upload/user/demo.wav"
 
 
 @pytest.mark.asyncio
-async def test_summary_list_returns_backend_resolved_image_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_media_url(object_key: str, user_id: str) -> str:
-        return f"https://storage.local/{user_id}/{object_key}?signature=download"
-
-    monkeypatch.setattr(summaries_api, "build_media_download_url", fake_media_url, raising=False)
-
+async def test_summary_list_returns_relative_image_url() -> None:
     user = CurrentUser(id="22222222-2222-2222-2222-222222222222", email="user@example.com")
     response = await summaries_api.get_summaries(
         "11111111-1111-1111-1111-111111111111",
@@ -106,17 +97,14 @@ async def test_summary_list_returns_backend_resolved_image_url(monkeypatch: pyte
     )
 
     assert response.body
-    assert b"https://storage.local/22222222-2222-2222-2222-222222222222/visuals/user/task/mindmap.png?signature=download" in response.body
-    assert b"/api/v1/media/" not in response.body
+    assert b"/api/v1/media/visuals/user/task/mindmap.png" in response.body
+    # 不应该再泄漏云存储域名给浏览器
+    assert b"tos-" not in response.body
+    assert b"myqcloud.com" not in response.body
 
 
 @pytest.mark.asyncio
-async def test_visual_summary_returns_backend_resolved_image_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_media_url(object_key: str, user_id: str) -> str:
-        return f"https://storage.local/{user_id}/{object_key}?signature=download"
-
-    monkeypatch.setattr(summaries_api, "build_media_download_url", fake_media_url, raising=False)
-
+async def test_visual_summary_returns_relative_image_url() -> None:
     user = CurrentUser(id="22222222-2222-2222-2222-222222222222", email="user@example.com")
     response = await summaries_api.get_visual_summary(
         "11111111-1111-1111-1111-111111111111",
@@ -126,5 +114,6 @@ async def test_visual_summary_returns_backend_resolved_image_url(monkeypatch: py
     )
 
     assert response.body
-    assert b"https://storage.local/22222222-2222-2222-2222-222222222222/visuals/user/task/mindmap.png?signature=download" in response.body
-    assert b"/api/v1/media/" not in response.body
+    assert b"/api/v1/media/visuals/user/task/mindmap.png" in response.body
+    assert b"tos-" not in response.body
+    assert b"myqcloud.com" not in response.body
