@@ -74,16 +74,13 @@ async def generate_summaries_with_quality_awareness(
 
     # ===== Step 3: 根据质量选择LLM服务 =====
     if quality.quality_score == "low":
-        # 低质量：使用更强的模型
+        # 低质量：升级到 premium 模型（LiteLLM 别名，具体后端由代理决定）
         logger.warning(
             f"Task {task_id}: Low quality transcript detected "
             f"(confidence: {quality.avg_confidence:.2f}), using premium model"
         )
-        # 尝试使用 OpenRouter 的 Claude，如果不可用则fallback到指定的provider
         try:
-            llm_service: LLMService = await SmartFactory.get_service(
-                "llm", provider="openrouter", model_id="anthropic/claude-3.5-sonnet"
-            )
+            llm_service: LLMService = await SmartFactory.get_service("llm", provider="proxy", model_id="chat-premium")
         except Exception as e:
             logger.warning(f"Task {task_id}: Failed to get premium model, fallback to standard: {e}")
             llm_service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)

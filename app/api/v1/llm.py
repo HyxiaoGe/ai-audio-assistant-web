@@ -1,241 +1,138 @@
-"""LLM 模型管理 API"""
+"""LLM 模型目录 API。
+
+薄代理：直接读取 LiteLLM Proxy 的模型目录，避免在本仓库重复维护
+provider/model 列表。所有项目共享同一个 LiteLLM 模型注册表，
+新增/下线模型只需要在 LiteLLM 那边操作。
+
+返回字段保留兼容旧前端的形状（`provider` / `model_id` / `display_name` /
+`description` / `is_available` / `is_recommended`），新增字段尽量复用
+LiteLLM 自身的 `model_info.metadata`。
+"""
 
 from __future__ import annotations
 
-from typing import Any, cast
+import asyncio
+import logging
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.core.config_manager import ConfigManager
-from app.core.health_checker import HealthChecker, HealthStatus
-from app.core.registry import ServiceRegistry
 from app.core.response import success
-from app.core.smart_factory import SmartFactory
+
+logger = logging.getLogger("app.api.llm")
 
 router = APIRouter(prefix="/llm", tags=["llm"])
 
-# 按 provider 的显示名称国际化映射
-DISPLAY_NAMES_I18N = {
-    "deepseek": {"zh": "深度求索", "en": "DeepSeek"},
-    "qwen": {"zh": "通义千问", "en": "Qwen"},
-    "doubao": {"zh": "豆包", "en": "Doubao"},
-    "moonshot": {"zh": "Kimi", "en": "Kimi"},
-    "openrouter": {"zh": "OpenRouter", "en": "OpenRouter"},
-}
+# 拉 LiteLLM 目录的超时不要太长，前端是同步等待的
+_CATALOG_TIMEOUT = 5.0
 
-# 按 model_id 的显示名称映射（用于 OpenRouter 等支持多模型的服务）
-MODEL_DISPLAY_NAMES_I18N = {
-    # OpenAI 模型（通过 OpenRouter）
-    "openai/gpt-5.2-chat": {"zh": "GPT-5.2 Chat", "en": "GPT-5.2 Chat"},
-    "openai/gpt-5.2-pro": {"zh": "GPT-5.2 Pro", "en": "GPT-5.2 Pro"},
-    "openai/gpt-5.2": {"zh": "GPT-5.2", "en": "GPT-5.2"},
-    "openai/gpt-4o": {"zh": "GPT-4o", "en": "GPT-4o"},
-    "openai/gpt-4o-mini": {"zh": "GPT-4o Mini", "en": "GPT-4o Mini"},
-    "openai/gpt-4-turbo": {"zh": "GPT-4 Turbo", "en": "GPT-4 Turbo"},
-    "openai/o1": {"zh": "o1", "en": "o1"},
-    "openai/o1-mini": {"zh": "o1 Mini", "en": "o1 Mini"},
-    "openai/o1-preview": {"zh": "o1 Preview", "en": "o1 Preview"},
-    # Anthropic 模型（通过 OpenRouter）
-    "anthropic/claude-opus-4.5": {"zh": "Claude Opus 4.5", "en": "Claude Opus 4.5"},
-    "anthropic/claude-haiku-4.5": {"zh": "Claude Haiku 4.5", "en": "Claude Haiku 4.5"},
-    "anthropic/claude-sonnet-4.5": {"zh": "Claude Sonnet 4.5", "en": "Claude Sonnet 4.5"},
-    "anthropic/claude-3.5-sonnet": {"zh": "Claude 3.5 Sonnet", "en": "Claude 3.5 Sonnet"},
-    "anthropic/claude-3.5-sonnet:beta": {"zh": "Claude 3.5 Sonnet", "en": "Claude 3.5 Sonnet"},
-    "anthropic/claude-3-5-sonnet-20241022": {"zh": "Claude 3.5 Sonnet", "en": "Claude 3.5 Sonnet"},
-    "anthropic/claude-3.5-haiku": {"zh": "Claude 3.5 Haiku", "en": "Claude 3.5 Haiku"},
-    "anthropic/claude-3-5-haiku-20241022": {"zh": "Claude 3.5 Haiku", "en": "Claude 3.5 Haiku"},
-    "anthropic/claude-3-opus": {"zh": "Claude 3 Opus", "en": "Claude 3 Opus"},
-    "anthropic/claude-3-opus-20240229": {"zh": "Claude 3 Opus", "en": "Claude 3 Opus"},
-    # Google 模型（通过 OpenRouter）
-    "google/gemini-3-flash-preview": {
-        "zh": "Gemini 3 Flash Preview",
-        "en": "Gemini 3 Flash Preview",
-    },
-    "google/gemini-3-pro-preview": {"zh": "Gemini 3 Pro Preview", "en": "Gemini 3 Pro Preview"},
-    "google/gemini-3-pro-image-preview": {
-        "zh": "Gemini 3 Pro Image Preview",
-        "en": "Gemini 3 Pro Image Preview",
-    },
-    "google/gemini-2.0-flash-exp": {"zh": "Gemini 2.0 Flash", "en": "Gemini 2.0 Flash"},
-    "google/gemini-exp-1206": {"zh": "Gemini Exp 1206", "en": "Gemini Exp 1206"},
-    "google/gemini-pro-1.5": {"zh": "Gemini 1.5 Pro", "en": "Gemini 1.5 Pro"},
-    "google/gemini-pro-1.5-exp": {"zh": "Gemini 1.5 Pro Exp", "en": "Gemini 1.5 Pro Exp"},
-    "google/gemini-flash-1.5": {"zh": "Gemini 1.5 Flash", "en": "Gemini 1.5 Flash"},
-    "google/gemini-flash-1.5-8b": {"zh": "Gemini 1.5 Flash 8B", "en": "Gemini 1.5 Flash 8B"},
-    # xAI Grok 模型（通过 OpenRouter）
-    "x-ai/grok-4.1-fast": {"zh": "Grok 4.1 Fast", "en": "Grok 4.1 Fast"},
-    "x-ai/grok-4-fast": {"zh": "Grok 4 Fast", "en": "Grok 4 Fast"},
-    "x-ai/grok-4": {"zh": "Grok 4", "en": "Grok 4"},
-    "x-ai/grok-2": {"zh": "Grok 2", "en": "Grok 2"},
-    "x-ai/grok-2-vision": {"zh": "Grok 2 Vision", "en": "Grok 2 Vision"},
-    "x-ai/grok-beta": {"zh": "Grok Beta", "en": "Grok Beta"},
-}
-
-OPENROUTER_RECOMMENDED_MODELS = [
-    "openai/gpt-5.2-chat",
-    "anthropic/claude-opus-4.5",
-    "google/gemini-3-flash-preview",
-    "x-ai/grok-4.1-fast",
-]
-
-OPENROUTER_PROVIDER_PREFIXES = [
-    "openai/",
-    "anthropic/",
-    "google/",
-    "x-ai/",
-]
+# cost_tier 用来排序 + 决定推荐项；low 最便宜、最优先
+_COST_TIER_ORDER = {"low": 0, "mid": 1, "high": 2}
+_COST_TIER_PRIORITY = {"low": 1, "mid": 2, "high": 3}
 
 
-async def _fetch_openrouter_latest_models() -> list[str]:
-    headers: dict[str, str] = {}
-    if settings.OPENROUTER_API_KEY:
-        headers["Authorization"] = f"Bearer {settings.OPENROUTER_API_KEY}"
+def _normalize_provider(provider_display: str | None, underlying_model: str | None) -> str:
+    """把 metadata.provider_display 或底层 model 名归一化成稳定的 provider key。
 
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(
-                "https://openrouter.ai/api/v1/models",
-                headers=headers,
-            )
-            response.raise_for_status()
-            payload: dict[str, Any] = response.json()
-    except Exception:
-        return []
-
-    models = payload.get("data", [])
-    latest_by_prefix: dict[str, tuple[int, str]] = {}
-    for item in models:
-        model_id = item.get("id", "")
-        created = item.get("created", 0)
-        for prefix in OPENROUTER_PROVIDER_PREFIXES:
-            if model_id.startswith(prefix):
-                current = latest_by_prefix.get(prefix)
-                if current is None or created > current[0]:
-                    latest_by_prefix[prefix] = (created, model_id)
-                break
-
-    return [latest_by_prefix[prefix][1] for prefix in OPENROUTER_PROVIDER_PREFIXES if prefix in latest_by_prefix]
+    前端按 `provider` 字段做分组展示，所以需要一个稳定的小写 key
+    （"google" / "openai" / ...），而不是给人看的显示名（"Google"）。
+    """
+    if provider_display:
+        return provider_display.strip().lower().replace(" ", "_")
+    if underlying_model and "/" in underlying_model:
+        return underlying_model.split("/", 1)[0].lower()
+    return "litellm"
 
 
 @router.get("/models")
 async def get_available_models(request: Request) -> JSONResponse:
-    """获取所有可用的 LLM 模型列表
+    """返回 LiteLLM 中已配置的业务模型别名。
 
-    Returns:
-        包含模型列表的响应，每个模型包含：
-        - provider: 提供商标识（如 "doubao", "deepseek"）
-        - model_id: 模型 ID（如 "deepseek-chat", "qwen3-max"）
-        - display_name: 用户友好的显示名称（支持国际化）
-        - description: 模型描述
-        - cost_per_million_tokens: 每百万 token 成本（元）
-        - priority: 优先级（越小越高）
-        - status: 健康状态（healthy/unhealthy/unknown）
-        - is_recommended: 是否推荐使用
-        - is_available: 是否可用
+    数据来源：LiteLLM Proxy 的 `/model/info`（模型清单 + metadata）
+    与 `/health`（每个底层模型的可用性，由 LiteLLM 后台健康检查驱动）。
     """
-    # 获取当前语言设置（已由 LocaleMiddleware 标准化为 zh 或 en）
-    lang = getattr(request.state, "locale", "zh")
+    base_url = settings.LITELLM_BASE_URL.rstrip("/")
+    headers = {"Authorization": f"Bearer {settings.LITELLM_API_KEY}"} if settings.LITELLM_API_KEY else {}
 
-    # 获取所有注册的 LLM 服务
-    all_services = ServiceRegistry.list_services("llm")
+    try:
+        async with httpx.AsyncClient(timeout=_CATALOG_TIMEOUT) as client:
+            info_task = client.get(f"{base_url}/model/info", headers=headers)
+            health_task = client.get(f"{base_url}/health", headers=headers)
+            info_resp, health_resp = await asyncio.gather(info_task, health_task)
+            info_resp.raise_for_status()
+            # /health 偶尔会因为某个上游短暂不可达返回 200 但 body 不全，宽松处理
+            health_payload: dict[str, Any] = {}
+            if health_resp.status_code == 200:
+                health_payload = health_resp.json()
+            info_payload: dict[str, Any] = info_resp.json()
+    except Exception as exc:
+        logger.warning("fetch LiteLLM catalog failed: %s", exc)
+        return success(data={"models": []})
 
-    models = []
-    for provider in all_services:
-        # 获取服务元数据
-        service_class, metadata, _ = ServiceRegistry._services["llm"][provider]
+    # 把底层 model 名映射到健康状态：出现在 healthy_endpoints 的才算 healthy
+    healthy_underlying = {
+        item.get("model") for item in (health_payload.get("healthy_endpoints") or []) if item.get("model")
+    }
+    has_health_data = bool(healthy_underlying) or bool(health_payload.get("unhealthy_endpoints"))
 
-        # 获取或触发健康检查
-        health_result = HealthChecker.get_status("llm", provider)
-        if not health_result:
-            # 如果没有健康检查结果，主动触发一次
-            await HealthChecker.check_service("llm", provider, force=True)
-            health_result = HealthChecker.get_status("llm", provider)
-
-        status = health_result.status.value if health_result else HealthStatus.UNKNOWN.value
-
-        # OpenRouter 支持多模型：返回推荐模型列表，避免固定 env
-        if provider == "openrouter":
-            model_candidates = OPENROUTER_RECOMMENDED_MODELS
-            if settings.OPENROUTER_DYNAMIC_MODELS:
-                fetched = await _fetch_openrouter_latest_models()
-                if fetched:
-                    model_candidates = fetched
-            for model_id in model_candidates:
-                display_name = MODEL_DISPLAY_NAMES_I18N.get(model_id, {}).get(
-                    lang, MODEL_DISPLAY_NAMES_I18N.get(model_id, {}).get("zh", model_id)
-                )
-                models.append(
-                    {
-                        "provider": provider,
-                        "model_id": model_id,
-                        "display_name": display_name,
-                        "description": metadata.description,
-                        "cost_per_million_tokens": metadata.cost_per_million_tokens,
-                        "priority": metadata.priority,
-                        "status": status,
-                        "is_available": status == HealthStatus.HEALTHY.value,
-                    }
-                )
+    models: list[dict[str, Any]] = []
+    for entry in info_payload.get("data", []):
+        alias = entry.get("model_name")
+        if not alias:
             continue
+        model_info = entry.get("model_info") or {}
+        metadata = model_info.get("metadata") or {}
+        underlying = (entry.get("litellm_params") or {}).get("model")
 
-        # 获取模型 ID（需要实例化服务）
-        model_id = None
-        try:
-            config = ConfigManager.get_config("llm", provider)
-            model_id = getattr(config, "model", None)
-        except Exception:
-            model_id = None
-        if not model_id:
-            model_id = provider
-        try:
-            service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
-            model_id = service.model_name
-        except Exception:
-            # 如果获取失败，使用 provider 作为 fallback
-            model_id = provider
+        provider_display = metadata.get("provider_display")
+        cost_tier = metadata.get("cost_tier") or "mid"
 
-        # 根据语言获取 display_name
-        # 优先使用 model_id 映射（用于 OpenRouter 等多模型服务）
-        display_name = None
-        if model_id and model_id in MODEL_DISPLAY_NAMES_I18N:
-            display_name = MODEL_DISPLAY_NAMES_I18N[model_id].get(lang)
-
-        # 如果没有 model_id 映射，使用 provider 映射
-        if not display_name:
-            display_name = DISPLAY_NAMES_I18N.get(provider, {}).get(
-                lang,
-                DISPLAY_NAMES_I18N.get(provider, {}).get("zh", metadata.display_name or provider.capitalize()),
-            )
+        # 没拿到 /health 数据就乐观地认为可用，避免拉清单时短暂故障让前端全灰
+        is_available = (underlying in healthy_underlying) if has_health_data else True
 
         models.append(
             {
-                "provider": provider,
-                "model_id": model_id,
-                "display_name": display_name,
-                "description": metadata.description,
-                "cost_per_million_tokens": metadata.cost_per_million_tokens,
-                "priority": metadata.priority,
-                "status": status,
-                "is_available": status == HealthStatus.HEALTHY.value,
+                "provider": _normalize_provider(provider_display, underlying),
+                "model_id": alias,
+                "display_name": metadata.get("display_name") or alias,
+                "description": metadata.get("description") or "",
+                "cost_per_million_tokens": 0,  # LiteLLM 自己有更精细的 cost，前端目前不展示
+                "priority": _COST_TIER_PRIORITY.get(cost_tier, 5),
+                "status": "healthy" if is_available else "unhealthy",
+                "is_available": is_available,
+                "is_recommended": False,  # 下面统一计算
+                "cost_tier": cost_tier,
+                "recommended_for": metadata.get("recommended_for") or [],
+                "provider_display": provider_display or "",
             }
         )
 
-    # 找出优先级最高的（priority 数字最小的）
-    healthy_models = [m for m in models if m["is_available"]]
-    if healthy_models:
-        min_priority = min(cast(int, m["priority"]) for m in healthy_models)
-        for model in models:
-            # 只有优先级最高且可用的模型才推荐
-            model["is_recommended"] = model["is_available"] and cast(int, model["priority"]) == min_priority
-    else:
-        # 如果没有健康的模型，都不推荐
-        for model in models:
-            model["is_recommended"] = False
+    # 推荐：第一个 cost_tier=low 且可用的别名。没 low 就退一档。
+    recommended_id: str | None = None
+    for tier in ("low", "mid", "high"):
+        for m in models:
+            if m["cost_tier"] == tier and m["is_available"]:
+                recommended_id = m["model_id"]
+                break
+        if recommended_id:
+            break
+    for m in models:
+        m["is_recommended"] = m["model_id"] == recommended_id
 
-    # 按优先级排序（优先级数字越小越靠前）
-    models.sort(key=lambda x: (x["status"] != "healthy", x["priority"]))
+    # 按 (不可用沉底, cost_tier, alias) 排序，保证 picker 顺序稳定
+    models.sort(
+        key=lambda m: (
+            not m["is_available"],
+            _COST_TIER_ORDER.get(m["cost_tier"], 5),
+            m["model_id"],
+        )
+    )
+
+    # locale 暂时不用：description/display_name 全部在 LiteLLM metadata 里设
+    _lang = getattr(request.state, "locale", "zh")
+    del _lang
 
     return success(data={"models": models})

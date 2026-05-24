@@ -112,7 +112,7 @@ class Settings(BaseSettings):
     # LiteLLM Proxy
     LITELLM_BASE_URL: str = Field(default="http://litellm-proxy:4000")
     LITELLM_API_KEY: str | None = Field(default=None)
-    LITELLM_MODEL: str = Field(default="deepseek/deepseek-chat")
+    LITELLM_MODEL: str = Field(default="chat-default")
     LITELLM_MAX_TOKENS: int = Field(default=4096)
 
     # 远程 image-service（独立部署的 Gemini 生图服务）
