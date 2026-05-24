@@ -164,6 +164,11 @@ class ConfigManager:
                 "http_referer": "OPENROUTER_HTTP_REFERER",
                 "app_title": "OPENROUTER_APP_TITLE",
             },
+            "image_service": {
+                "base_url": "IMAGE_SERVICE_BASE_URL",
+                "api_key": "IMAGE_SERVICE_API_KEY",
+                "default_model": "IMAGE_SERVICE_DEFAULT_MODEL",
+            },
         },
         "asr": {
             "tencent": {
