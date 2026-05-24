@@ -6,7 +6,6 @@
       "max_images": 3,
       "timeout_seconds": 300,
       "supported_summary_types": ["overview"],
-      "supported_content_styles": ["meeting", "lecture", "podcast", "video", "documentary", "explainer", "interview"],
       "image_model": {
         "provider": "openrouter",
         "model_id": "google/gemini-3-pro-image-preview"
@@ -26,6 +25,9 @@
     "video",
     "general"
   ],
+  "style_specific_prompt_types": {
+    "action_items": ["review"]
+  },
   "content_style_descriptions": {
     "meeting": "会议、讨论、头脑风暴 / Meetings, discussions, brainstorming",
     "lecture": "讲座、课程、培训 / Lectures, courses, training",
@@ -70,7 +72,7 @@
       "changes": [
         "Added auto_images feature for AI-driven image generation in summaries",
         "Image placeholders format: {{IMAGE: description}}",
-        "Supported for overview summary type with lecture, podcast, video, documentary, explainer styles",
+        "Supported for overview summary type across content styles",
         "Maximum 3 images per summary with 60s timeout"
       ]
     },

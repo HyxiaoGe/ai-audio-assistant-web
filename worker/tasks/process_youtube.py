@@ -1291,50 +1291,56 @@ def _process_youtube(
                                 len(placeholders),
                                 extra={"task_id": task_id, "placeholder_count": len(placeholders)},
                             )
-                            try:
-                                final_content, image_results = asyncio.run(
-                                    process_summary_images(
-                                        content=summary.content,
-                                        task_id=str(task.id),
-                                        user_id=str(task.user_id),
-                                        summary_type="overview",
-                                        content_style=content_style,
-                                    )
+                        else:
+                            logger.info(
+                                "Task %s: No image placeholders in overview; planning default article image",
+                                task_id,
+                                extra={"task_id": task_id},
+                            )
+                        try:
+                            final_content, image_results = asyncio.run(
+                                process_summary_images(
+                                    content=summary.content,
+                                    task_id=str(task.id),
+                                    user_id=str(task.user_id),
+                                    summary_type="overview",
+                                    content_style=content_style,
                                 )
-                                if image_results:
-                                    success_count = sum(1 for r in image_results if r["status"] == "success")
-                                    logger.info(
-                                        "Task %s: Generated %d/%d images for overview summary",
-                                        task_id,
-                                        success_count,
-                                        len(image_results),
-                                        extra={
-                                            "task_id": task_id,
-                                            "success_count": success_count,
-                                            "total_count": len(image_results),
-                                        },
-                                    )
-                                    # 提取图片模型名
-                                    image_model = next(
-                                        (
-                                            r["model_id"]
-                                            for r in image_results
-                                            if r.get("status") == "success" and r.get("model_id")
-                                        ),
-                                        None,
-                                    )
-                                    # 更新摘要内容和图片模型
-                                    summary.content = final_content
-                                    if image_model:
-                                        summary.image_model_used = image_model
-                                    session.commit()
-                            except Exception as img_err:
-                                logger.warning(
-                                    "Task %s: Image processing failed: %s",
+                            )
+                            if image_results:
+                                success_count = sum(1 for r in image_results if r["status"] == "success")
+                                logger.info(
+                                    "Task %s: Generated %d/%d images for overview summary",
                                     task_id,
-                                    img_err,
-                                    extra={"task_id": task_id, "error": str(img_err)},
+                                    success_count,
+                                    len(image_results),
+                                    extra={
+                                        "task_id": task_id,
+                                        "success_count": success_count,
+                                        "total_count": len(image_results),
+                                    },
                                 )
+                                # 提取图片模型名
+                                image_model = next(
+                                    (
+                                        r["model_id"]
+                                        for r in image_results
+                                        if r.get("status") == "success" and r.get("model_id")
+                                    ),
+                                    None,
+                                )
+                                # 更新摘要内容和图片模型
+                                summary.content = final_content
+                                if image_model:
+                                    summary.image_model_used = image_model
+                                session.commit()
+                        except Exception as img_err:
+                            logger.warning(
+                                "Task %s: Image processing failed: %s",
+                                task_id,
+                                img_err,
+                                extra={"task_id": task_id, "error": str(img_err)},
+                            )
 
                 stage_manager.complete_stage(session, StageType.SUMMARIZE, {"summary_count": len(summaries)})
                 logger.info(

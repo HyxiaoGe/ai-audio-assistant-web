@@ -286,6 +286,7 @@ def _regenerate_summary(
         # 检查是否有图片占位符
         placeholders = extract_image_placeholders(full_content)
         has_images = len(placeholders) > 0
+        auto_images_enabled = is_auto_images_enabled(summary_type, content_style)
 
         redis_client.publish(
             stream_key,
@@ -301,7 +302,7 @@ def _regenerate_summary(
                         "total_length": len(full_content),
                         "provider": used_provider,
                         "model_id": used_model_id,
-                        "has_images": has_images,
+                        "has_images": has_images or auto_images_enabled,
                         "image_count": len(placeholders),
                     },
                 },
@@ -310,9 +311,11 @@ def _regenerate_summary(
         )
         logger.info(f"[{request_id}] Published summary.completed event for summary {summary_id}")
 
-        # 处理图片占位符（如果启用且有占位符）
-        if has_images and is_auto_images_enabled(summary_type):
-            logger.info(f"[{request_id}] Processing {len(placeholders)} image placeholders for task {task_id}")
+        # 处理文章配图。没有占位符时，process_summary_images 会为 overview 自动规划默认配图。
+        if auto_images_enabled:
+            logger.info(
+                f"[{request_id}] Processing overview images for task {task_id}: placeholders={len(placeholders)}"
+            )
 
             async def _process_images():
                 return await process_summary_images(

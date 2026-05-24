@@ -173,16 +173,84 @@ def is_auto_images_enabled(summary_type: str, content_style: str | None = None) 
         logger.debug(f"Auto images disabled: summary_type '{summary_type}' not in supported types {supported_types}")
         return False
 
-    if content_style:
-        supported_styles = config.get("supported_content_styles", [])
-        if content_style not in supported_styles:
-            logger.debug(
-                f"Auto images disabled: content_style '{content_style}' not in supported styles {supported_styles}"
-            )
-            return False
-
     logger.debug(f"Auto images enabled for summary_type={summary_type}, content_style={content_style}")
     return True
+
+
+def _normalize_image_text(value: str, max_length: int = 48) -> str:
+    text = re.sub(r"!\[[^\]]*]\([^)]*\)", "", value)
+    text = re.sub(r"\*\*|__|`|>|#+", "", text)
+    text = re.sub(r"^\s*[-*+\d.)、]+", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" ：:，,。.;；|")
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 1].rstrip() + "…"
+
+
+def _extract_article_image_topic(content: str) -> str:
+    for raw_line in content.splitlines():
+        line = _normalize_image_text(raw_line)
+        if line and "IMAGE:" not in line:
+            return line
+    return "内容核心概览"
+
+
+def _extract_article_image_key_texts(content: str, topic: str, max_items: int = 4) -> list[str]:
+    key_texts: list[str] = []
+    seen: set[str] = set()
+
+    for raw_line in content.splitlines():
+        line = _normalize_image_text(raw_line, max_length=18)
+        if not line or line == topic or "IMAGE:" in line or line in seen:
+            continue
+        seen.add(line)
+        key_texts.append(line)
+        if len(key_texts) >= max_items:
+            break
+
+    if not key_texts:
+        key_texts.append(_normalize_image_text(topic, max_length=18))
+
+    return key_texts
+
+
+def _build_default_article_image_placeholder(
+    content: str,
+    content_style: str | None = None,
+) -> dict[str, Any] | None:
+    topic = _extract_article_image_topic(content)
+    if not topic:
+        return None
+
+    style = content_style or "general"
+    try:
+        image_config = get_prompt_manager().get_image_config(style)
+        image_type = image_config.get("default_type", "infographic")
+    except Exception as exc:
+        logger.warning("Failed to load image config for style %s: %s", style, exc)
+        image_type = "infographic"
+
+    key_texts = _extract_article_image_key_texts(content, topic)
+    placeholder = f"{{{{IMAGE: {image_type} | {topic} | {', '.join(key_texts)}}}}}"
+
+    return {
+        "placeholder": placeholder,
+        "type": image_type,
+        "description": topic,
+        "key_texts": key_texts,
+    }
+
+
+def _insert_article_image_placeholder(content: str, placeholder: str) -> str:
+    stripped = content.rstrip()
+    if not stripped:
+        return placeholder
+
+    blocks = re.split(r"(\n\s*\n)", stripped, maxsplit=1)
+    if len(blocks) == 3:
+        return f"{blocks[0]}{blocks[1]}{placeholder}\n\n{blocks[2]}"
+
+    return f"{placeholder}\n\n{stripped}"
 
 
 async def upload_image(
@@ -506,11 +574,23 @@ async def process_summary_images(
         logger.info(f"Auto images not enabled for {summary_type}/{content_style}")
         return content, []
 
-    # 提取占位符
+    # 提取占位符。旧版流程依赖摘要提示词主动输出 {{IMAGE: ...}}；
+    # 如果没有输出，overview 仍然自动规划一张文章配图，避免配图能力被 prompt 偶然性阻断。
     placeholders = extract_image_placeholders(content)
     if not placeholders:
-        logger.info(f"No image placeholders found in summary for task {task_id}")
-        return content, []
+        default_placeholder = _build_default_article_image_placeholder(content, content_style)
+        if default_placeholder is None:
+            logger.info(f"No image placeholders found in summary for task {task_id}")
+            return content, []
+
+        content = _insert_article_image_placeholder(content, default_placeholder["placeholder"])
+        placeholders = [default_placeholder]
+        logger.info(
+            "Task %s: No image placeholders found; planned default article image (%s/%s)",
+            task_id,
+            default_placeholder.get("type"),
+            content_style or "general",
+        )
 
     logger.info(f"Found {len(placeholders)} image placeholders in task {task_id}")
 

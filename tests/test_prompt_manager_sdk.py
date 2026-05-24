@@ -133,6 +133,11 @@ class TestBuildPromptSlug:
         slug = manager._build_prompt_slug("summary", "action_items", "zh-CN", "meeting")
         assert slug == "summary-actionitems-zh"
 
+    def test_review_action_items_uses_style_slug(self) -> None:
+        manager, _ = _create_manager_with_mock()
+        slug = manager._build_prompt_slug("summary", "action_items", "zh-CN", "review")
+        assert slug == "summary-actionitems-review-zh"
+
 
 # ---------------------------------------------------------------------------
 # Tests: get_prompt
@@ -258,6 +263,81 @@ class TestGetPrompt:
 
         # Should have used "lecture" from variables
         mock_client.prompts.get_by_slug.assert_any_call("summary-overview-lecture-zh")
+
+    def test_review_action_items_uses_style_specific_prompt(self) -> None:
+        manager, mock_client = _create_manager_with_mock()
+
+        user_prompt_obj = _make_prompt("summary-actionitems-review-zh")
+        system_prompt_obj = _make_prompt("shared-system-role-zh", "system template")
+
+        def get_by_slug_side_effect(slug: str, **kwargs: Any) -> Prompt:
+            mapping: dict[str, Prompt] = {
+                "summary-actionitems-review-zh": user_prompt_obj,
+                "shared-system-role-zh": system_prompt_obj,
+            }
+            if slug in mapping:
+                return mapping[slug]
+            raise NotFoundError(code=40400, message=f"Not found: {slug}")
+
+        mock_client.prompts.get_by_slug.side_effect = get_by_slug_side_effect
+
+        def render_side_effect(prompt_id: Any, variables: Any = None) -> RenderResult:
+            if prompt_id == user_prompt_obj.id:
+                return _make_render_result("Rendered review action prompt")
+            if prompt_id == system_prompt_obj.id:
+                return _make_render_result("Rendered review system")
+            return _make_render_result("Other rendered")
+
+        mock_client.prompts.render.side_effect = render_side_effect
+
+        result = manager.get_prompt(
+            category="summary",
+            prompt_type="action_items",
+            locale="zh-CN",
+            variables={"transcript": "review transcript"},
+            content_style="review",
+        )
+
+        assert result["user_prompt"] == "Rendered review action prompt"
+        mock_client.prompts.get_by_slug.assert_any_call("summary-actionitems-review-zh")
+
+    def test_review_action_items_falls_back_to_generic_prompt(self) -> None:
+        manager, mock_client = _create_manager_with_mock()
+
+        user_prompt_obj = _make_prompt("summary-actionitems-zh")
+        system_prompt_obj = _make_prompt("shared-system-role-zh", "system template")
+
+        def get_by_slug_side_effect(slug: str, **kwargs: Any) -> Prompt:
+            if slug == "summary-actionitems-review-zh":
+                raise NotFoundError(code=40400, message=f"Not found: {slug}")
+            if slug == "summary-actionitems-zh":
+                return user_prompt_obj
+            if slug == "shared-system-role-zh":
+                return system_prompt_obj
+            raise NotFoundError(code=40400, message=f"Not found: {slug}")
+
+        mock_client.prompts.get_by_slug.side_effect = get_by_slug_side_effect
+
+        def render_side_effect(prompt_id: Any, variables: Any = None) -> RenderResult:
+            if prompt_id == user_prompt_obj.id:
+                return _make_render_result("Rendered generic action prompt")
+            if prompt_id == system_prompt_obj.id:
+                return _make_render_result("Rendered review system")
+            return _make_render_result("Other rendered")
+
+        mock_client.prompts.render.side_effect = render_side_effect
+
+        result = manager.get_prompt(
+            category="summary",
+            prompt_type="action_items",
+            locale="zh-CN",
+            variables={"transcript": "review transcript"},
+            content_style="review",
+        )
+
+        assert result["user_prompt"] == "Rendered generic action prompt"
+        mock_client.prompts.get_by_slug.assert_any_call("summary-actionitems-review-zh")
+        mock_client.prompts.get_by_slug.assert_any_call("summary-actionitems-zh")
 
 
 # ---------------------------------------------------------------------------

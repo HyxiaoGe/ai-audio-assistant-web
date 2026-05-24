@@ -91,11 +91,22 @@ class PromptManager:
         if content_style is None:
             content_style = (variables or {}).get("content_style", "meeting")
 
-        slug = self._build_prompt_slug(category, prompt_type, locale, content_style)
+        slugs = self._build_prompt_slug_candidates(category, prompt_type, locale, content_style)
+        selected_slug: str | None = None
 
         try:
             # SDK handles: slug lookup, HTTP call, caching, response parsing
-            prompt = self._client.prompts.get_by_slug(slug)
+            prompt = None
+            for slug in slugs:
+                try:
+                    prompt = self._client.prompts.get_by_slug(slug)
+                    selected_slug = slug
+                    break
+                except NotFoundError:
+                    continue
+
+            if prompt is None:
+                raise NotFoundError(code=40400, message=f"No prompt with slugs: {', '.join(slugs)}")
 
             # Merge shared vars + caller vars, then render server-side
             shared_vars = self._resolve_shared_vars(locale)
@@ -107,7 +118,7 @@ class PromptManager:
         except NotFoundError:
             raise BusinessError(
                 ErrorCode.SYSTEM_ERROR,
-                reason=f"Prompt not found in PromptHub: {slug}",
+                reason=f"Prompt not found in PromptHub: {', '.join(slugs)}",
             )
         except PromptHubError as e:
             raise BusinessError(
@@ -134,6 +145,7 @@ class PromptManager:
                 "type": prompt_type,
                 "locale": locale,
                 "content_style": content_style,
+                "slug": selected_slug,
                 "version": config_data.get("version", "unknown"),
                 "source": "prompthub-sdk",
             },
@@ -204,14 +216,31 @@ class PromptManager:
 
     def _build_prompt_slug(self, category: str, prompt_type: str, locale: str, content_style: str) -> str:
         """Build the PromptHub slug from parameters."""
+        return self._build_prompt_slug_candidates(category, prompt_type, locale, content_style)[0]
+
+    def _build_prompt_slug_candidates(
+        self, category: str, prompt_type: str, locale: str, content_style: str
+    ) -> list[str]:
+        """Build PromptHub slug candidates ordered from most specific to fallback."""
         loc_short = locale.split("-")[0]
         type_slug = prompt_type.replace("_", "")  # key_points -> keypoints
 
-        # action_items doesn't vary by content_style
-        if prompt_type == "action_items":
-            return f"{category}-{type_slug}-{loc_short}"
+        if self._uses_style_specific_prompt(category, prompt_type, content_style):
+            styled_slug = f"{category}-{type_slug}-{content_style}-{loc_short}"
+            generic_slug = f"{category}-{type_slug}-{loc_short}"
+            return [styled_slug, generic_slug]
 
-        return f"{category}-{type_slug}-{content_style}-{loc_short}"
+        if prompt_type == "action_items":
+            return [f"{category}-{type_slug}-{loc_short}"]
+
+        return [f"{category}-{type_slug}-{content_style}-{loc_short}"]
+
+    def _uses_style_specific_prompt(self, category: str, prompt_type: str, content_style: str) -> bool:
+        """Return whether a prompt type has style-specific PromptHub variants."""
+        config = self._load_config(category)
+        style_specific_types = config.get("style_specific_prompt_types", {})
+        styles = style_specific_types.get(prompt_type, [])
+        return content_style in styles
 
     def _resolve_shared_vars(self, locale: str) -> dict[str, str]:
         """Fetch shared modules (format_rules, image_requirements) from PromptHub."""
