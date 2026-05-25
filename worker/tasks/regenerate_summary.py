@@ -84,8 +84,8 @@ def regenerate_summary(
     Args:
         task_id: 任务 ID
         summary_type: 摘要类型
-        model: 指定的 LLM provider（如 "doubao", "deepseek", "openrouter"），None 表示自动选择
-        model_id: 指定的模型ID（如 "openai/gpt-4o"，用于 OpenRouter 等支持多模型的服务）
+        model: 指定的 LLM provider（如 "proxy"），None 表示走默认 LiteLLM 别名
+        model_id: 指定的模型 ID / LiteLLM 业务别名（如 "chat-default"、"chat-premium"）
         request_id: 请求 ID（用于日志追踪）
         comparison_id: 对比 ID（用于多模型对比功能）
     """

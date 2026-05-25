@@ -382,6 +382,18 @@ async def compare_models(
     if not has_transcripts:
         raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要")
 
+    # 校验 provider 是否在已注册的 LLM 服务白名单内（目前只有 proxy 与 image_service，
+    # 之前 deepseek/qwen/doubao/moonshot/openrouter 已下线，应拦在 endpoint 层而不是 worker 里）
+    from app.core.registry import ServiceRegistry
+
+    valid_providers = set(ServiceRegistry.list_services("llm"))
+    for model_selection in data.models:
+        if model_selection.provider not in valid_providers:
+            raise BusinessError(
+                ErrorCode.PARAMETER_ERROR,
+                reason=f"未知 LLM provider: {model_selection.provider}（可用: {sorted(valid_providers)}）",
+            )
+
     # Generate comparison ID
     comparison_id = uuid4().hex
     trace_id = getattr(request.state, "trace_id", None)

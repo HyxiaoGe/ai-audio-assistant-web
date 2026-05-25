@@ -1,13 +1,10 @@
 """LLM 服务配置 Schema
 
-定义 LLM 系服务的配置结构。其它 LLM provider（doubao/deepseek/qwen/moonshot/
-openrouter/proxy）暂未在此注册 schema —— 它们直接走 `_CONFIG_MAPPING` →
-settings 的兜底路径，配置中心也不需要给它们写库。
-
-`image_service` 单独注册的原因：避免 `ConfigManager.get_config("llm",
-"image_service")` 抛 ValueError，让 SmartFactory 的 user-config 路径能正常工作
-（虽然当前只用环境变量，未来如果通过 config-center DB 配置远端 image-service
-endpoint，也能直接复用）。
+目前只有两个 LLM provider：`proxy`（统一走 LiteLLM）和 `image_service`
+（Gemini 系生图）。proxy 直接读 settings，不需要注册 schema；image_service
+注册 schema 是为了让 `ConfigManager.get_config("llm", "image_service")`
+不抛 ValueError，从而走通 SmartFactory 的 user-config 路径（即使当前只用
+环境变量，未来通过 config-center DB 配置 endpoint 也能直接复用）。
 """
 
 from __future__ import annotations

@@ -134,36 +134,6 @@ class ConfigManager:
     # 数据驱动配置加载，避免 if-elif 分支（P2-1 优化）
     _CONFIG_MAPPING: dict[str, dict[str, dict[str, str]]] = {
         "llm": {
-            "doubao": {
-                "api_key": "DOUBAO_API_KEY",
-                "base_url": "DOUBAO_BASE_URL",
-                "model": "DOUBAO_MODEL",
-                "max_tokens": "DOUBAO_MAX_TOKENS",
-            },
-            "deepseek": {
-                "api_key": "DEEPSEEK_API_KEY",
-                "base_url": "DEEPSEEK_BASE_URL",
-                "model": "DEEPSEEK_MODEL",
-                "max_tokens": "DEEPSEEK_MAX_TOKENS",
-            },
-            "qwen": {
-                "api_key": "QWEN_API_KEY",
-                "model": "QWEN_MODEL",
-            },
-            "moonshot": {
-                "api_key": "MOONSHOT_API_KEY",
-                "base_url": "MOONSHOT_BASE_URL",
-                "model": "MOONSHOT_MODEL",
-                "max_tokens": "MOONSHOT_MAX_TOKENS",
-            },
-            "openrouter": {
-                "api_key": "OPENROUTER_API_KEY",
-                "base_url": "OPENROUTER_BASE_URL",
-                "model": "OPENROUTER_MODEL",
-                "max_tokens": "OPENROUTER_MAX_TOKENS",
-                "http_referer": "OPENROUTER_HTTP_REFERER",
-                "app_title": "OPENROUTER_APP_TITLE",
-            },
             "image_service": {
                 "base_url": "IMAGE_SERVICE_BASE_URL",
                 "api_key": "IMAGE_SERVICE_API_KEY",

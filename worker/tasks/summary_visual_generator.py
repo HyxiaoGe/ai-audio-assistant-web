@@ -109,9 +109,7 @@ async def render_mermaid_to_image(
         logger.info(f"Running mmdc command: {' '.join(cmd)}")
 
         # 执行渲染命令（使用受控的 mmdc CLI 参数）
-        result = subprocess.run(  # nosec B603
-            cmd, capture_output=True, text=True, timeout=30, check=False
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)  # nosec B603
 
         if result.returncode != 0:
             logger.error(f"mmdc failed with code {result.returncode}: {result.stderr}")
@@ -220,21 +218,12 @@ async def generate_visual_summary(
     logger.info(f"Task {task_id}: Preprocessed text length: {len(preprocessed_text)} chars")
 
     # ===== Step 3: 获取 LLM 服务 =====
-    # Set defaults if not provided
-    default_models = {
-        "deepseek": "deepseek-chat",
-        "qwen": "qwen-plus",
-        "doubao": "doubao-pro-4k",
-        "moonshot": "moonshot-v1-8k",
-    }
-
-    # If neither provider nor model_id is provided, use deepseek as default
+    # 默认走 LiteLLM 代理 + chat-default 别名；caller 可以覆盖
     if not provider and not model_id:
-        provider = "deepseek"
-        model_id = "deepseek-chat"
+        provider = "proxy"
+        model_id = "chat-default"
     elif provider and not model_id:
-        # If provider is set but model_id is not, use default model for that provider
-        model_id = default_models.get(provider, "deepseek-chat")
+        model_id = "chat-default"
 
     llm_service: LLMService = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
 

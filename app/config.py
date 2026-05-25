@@ -87,27 +87,14 @@ class Settings(BaseSettings):
     VOLC_ASR_POLL_INTERVAL: int | None = Field(default=None)
     VOLC_ASR_MAX_WAIT_SECONDS: int | None = Field(default=None)
 
-    DOUBAO_API_KEY: str | None = Field(default=None)
-    DOUBAO_BASE_URL: str | None = Field(default=None)
-    DOUBAO_MODEL: str | None = Field(default=None)
-    DOUBAO_MAX_TOKENS: int | None = Field(default=None)
-    QWEN_API_KEY: str | None = Field(default=None)
-    QWEN_MODEL: str | None = Field(default=None)
-    MOONSHOT_API_KEY: str | None = Field(default=None)
-    MOONSHOT_BASE_URL: str | None = Field(default="https://api.moonshot.cn/v1")
-    MOONSHOT_MODEL: str | None = Field(default="moonshot-v1-8k")
-    MOONSHOT_MAX_TOKENS: int | None = Field(default=4096)
-    DEEPSEEK_API_KEY: str | None = Field(default=None)
-    DEEPSEEK_BASE_URL: str | None = Field(default="https://api.deepseek.com")
-    DEEPSEEK_MODEL: str | None = Field(default="deepseek-chat")
-    DEEPSEEK_MAX_TOKENS: int | None = Field(default=4096)
+    # OpenRouter 仅保留给 RAG embedding（embedder 仍直连 openrouter
+    # 的 text-embedding-3-small；切到 LiteLLM 是 Phase 3.5 的事）。
+    # 其它 LLM provider（doubao/qwen/moonshot/deepseek）的 env 已下线，
+    # 全部由 LiteLLM Proxy 负责路由。
     OPENROUTER_API_KEY: str | None = Field(default=None)
     OPENROUTER_BASE_URL: str | None = Field(default="https://openrouter.ai/api/v1")
-    OPENROUTER_MODEL: str | None = Field(default=None)
-    OPENROUTER_MAX_TOKENS: int | None = Field(default=4096)
     OPENROUTER_HTTP_REFERER: str | None = Field(default=None)
     OPENROUTER_APP_TITLE: str | None = Field(default=None)
-    OPENROUTER_DYNAMIC_MODELS: bool = Field(default=False)
 
     # LiteLLM Proxy
     LITELLM_BASE_URL: str = Field(default="http://litellm-proxy:4000")
