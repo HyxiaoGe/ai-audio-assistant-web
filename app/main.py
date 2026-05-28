@@ -7,9 +7,9 @@ from sqlalchemy.exc import DBAPIError
 
 from app.api.v1.router import api_router
 from app.config import settings
+from app.core import litellm_health
 from app.core.config_manager import ConfigManager
 from app.core.exceptions import BusinessError
-from app.core import litellm_health
 from app.core.i18n import get_message
 from app.core.middleware import (
     LocaleMiddleware,

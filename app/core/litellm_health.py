@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import threading
@@ -181,10 +182,8 @@ async def stop() -> None:
     global _refresh_task
     if _refresh_task is not None and not _refresh_task.done():
         _refresh_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await _refresh_task
-        except asyncio.CancelledError:
-            pass
         _refresh_task = None
 
 
