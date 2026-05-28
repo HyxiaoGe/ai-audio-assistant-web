@@ -7,11 +7,13 @@ provider/model 列表。所有项目共享同一个 LiteLLM 模型注册表，
 返回字段保留兼容旧前端的形状（`provider` / `model_id` / `display_name` /
 `description` / `is_available` / `is_recommended`），新增字段尽量复用
 LiteLLM 自身的 `model_info.metadata`。
+
+健康状态走 `app.core.litellm_health` 的后台轮询缓存，本端点不再同步打
+LiteLLM `/health`（之前会拖到 5s 超时，picker 偶尔会卡）。
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -20,6 +22,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.config import settings
+from app.core import litellm_health
 from app.core.response import success
 
 logger = logging.getLogger("app.api.llm")
@@ -51,32 +54,24 @@ def _normalize_provider(provider_display: str | None, underlying_model: str | No
 async def get_available_models(request: Request) -> JSONResponse:
     """返回 LiteLLM 中已配置的业务模型别名。
 
-    数据来源：LiteLLM Proxy 的 `/model/info`（模型清单 + metadata）
-    与 `/health`（每个底层模型的可用性，由 LiteLLM 后台健康检查驱动）。
+    数据来源：
+    - LiteLLM Proxy 的 `/model/info`（模型清单 + metadata，同步拉）
+    - app.core.litellm_health 的内存缓存（健康状态，后台 5min 轮询）
     """
     base_url = settings.LITELLM_BASE_URL.rstrip("/")
     headers = {"Authorization": f"Bearer {settings.LITELLM_API_KEY}"} if settings.LITELLM_API_KEY else {}
 
     try:
         async with httpx.AsyncClient(timeout=_CATALOG_TIMEOUT) as client:
-            info_task = client.get(f"{base_url}/model/info", headers=headers)
-            health_task = client.get(f"{base_url}/health", headers=headers)
-            info_resp, health_resp = await asyncio.gather(info_task, health_task)
+            info_resp = await client.get(f"{base_url}/model/info", headers=headers)
             info_resp.raise_for_status()
-            # /health 偶尔会因为某个上游短暂不可达返回 200 但 body 不全，宽松处理
-            health_payload: dict[str, Any] = {}
-            if health_resp.status_code == 200:
-                health_payload = health_resp.json()
             info_payload: dict[str, Any] = info_resp.json()
     except Exception as exc:
         logger.warning("fetch LiteLLM catalog failed: %s", exc)
         return success(data={"models": []})
 
-    # 把底层 model 名映射到健康状态：出现在 healthy_endpoints 的才算 healthy
-    healthy_underlying = {
-        item.get("model") for item in (health_payload.get("healthy_endpoints") or []) if item.get("model")
-    }
-    has_health_data = bool(healthy_underlying) or bool(health_payload.get("unhealthy_endpoints"))
+    # 后台还没探测过的话，乐观地把所有 alias 当 healthy，避免冷启动期间整个 picker 被误灰
+    probed = litellm_health.has_data()
 
     models: list[dict[str, Any]] = []
     for entry in info_payload.get("data", []):
@@ -90,8 +85,14 @@ async def get_available_models(request: Request) -> JSONResponse:
         provider_display = metadata.get("provider_display")
         cost_tier = metadata.get("cost_tier") or "mid"
 
-        # 没拿到 /health 数据就乐观地认为可用，避免拉清单时短暂故障让前端全灰
-        is_available = (underlying in healthy_underlying) if has_health_data else True
+        if probed:
+            health = litellm_health.get_health(alias)
+            # unknown（探测里没出现的）按可用处理 — 避免 wildcard 路由被错判
+            is_available = health["status"] != "unhealthy"
+            health_error = health.get("error")
+        else:
+            is_available = True
+            health_error = None
 
         models.append(
             {
@@ -107,6 +108,8 @@ async def get_available_models(request: Request) -> JSONResponse:
                 "cost_tier": cost_tier,
                 "recommended_for": metadata.get("recommended_for") or [],
                 "provider_display": provider_display or "",
+                # 不可用时给一句中文友好原因，FE tooltip 可直接用
+                "health_error": health_error,
             }
         )
 

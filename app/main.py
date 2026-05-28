@@ -9,6 +9,7 @@ from app.api.v1.router import api_router
 from app.config import settings
 from app.core.config_manager import ConfigManager
 from app.core.exceptions import BusinessError
+from app.core import litellm_health
 from app.core.i18n import get_message
 from app.core.middleware import (
     LocaleMiddleware,
@@ -102,9 +103,11 @@ def create_app() -> FastAPI:
         ConfigManager.configure_db(async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL)
         if settings.CONFIG_CENTER_DB_ENABLED:
             await ConfigManager.refresh_from_db()
+        await litellm_health.start()
 
     @app.on_event("shutdown")
     async def shutdown_event() -> None:
+        await litellm_health.stop()
         MonitoringSystem.get_instance().stop()
 
     @app.exception_handler(BusinessError)

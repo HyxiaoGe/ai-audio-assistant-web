@@ -1,13 +1,15 @@
 """LLM 模型目录 API（薄代理到 LiteLLM）测试。
 
 只关心“形状 + 关键行为”：
-- 解析 LiteLLM `/model/info` + `/health` 的响应
+- 解析 LiteLLM `/model/info` 的响应
+- 健康状态从 app.core.litellm_health 模块的缓存读
 - 推荐 cost_tier=low 的别名
 - LiteLLM 拉不到时返回空列表而不是 500
 """
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
@@ -16,6 +18,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.api.v1 import llm as llm_module
+from app.core import litellm_health
 
 
 def _model_info_payload() -> dict[str, Any]:
@@ -64,18 +67,14 @@ def _model_info_payload() -> dict[str, Any]:
     }
 
 
-def _health_payload(*, all_healthy: bool = True) -> dict[str, Any]:
-    healthy = [
-        {"model": "gemini/gemini-2.5-flash"},
-        {"model": "gemini/gemini-3.1-flash-lite"},
-    ]
-    if all_healthy:
-        healthy.append({"model": "gemini/gemini-2.5-pro"})
-        return {"healthy_endpoints": healthy, "unhealthy_endpoints": []}
-    return {
-        "healthy_endpoints": healthy,
-        "unhealthy_endpoints": [{"model": "gemini/gemini-2.5-pro"}],
-    }
+def _seed_health_cache(monkeypatch: pytest.MonkeyPatch, by_alias: dict[str, dict[str, Any]]) -> None:
+    """模拟后台 litellm_health 已经探测过一次。
+
+    by_alias 形如 {"chat-default": {"status": "healthy", "error": None}, ...}。
+    没列出的 alias 在 endpoint 里会落到 unknown 分支，按可用处理。
+    """
+    monkeypatch.setattr(litellm_health, "_by_alias", dict(by_alias))
+    monkeypatch.setattr(litellm_health, "_last_checked_at", time.time())
 
 
 def _build_app(monkeypatch: pytest.MonkeyPatch, handler: Any) -> FastAPI:
@@ -91,6 +90,10 @@ def _build_app(monkeypatch: pytest.MonkeyPatch, handler: Any) -> FastAPI:
     monkeypatch.setattr(llm_module.settings, "LITELLM_BASE_URL", "http://litellm.test")
     monkeypatch.setattr(llm_module.settings, "LITELLM_API_KEY", "sk-test")
 
+    # 默认假装后台还没探测过——endpoint 走乐观可用分支。具体测试需要覆盖时显式 _seed_health_cache。
+    monkeypatch.setattr(litellm_health, "_by_alias", {})
+    monkeypatch.setattr(litellm_health, "_last_checked_at", 0.0)
+
     app = FastAPI()
     app.include_router(llm_module.router, prefix="/api/v1")
     return app
@@ -101,11 +104,17 @@ async def test_catalog_returns_aliases_with_metadata(monkeypatch: pytest.MonkeyP
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/model/info"):
             return httpx.Response(200, json=_model_info_payload())
-        if request.url.path.endswith("/health"):
-            return httpx.Response(200, json=_health_payload(all_healthy=True))
         return httpx.Response(404)
 
     app = _build_app(monkeypatch, handler)
+    _seed_health_cache(
+        monkeypatch,
+        {
+            "chat-default": {"status": "healthy", "error": None},
+            "chat-premium": {"status": "healthy", "error": None},
+            "audio-structuring": {"status": "healthy", "error": None},
+        },
+    )
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/v1/llm/models")
 
@@ -123,15 +132,23 @@ async def test_catalog_returns_aliases_with_metadata(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_unhealthy_underlying_marks_alias_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_unhealthy_alias_marks_unavailable_with_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """litellm_health 缓存里标了 unhealthy 的别名 → endpoint 反映 is_available=False + 友好错误。"""
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/model/info"):
             return httpx.Response(200, json=_model_info_payload())
-        if request.url.path.endswith("/health"):
-            return httpx.Response(200, json=_health_payload(all_healthy=False))
         return httpx.Response(404)
 
     app = _build_app(monkeypatch, handler)
+    _seed_health_cache(
+        monkeypatch,
+        {
+            "chat-default": {"status": "healthy", "error": None},
+            "chat-premium": {"status": "unhealthy", "error": "服务商认证失败：API key 无效或已过期"},
+            "audio-structuring": {"status": "healthy", "error": None},
+        },
+    )
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/v1/llm/models")
 
@@ -140,6 +157,7 @@ async def test_unhealthy_underlying_marks_alias_unavailable(monkeypatch: pytest.
     assert by_alias["chat-default"]["is_available"] is True
     assert by_alias["chat-premium"]["is_available"] is False
     assert by_alias["chat-premium"]["status"] == "unhealthy"
+    assert "认证失败" in by_alias["chat-premium"]["health_error"]
 
 
 @pytest.mark.asyncio
@@ -147,11 +165,17 @@ async def test_recommended_is_first_healthy_low_cost(monkeypatch: pytest.MonkeyP
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/model/info"):
             return httpx.Response(200, json=_model_info_payload())
-        if request.url.path.endswith("/health"):
-            return httpx.Response(200, json=_health_payload(all_healthy=True))
         return httpx.Response(404)
 
     app = _build_app(monkeypatch, handler)
+    _seed_health_cache(
+        monkeypatch,
+        {
+            "chat-default": {"status": "healthy", "error": None},
+            "chat-premium": {"status": "healthy", "error": None},
+            "audio-structuring": {"status": "healthy", "error": None},
+        },
+    )
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/v1/llm/models")
 
@@ -176,17 +200,16 @@ async def test_litellm_unreachable_returns_empty_list(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_health_unreachable_optimistically_marks_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    """/health 临时挂了不要让前端整片变灰，按 model_info 列出来就行。"""
+async def test_health_cache_empty_optimistically_marks_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """litellm_health 后台还没探测过（冷启动）时，所有 alias 走乐观可用分支。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/model/info"):
             return httpx.Response(200, json=_model_info_payload())
-        if request.url.path.endswith("/health"):
-            return httpx.Response(503)
         return httpx.Response(404)
 
     app = _build_app(monkeypatch, handler)
+    # _build_app 默认就 reset 了缓存，不需要 _seed_health_cache
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/v1/llm/models")
 
