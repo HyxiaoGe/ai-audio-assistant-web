@@ -127,12 +127,17 @@ class SmartFactory:
             return None
 
         # 主动健康探测（尊重 HealthChecker 的 30s 缓存；缓存内为 no-op，不会每次选择都打满探测）：
-        # - 稳态（已有健康服务）时，只并发重探此前被标记 UNHEALTHY 的服务，给它们恢复的机会，
-        #   修复「服务一旦不健康就再不被重新纳入候选」(D4-001)。
+        # - 稳态（已有健康服务）时，并发重探所有「非 HEALTHY」服务（UNHEALTHY / CHECKING / UNKNOWN），
+        #   给它们恢复的机会。注意必须涵盖 CHECKING/UNKNOWN：探测被取消（如请求取消）会把状态留在
+        #   CHECKING，若只挑 UNHEALTHY 会让它再不被重探、永久落选——与「不健康永不恢复」同源 (D4)。
         # - 冷启动 / 全部不健康时，并发探测全部服务。
         # 探测统一用 asyncio.gather 并发，修复原先串行 await 逐个探测的阻塞 (D4-004)。
         healthy_services = HealthChecker.get_healthy_services(service_type)
-        probe_targets = HealthChecker.get_unhealthy_services(service_type) if healthy_services else all_services
+        if healthy_services:
+            healthy_set = set(healthy_services)
+            probe_targets = [name for name in all_services if name not in healthy_set]
+        else:
+            probe_targets = all_services
         if probe_targets:
             await asyncio.gather(
                 *(HealthChecker.check_service(service_type, name) for name in probe_targets),

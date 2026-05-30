@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -154,6 +155,11 @@ class VolcengineASRService(ASRService):
             raise BusinessError(ErrorCode.ASR_SERVICE_TIMEOUT) from exc
         except httpx.HTTPError as exc:
             raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Query task failed: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            # 状态码声明成功(20000000)但响应体损坏/截断时 response.json() 抛 json.JSONDecodeError
+            # (ValueError 子类，非 httpx.HTTPError)，需一并包成 BusinessError，否则裸异常会逃出
+            # worker 的「只 catch BusinessError」回退循环，绕过多 URL 重试 (D8)。对齐 aliyun。
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Invalid response JSON: {exc}") from exc
 
         raise BusinessError(ErrorCode.ASR_SERVICE_TIMEOUT)
 

@@ -244,6 +244,17 @@ class HealthChecker:
                 exc_info=True,
             )
 
+        except asyncio.CancelledError:
+            # 探测被取消（外层请求取消 / 超时 / worker 关停）：CancelledError 是 BaseException，
+            # 不会被下面的 except Exception 捕获；若不处理，status 会永久停在上面置的 CHECKING，
+            # 而 get_healthy/get_unhealthy 都不含 CHECKING → 该服务再不被重探、永久落选。
+            # 这里把仍处于 CHECKING 的状态退回 UNKNOWN 再向上抛，保持取消语义的同时让其可被重探
+            # （与 _select_service 重探所有「非 HEALTHY」服务呼应，D4）。
+            with cls._lock:
+                if result.status == HealthStatus.CHECKING:
+                    result.status = HealthStatus.UNKNOWN
+            raise
+
         except Exception as exc:
             # 其他异常（网络问题、临时故障等）：累积失败次数后才标记不健康
             error_msg = f"{type(exc).__name__}: {exc}"
