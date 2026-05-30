@@ -32,6 +32,38 @@ def _serialize_config(record: ServiceConfig) -> dict[str, Any]:
     }
 
 
+# 凭证 / 端点类字段：普通用户绝不允许通过自助 /me 配置路径设置（管理员路由仍可）。
+# 否则用户可为已注册的 storage/asr/image provider 注入 base_url/endpoint/api_key，
+# 把平台自身的任务重定向到攻击者服务器（SSRF）或窃取平台共享凭证。
+_USER_CONFIG_FORBIDDEN_FIELDS = frozenset(
+    {
+        "base_url",
+        "endpoint",
+        "api_key",
+        "secret_key",
+        "secret_id",
+        "access_key",
+        "access_key_id",
+        "access_key_secret",
+        "access_token",
+        "app_id",
+        "app_key",
+        "token",
+        "password",
+        "secret",
+    }
+)
+
+
+def _reject_privileged_user_fields(config: dict[str, Any]) -> None:
+    offending = sorted(key for key in config if key.lower() in _USER_CONFIG_FORBIDDEN_FIELDS)
+    if offending:
+        raise BusinessError(
+            ErrorCode.PERMISSION_DENIED,
+            detail=f"forbidden config fields for self-service config: {', '.join(offending)}",
+        )
+
+
 @router.get("")
 async def list_configs(
     service_type: str | None = None,
@@ -226,6 +258,8 @@ async def upsert_my_config(
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> Any:
+    # 自助路径禁止设置凭证 / 端点类字段（防 SSRF + 平台凭证窃取）
+    _reject_privileged_user_fields(payload.config)
     config_data = dict(payload.config)
     config_data["enabled"] = payload.enabled
     try:

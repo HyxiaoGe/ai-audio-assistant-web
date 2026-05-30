@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     JWT_SECRET: str | None = Field(default=None)
     JWT_ALGORITHM: str | None = Field(default=None)
 
+    # 静态数据字段级加密密钥（Fernet）。用于加密落库的密钥/令牌（如 OAuth token）。
+    # 生成：python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # 支持逗号分隔多把密钥以便轮换（第一把加密，全部用于解密）。生产环境必须设置。
+    FIELD_ENCRYPTION_KEY: str | None = Field(default=None)
+
     # Auth Service (统一认证)
     AUTH_SERVICE_URL: str = Field(default="http://localhost:8100")
     AUTH_SERVICE_JWKS_URL: str | None = Field(default=None)

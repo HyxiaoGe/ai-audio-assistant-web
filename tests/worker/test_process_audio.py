@@ -14,6 +14,10 @@ from app.models.transcript import Transcript
 from app.services.asr.base import TranscriptSegment
 from worker.tasks import process_audio
 
+# Realistic upload object key: matches the `upload/{user_id}/{Y/m/d}/{32-hex}{ext}`
+# shape produced by app.api.v1.upload._build_file_key for user_id="user-1".
+_UPLOAD_KEY = "upload/user-1/2026/05/30/" + "a" * 32 + ".wav"
+
 
 @dataclass
 class _FakeQuotaConsumptionResult:
@@ -191,7 +195,7 @@ async def _fake_generate_summaries(
 @pytest.mark.asyncio
 async def test_process_audio_success_upload(monkeypatch: pytest.MonkeyPatch) -> None:
     settings.UPLOAD_PRESIGN_EXPIRES = 60
-    task = _build_task("upload", None, "audio/test.wav")
+    task = _build_task("upload", None, _UPLOAD_KEY)
     session = _FakeSession(task)
 
     segments = [
@@ -234,7 +238,7 @@ async def test_process_audio_success_upload(monkeypatch: pytest.MonkeyPatch) -> 
     assert len(session.transcripts) == 1
     assert len(session.summaries) == 3
     assert session.summaries[0].model_used == "test-model"
-    assert storage.calls == [("audio/test.wav", 60)]
+    assert storage.calls == [(_UPLOAD_KEY, 60)]
 
 
 @pytest.mark.asyncio
@@ -284,7 +288,7 @@ async def test_process_audio_success_youtube(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_process_audio_asr_failed(monkeypatch: pytest.MonkeyPatch) -> None:
-    task = _build_task("upload", None, "audio/test.wav")
+    task = _build_task("upload", None, _UPLOAD_KEY)
     session = _FakeSession(task)
     error = BusinessError(ErrorCode.ASR_SERVICE_FAILED)
     asr = _FakeASRService(error=error)
@@ -311,7 +315,7 @@ async def _fake_generate_summaries_error(*args: Any, **kwargs: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_process_audio_llm_failed(monkeypatch: pytest.MonkeyPatch) -> None:
-    task = _build_task("upload", None, "audio/test.wav")
+    task = _build_task("upload", None, _UPLOAD_KEY)
     session = _FakeSession(task)
     asr = _FakeASRService(
         segments=[
