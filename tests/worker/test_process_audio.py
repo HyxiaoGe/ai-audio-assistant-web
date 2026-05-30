@@ -369,3 +369,88 @@ async def test_process_audio_task_not_found(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
 
     await process_audio._process_task("missing-task", None)
+
+
+# --------------------------------------------------------------------------- #
+# P10: server-side object size enforcement (presigned-PUT cannot cap size)
+# --------------------------------------------------------------------------- #
+class _FakeSizeStorage:
+    def __init__(self, size: int | None = None, raise_on_info: bool = False) -> None:
+        self._size = size
+        self._raise = raise_on_info
+        self.deleted: list[str] = []
+        self.info_calls: list[str] = []
+
+    def get_file_info(self, object_name: str) -> dict[str, Any]:
+        self.info_calls.append(object_name)
+        if self._raise:
+            raise RuntimeError("HEAD failed")
+        return {"size": self._size}
+
+    def delete_file(self, object_name: str) -> None:
+        self.deleted.append(object_name)
+
+    def generate_presigned_url(self, object_name: str, expires_in: int) -> str:
+        return f"https://minio.local/{object_name}?token=presigned"
+
+
+@pytest.mark.asyncio
+async def test_enforce_size_limit_oversize_deletes_and_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(process_audio.settings, "UPLOAD_MAX_SIZE_BYTES", 1000, raising=False)
+    fake = _FakeSizeStorage(size=1001)
+    with pytest.raises(BusinessError) as ei:
+        await process_audio._enforce_object_size_limit(fake, "k")
+    assert ei.value.code == ErrorCode.FILE_TOO_LARGE
+    assert fake.deleted == ["k"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [1000, 999])
+async def test_enforce_size_limit_within_limit_ok(monkeypatch: pytest.MonkeyPatch, size: int) -> None:
+    monkeypatch.setattr(process_audio.settings, "UPLOAD_MAX_SIZE_BYTES", 1000, raising=False)
+    fake = _FakeSizeStorage(size=size)
+    await process_audio._enforce_object_size_limit(fake, "k")
+    assert fake.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_enforce_size_limit_head_error_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(process_audio.settings, "UPLOAD_MAX_SIZE_BYTES", 1000, raising=False)
+    fake = _FakeSizeStorage(raise_on_info=True)
+    await process_audio._enforce_object_size_limit(fake, "k")  # fail-open, no raise
+    assert fake.deleted == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [None, 0])
+async def test_enforce_size_limit_disabled_skips_head(
+    monkeypatch: pytest.MonkeyPatch, limit: int | None
+) -> None:
+    monkeypatch.setattr(process_audio.settings, "UPLOAD_MAX_SIZE_BYTES", limit, raising=False)
+    fake = _FakeSizeStorage(size=10**9)
+    await process_audio._enforce_object_size_limit(fake, "k")
+    assert fake.info_calls == []  # early-return before any HEAD
+    assert fake.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_process_audio_oversize_upload_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(process_audio.settings, "UPLOAD_MAX_SIZE_BYTES", 10, raising=False)
+    task = _build_task("upload", None, _UPLOAD_KEY)
+    session = _FakeSession(task)
+    asr = _FakeASRService(segments=[])
+    llm = _FakeLLMService()
+    storage = _FakeSizeStorage(size=10**9)
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", lambda: asr)
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+
+    await process_audio._process_task(task.id, "req-1")
+
+    assert task.status == "failed"
+    assert task.error_code == ErrorCode.FILE_TOO_LARGE.value
+    assert storage.deleted == [_UPLOAD_KEY]
+    assert session.transcripts == []  # aborted before transcribing

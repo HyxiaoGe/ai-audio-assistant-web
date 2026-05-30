@@ -6,6 +6,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_db
+from app.config import settings
+from app.core.rate_limit import rate_limit
 from app.core.response import success
 from app.schemas.common import PageResponse
 from app.schemas.task import (
@@ -26,6 +28,7 @@ async def create_task(
     data: TaskCreateRequest,
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
+    _rl: None = Depends(rate_limit(limit=settings.RATE_LIMIT_TASK_CREATE_PER_MIN, scope="task_create")),
 ) -> JSONResponse:
     trace_id = getattr(request.state, "trace_id", None)
     task = await TaskService.create_task(db, user, data, trace_id)

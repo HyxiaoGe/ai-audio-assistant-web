@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentUser, get_current_user, get_db
 from app.config import settings
 from app.core.exceptions import BusinessError
+from app.core.rate_limit import rate_limit
 from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
@@ -322,6 +323,7 @@ async def get_subscriptions(
 async def sync_subscriptions(
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
+    _rl: None = Depends(rate_limit(limit=settings.RATE_LIMIT_YOUTUBE_SYNC_PER_MIN, scope="youtube_sync")),
 ) -> JSONResponse:
     """Trigger background sync of YouTube subscriptions.
 
@@ -823,6 +825,7 @@ async def sync_channel_videos(
     max_videos: int = Query(50, ge=1, le=200, description="Max videos to fetch"),
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
+    _rl: None = Depends(rate_limit(limit=settings.RATE_LIMIT_YOUTUBE_SYNC_PER_MIN, scope="youtube_sync")),
 ) -> JSONResponse:
     """Trigger video sync for a specific channel.
 
@@ -888,6 +891,7 @@ async def prewarm_video_summary_style_recommendations(
     payload: YouTubeSummaryStylePrewarmRequest,
     request: Request,
     user: CurrentUser = Depends(get_current_user),
+    _rl: None = Depends(rate_limit(limit=settings.RATE_LIMIT_YOUTUBE_SYNC_PER_MIN, scope="youtube_sync")),
 ) -> JSONResponse:
     """Queue summary style recommendation prewarming for cached YouTube videos."""
     unique_video_ids: list[str] = []
@@ -941,6 +945,7 @@ async def transcribe_video(
     request: YouTubeTranscribeRequest,
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
+    _rl: None = Depends(rate_limit(limit=settings.RATE_LIMIT_YOUTUBE_SYNC_PER_MIN, scope="youtube_sync")),
 ) -> JSONResponse:
     """Create a transcription task from a cached YouTube video.
 

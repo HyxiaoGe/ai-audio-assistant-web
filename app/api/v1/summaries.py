@@ -11,7 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_current_user_from_query, get_db
+from app.config import settings
 from app.core.exceptions import BusinessError
+from app.core.rate_limit import rate_limit, rate_limit_query
 from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
@@ -350,6 +352,7 @@ async def compare_models(
     data: SummaryCompareRequest = Body(...),
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
+    _rl: None = Depends(rate_limit(limit=settings.RATE_LIMIT_SUMMARY_COMPARE_PER_MIN, scope="summary_compare")),
 ) -> JSONResponse:
     """并行生成多个模型的摘要用于对比
 
@@ -497,6 +500,7 @@ async def stream_comparison(
     summary_type: str = Query(..., description="摘要类型"),
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user_from_query),
+    _rl: None = Depends(rate_limit_query(limit=settings.RATE_LIMIT_SUMMARY_COMPARE_PER_MIN, scope="summary_compare")),
 ) -> StreamingResponse:
     """流式获取多模型对比结果
 
