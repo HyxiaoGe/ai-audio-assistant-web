@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from threading import Lock
+from weakref import WeakKeyDictionary
 
 from app.core.registry import ServiceRegistry
 
@@ -120,10 +121,38 @@ class HealthChecker:
     # 线程锁：确保结果更新线程安全
     _lock = Lock()
 
+    # 探测单飞（single-flight）：每个事件循环、每个服务一把 asyncio.Lock，串行化同一服务的并发探测，
+    # 修复「锁在 await 期间释放 → 并发探测各自累加同一 result 计数 / 误判失败阈值」(D6)。
+    # 必须按 loop 维度隔离：worker 每次 asyncio.run 都是新 loop，asyncio 原语不能跨 loop 复用；
+    # loop 被 GC 时其锁表随 WeakKeyDictionary 自动回收，无需手动清理。
+    _probe_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, dict[tuple[str, str], asyncio.Lock]] = (
+        WeakKeyDictionary()
+    )
+    _probe_locks_guard = Lock()
+
     # 配置参数
     failure_threshold: int = 3  # 连续失败阈值
     check_timeout: int = 5  # 检查超时时间（秒）
     cache_duration: int = 30  # 缓存时长（秒），ADR-003 要求
+
+    @classmethod
+    def _probe_lock(cls, service_type: str, name: str) -> asyncio.Lock:
+        """返回当前事件循环下该服务专属的 asyncio.Lock（懒创建，用于探测单飞）。
+
+        按运行中的 event loop 隔离锁表，避免 asyncio 原语跨 loop 复用导致
+        "got Future attached to a different loop"。
+        """
+        loop = asyncio.get_running_loop()
+        with cls._probe_locks_guard:
+            loop_locks = cls._probe_locks.get(loop)
+            if loop_locks is None:
+                loop_locks = {}
+                cls._probe_locks[loop] = loop_locks
+            lock = loop_locks.get((service_type, name))
+            if lock is None:
+                lock = asyncio.Lock()
+                loop_locks[(service_type, name)] = lock
+            return lock
 
     @classmethod
     async def check_service(
@@ -132,7 +161,24 @@ class HealthChecker:
         name: str,
         force: bool = False,
     ) -> HealthCheckResult:
-        """检查单个服务的健康状态
+        """检查单个服务的健康状态（探测单飞包装）。
+
+        同一事件循环内对同一服务的并发调用会被 ``_probe_lock`` 串行化：首个调用真正探测并
+        刷新缓存，其余调用拿到锁后命中 30s 缓存直接返回，从而消除原先「锁在 await 期间释放、
+        并发探测各自累加同一 ``HealthCheckResult`` 计数 / 误判失败阈值」的竞态 (D6)。
+        不同服务各自独立锁，仍可并发探测。参数与返回同 ``_do_check_service``。
+        """
+        async with cls._probe_lock(service_type, name):
+            return await cls._do_check_service(service_type, name, force)
+
+    @classmethod
+    async def _do_check_service(
+        cls,
+        service_type: str,
+        name: str,
+        force: bool = False,
+    ) -> HealthCheckResult:
+        """实际执行一次健康检查（调用方已持有 ``_probe_lock`` 单飞锁）。
 
         Args:
             service_type: 服务类型

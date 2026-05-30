@@ -522,250 +522,266 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                     audio_candidates.append(task.source_url)
 
             await _update_task(session, task, "transcribing", 40, "transcribing", request_id)
-            # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
-            asr_provider = _resolve_asr_provider(task)
-            asr_variant = _resolve_asr_variant(task)
-            diarization = None
-            if isinstance(task.options, dict):
-                diarization = task.options.get("enable_speaker_diarization")
-            if not asr_provider:
-                # 确定可用的 variant 列表
-                variants = [asr_variant] if asr_variant != "file" else ["file", "file_fast"]
-                if "file_fast" in variants and not _supports_file_fast(str(task.user_id)):
-                    variants = [variant for variant in variants if variant != "file_fast"]
-                    if not variants:
-                        variants = ["file"]
 
-                # 使用 ASRScheduler 智能调度（综合考虑免费额度、成本、质量、特性等）
-                task_features = TaskFeatures(
-                    diarization=diarization is True,
-                    word_level=False,  # 暂不支持词级时间戳需求
-                )
-
-                # 优先尝试第一个 variant
-                for variant in variants:
-                    asr_provider = await ASRScheduler.select_best_provider(
-                        session=session,
-                        user_id=str(task.user_id),
-                        variant=variant,
-                        task_features=task_features,
-                    )
-                    if asr_provider:
-                        asr_variant = variant
-                        break
-
-                # 如果没有可用的提供商，使用第一个注册的提供商作为降级
-                if not asr_provider:
-                    all_providers = ServiceRegistry.list_services("asr")
-                    if all_providers:
-                        asr_provider = all_providers[0]
-                        logger.warning(
-                            "No ASR provider selected by scheduler, falling back to: %s",
-                            asr_provider,
-                        )
-            if asr_provider:
-                task.asr_provider = asr_provider
-                if isinstance(task.options, dict):
-                    task.options["asr_variant"] = asr_variant
-                await _commit(session)
-            asr_service: ASRService = await _maybe_await(
-                _call_factory(get_asr_service, str(task.user_id), provider=asr_provider)
+            # 幂等保护：Celery autoretry_for 会从头重跑整个任务；若上一次尝试已写入转写结果，
+            # 直接复用并跳过 ASR 与计费，避免重复调用付费 ASR、重复写 Transcript/AsrQuota/ASRUsage。
+            existing_transcript_stmt = (
+                select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
             )
-            last_error: BusinessError | None = None
-            segments: list[TranscriptSegment] = []
-            asr_start_time = time.time()
-            successful_audio_url: str | None = None
+            existing_transcripts = (await session.execute(existing_transcript_stmt)).scalars().all()
 
-            async def _asr_status(stage: str) -> None:
-                # This callback is called from within async context
-                # We can't use the sync session here, so we skip status updates during ASR
-                pass
-
-            for idx, audio_url in enumerate(audio_candidates, start=1):
-                try:
-                    logger.info(
-                        "Task %s: Attempting ASR with URL %d/%d",
-                        task_id,
-                        idx,
-                        len(audio_candidates),
-                        extra={"task_id": task_id, "audio_url_index": idx},
-                    )
-                    # ASR service is async, so we run it in asyncio.run()
-                    transcribe = asr_service.transcribe
-                    kwargs = _build_asr_kwargs(
-                        transcribe,
-                        status_callback=_asr_status,
-                        enable_speaker_diarization=diarization,
-                        asr_variant=asr_variant,
-                    )
-                    transcribe_result = transcribe(audio_url, **kwargs)
-                    segments = cast(
-                        list[TranscriptSegment],
-                        await _maybe_await(transcribe_result),
-                    )
-                    logger.info(
-                        "Task %s: ASR succeeded with URL %d, got %d segments",
-                        task_id,
-                        idx,
-                        len(segments),
-                        extra={"task_id": task_id, "segment_count": len(segments)},
-                    )
-                    last_error = None
-                    successful_audio_url = audio_url
-                    break
-                except BusinessError as exc:
-                    last_error = exc
-                    if exc.code not in {
-                        ErrorCode.ASR_SERVICE_FAILED,
-                        ErrorCode.ASR_SERVICE_TIMEOUT,
-                        ErrorCode.ASR_SERVICE_UNAVAILABLE,
-                    }:
-                        raise
-                    logger.warning(
-                        "Task %s: ASR failed for URL %d/%d with error %s: %s, trying next URL if available",
-                        task_id,
-                        idx,
-                        len(audio_candidates),
-                        exc.code.value,
-                        exc.kwargs.get("reason", str(exc)),
-                        extra={
-                            "task_id": task_id,
-                            "error_code": exc.code.value,
-                            "audio_url_index": idx,
-                        },
-                    )
-            if last_error is not None and not segments:
-                raise last_error
-
-            segments = _normalize_speaker_segments(segments, diarization)
-            transcripts = []
-            for idx, segment in enumerate(segments, start=1):
-                transcripts.append(
-                    Transcript(
-                        task_id=task.id,
-                        speaker_id=segment.speaker_id,
-                        speaker_label=None,
-                        content=segment.content,
-                        start_time=segment.start_time,
-                        end_time=segment.end_time,
-                        confidence=segment.confidence,
-                        words=_serialize_words(segment.words),
-                        sequence=idx,
-                        is_edited=False,
-                        original_content=None,
-                    )
+            if existing_transcripts:
+                logger.info(
+                    "Task %s: %d transcripts already present, skipping ASR & cost recording (retry-safe)",
+                    task_id,
+                    len(existing_transcripts),
                 )
-            session.add_all(transcripts)
-            await _commit(session)
-            duration_seconds = _estimate_asr_duration(task, segments)
-            if duration_seconds and not task.duration_seconds:
-                task.duration_seconds = duration_seconds
+                transcripts = list(existing_transcripts)
+            else:
+                # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
+                asr_provider = _resolve_asr_provider(task)
+                asr_variant = _resolve_asr_variant(task)
+                diarization = None
+                if isinstance(task.options, dict):
+                    diarization = task.options.get("enable_speaker_diarization")
+                if not asr_provider:
+                    # 确定可用的 variant 列表
+                    variants = [asr_variant] if asr_variant != "file" else ["file", "file_fast"]
+                    if "file_fast" in variants and not _supports_file_fast(str(task.user_id)):
+                        variants = [variant for variant in variants if variant != "file_fast"]
+                        if not variants:
+                            variants = ["file"]
+
+                    # 使用 ASRScheduler 智能调度（综合考虑免费额度、成本、质量、特性等）
+                    task_features = TaskFeatures(
+                        diarization=diarization is True,
+                        word_level=False,  # 暂不支持词级时间戳需求
+                    )
+
+                    # 优先尝试第一个 variant
+                    for variant in variants:
+                        asr_provider = await ASRScheduler.select_best_provider(
+                            session=session,
+                            user_id=str(task.user_id),
+                            variant=variant,
+                            task_features=task_features,
+                        )
+                        if asr_provider:
+                            asr_variant = variant
+                            break
+
+                    # 如果没有可用的提供商，使用第一个注册的提供商作为降级
+                    if not asr_provider:
+                        all_providers = ServiceRegistry.list_services("asr")
+                        if all_providers:
+                            asr_provider = all_providers[0]
+                            logger.warning(
+                                "No ASR provider selected by scheduler, falling back to: %s",
+                                asr_provider,
+                            )
+                if asr_provider:
+                    task.asr_provider = asr_provider
+                    if isinstance(task.options, dict):
+                        task.options["asr_variant"] = asr_variant
+                    await _commit(session)
+                asr_service: ASRService = await _maybe_await(
+                    _call_factory(get_asr_service, str(task.user_id), provider=asr_provider)
+                )
+                last_error: BusinessError | None = None
+                segments: list[TranscriptSegment] = []
+                asr_start_time = time.time()
+                successful_audio_url: str | None = None
+
+                async def _asr_status(stage: str) -> None:
+                    # This callback is called from within async context
+                    # We can't use the sync session here, so we skip status updates during ASR
+                    pass
+
+                for idx, audio_url in enumerate(audio_candidates, start=1):
+                    try:
+                        logger.info(
+                            "Task %s: Attempting ASR with URL %d/%d",
+                            task_id,
+                            idx,
+                            len(audio_candidates),
+                            extra={"task_id": task_id, "audio_url_index": idx},
+                        )
+                        # ASR service is async, so we run it in asyncio.run()
+                        transcribe = asr_service.transcribe
+                        kwargs = _build_asr_kwargs(
+                            transcribe,
+                            status_callback=_asr_status,
+                            enable_speaker_diarization=diarization,
+                            asr_variant=asr_variant,
+                        )
+                        transcribe_result = transcribe(audio_url, **kwargs)
+                        segments = cast(
+                            list[TranscriptSegment],
+                            await _maybe_await(transcribe_result),
+                        )
+                        logger.info(
+                            "Task %s: ASR succeeded with URL %d, got %d segments",
+                            task_id,
+                            idx,
+                            len(segments),
+                            extra={"task_id": task_id, "segment_count": len(segments)},
+                        )
+                        last_error = None
+                        successful_audio_url = audio_url
+                        break
+                    except BusinessError as exc:
+                        last_error = exc
+                        if exc.code not in {
+                            ErrorCode.ASR_SERVICE_FAILED,
+                            ErrorCode.ASR_SERVICE_TIMEOUT,
+                            ErrorCode.ASR_SERVICE_UNAVAILABLE,
+                        }:
+                            raise
+                        logger.warning(
+                            "Task %s: ASR failed for URL %d/%d with error %s: %s, trying next URL if available",
+                            task_id,
+                            idx,
+                            len(audio_candidates),
+                            exc.code.value,
+                            exc.kwargs.get("reason", str(exc)),
+                            extra={
+                                "task_id": task_id,
+                                "error_code": exc.code.value,
+                                "audio_url_index": idx,
+                            },
+                        )
+                if last_error is not None and not segments:
+                    raise last_error
+
+                segments = _normalize_speaker_segments(segments, diarization)
+                transcripts = []
+                for idx, segment in enumerate(segments, start=1):
+                    transcripts.append(
+                        Transcript(
+                            task_id=task.id,
+                            speaker_id=segment.speaker_id,
+                            speaker_label=None,
+                            content=segment.content,
+                            start_time=segment.start_time,
+                            end_time=segment.end_time,
+                            confidence=segment.confidence,
+                            words=_serialize_words(segment.words),
+                            sequence=idx,
+                            is_edited=False,
+                            original_content=None,
+                        )
+                    )
+                session.add_all(transcripts)
                 await _commit(session)
-            provider_name = getattr(asr_service, "provider", None) or asr_provider
-            if provider_name and duration_seconds:
-                estimated_cost = 0.0
-                if hasattr(asr_service, "estimate_cost"):
-                    estimated_cost = asr_service.estimate_cost(duration_seconds)
-                cost_tracker.record_usage(
-                    "asr",
-                    provider_name,
-                    {"duration_seconds": duration_seconds},
-                    estimated_cost,
-                )
-            if provider_name:
-                await record_usage(
-                    session,
-                    provider_name,
-                    duration_seconds,
-                    str(task.user_id),
-                    variant=asr_variant,
-                )
-
-            # Record ASRUsage for detailed tracking with free quota split
-            asr_processing_time_ms = int((time.time() - asr_start_time) * 1000)
-
-            # 使用免费额度服务计算免费/付费分拆
-            free_quota_consumed = 0.0
-            paid_duration_seconds = float(duration_seconds)
-            actual_paid_cost = 0.0
-            estimated_cost = 0.0
-
-            if provider_name and duration_seconds:
-                try:
-                    from app.services.asr_free_quota_service import AsrFreeQuotaService
-
-                    # 消耗配额并获取分拆结果
-                    consumption = await AsrFreeQuotaService.consume_quota(
+                duration_seconds = _estimate_asr_duration(task, segments)
+                if duration_seconds and not task.duration_seconds:
+                    task.duration_seconds = duration_seconds
+                    await _commit(session)
+                provider_name = getattr(asr_service, "provider", None) or asr_provider
+                if provider_name and duration_seconds:
+                    estimated_cost = 0.0
+                    if hasattr(asr_service, "estimate_cost"):
+                        estimated_cost = asr_service.estimate_cost(duration_seconds, variant=asr_variant)
+                    cost_tracker.record_usage(
+                        "asr",
+                        provider_name,
+                        {"duration_seconds": duration_seconds},
+                        estimated_cost,
+                    )
+                if provider_name:
+                    await record_usage(
                         session,
                         provider_name,
-                        asr_variant,
-                        float(duration_seconds),
-                        user_id=None,  # 全局配额
+                        duration_seconds,
+                        str(task.user_id),
+                        variant=asr_variant,
                     )
-                    free_quota_consumed = consumption.free_consumed
-                    paid_duration_seconds = consumption.paid_consumed
-                    actual_paid_cost = consumption.cost
 
-                    # 估算成本（全价）
-                    if hasattr(asr_service, "estimate_cost"):
-                        estimated_cost = asr_service.estimate_cost(duration_seconds)
+                # Record ASRUsage for detailed tracking with free quota split
+                asr_processing_time_ms = int((time.time() - asr_start_time) * 1000)
 
-                    logger.info(
-                        "Task %s: Free quota consumed: %.1fs, paid: %.1fs, cost: %.4f",
-                        task_id,
-                        free_quota_consumed,
-                        paid_duration_seconds,
-                        actual_paid_cost,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Task %s: Failed to consume free quota, using full cost: %s",
-                        task_id,
-                        e,
-                    )
-                    if hasattr(asr_service, "estimate_cost"):
-                        estimated_cost = asr_service.estimate_cost(duration_seconds)
-                    actual_paid_cost = estimated_cost
+                # 使用免费额度服务计算免费/付费分拆
+                free_quota_consumed = 0.0
+                paid_duration_seconds = float(duration_seconds)
+                actual_paid_cost = 0.0
+                estimated_cost = 0.0
 
-            asr_usage = ASRUsage(
-                user_id=str(task.user_id),
-                task_id=str(task.id),
-                provider=provider_name or "unknown",
-                variant=asr_variant,
-                duration_seconds=float(duration_seconds),
-                estimated_cost=estimated_cost,
-                audio_url=successful_audio_url[:1000] if successful_audio_url else None,
-                status="success",
-                processing_time_ms=asr_processing_time_ms,
-                request_params={
-                    "enable_speaker_diarization": diarization,
-                    "asr_variant": asr_variant,
-                },
-                # 免费额度分拆字段
-                free_quota_consumed=free_quota_consumed,
-                paid_duration_seconds=paid_duration_seconds,
-                actual_paid_cost=actual_paid_cost,
-            )
-            _add_record(session, asr_usage)
-            await _commit(session)
-            logger.info(
-                "Task %s: ASRUsage recorded - provider=%s, duration=%ds, free=%.1fs, paid=%.1fs, cost=%.4f, time=%dms",
-                task_id,
-                provider_name,
-                duration_seconds,
-                free_quota_consumed,
-                paid_duration_seconds,
-                actual_paid_cost,
-                asr_processing_time_ms,
-                extra={
-                    "task_id": task_id,
-                    "asr_usage_id": str(asr_usage.id),
-                    "provider": provider_name,
-                    "duration_seconds": duration_seconds,
-                    "free_quota_consumed": free_quota_consumed,
-                    "paid_duration_seconds": paid_duration_seconds,
-                },
-            )
+                if provider_name and duration_seconds:
+                    try:
+                        from app.services.asr_free_quota_service import AsrFreeQuotaService
+
+                        # 消耗配额并获取分拆结果
+                        consumption = await AsrFreeQuotaService.consume_quota(
+                            session,
+                            provider_name,
+                            asr_variant,
+                            float(duration_seconds),
+                            user_id=None,  # 全局配额
+                        )
+                        free_quota_consumed = consumption.free_consumed
+                        paid_duration_seconds = consumption.paid_consumed
+                        actual_paid_cost = consumption.cost
+
+                        # 估算成本（全价）
+                        if hasattr(asr_service, "estimate_cost"):
+                            estimated_cost = asr_service.estimate_cost(duration_seconds, variant=asr_variant)
+
+                        logger.info(
+                            "Task %s: Free quota consumed: %.1fs, paid: %.1fs, cost: %.4f",
+                            task_id,
+                            free_quota_consumed,
+                            paid_duration_seconds,
+                            actual_paid_cost,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Task %s: Failed to consume free quota, using full cost: %s",
+                            task_id,
+                            e,
+                        )
+                        if hasattr(asr_service, "estimate_cost"):
+                            estimated_cost = asr_service.estimate_cost(duration_seconds, variant=asr_variant)
+                        actual_paid_cost = estimated_cost
+
+                asr_usage = ASRUsage(
+                    user_id=str(task.user_id),
+                    task_id=str(task.id),
+                    provider=provider_name or "unknown",
+                    variant=asr_variant,
+                    duration_seconds=float(duration_seconds),
+                    estimated_cost=estimated_cost,
+                    audio_url=successful_audio_url[:1000] if successful_audio_url else None,
+                    status="success",
+                    processing_time_ms=asr_processing_time_ms,
+                    request_params={
+                        "enable_speaker_diarization": diarization,
+                        "asr_variant": asr_variant,
+                    },
+                    # 免费额度分拆字段
+                    free_quota_consumed=free_quota_consumed,
+                    paid_duration_seconds=paid_duration_seconds,
+                    actual_paid_cost=actual_paid_cost,
+                )
+                _add_record(session, asr_usage)
+                await _commit(session)
+                logger.info(
+                    "Task %s: ASRUsage recorded - provider=%s, duration=%ds, free=%.1fs, paid=%.1fs, cost=%.4f, time=%dms",
+                    task_id,
+                    provider_name,
+                    duration_seconds,
+                    free_quota_consumed,
+                    paid_duration_seconds,
+                    actual_paid_cost,
+                    asr_processing_time_ms,
+                    extra={
+                        "task_id": task_id,
+                        "asr_usage_id": str(asr_usage.id),
+                        "provider": provider_name,
+                        "duration_seconds": duration_seconds,
+                        "free_quota_consumed": free_quota_consumed,
+                        "paid_duration_seconds": paid_duration_seconds,
+                    },
+                )
 
             try:
                 await ingest_task_chunks_async(session, task, transcripts, str(task.user_id))
@@ -846,9 +862,10 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
             if not isinstance(content_style, str):
                 content_style = "meeting"
 
-            # 提取LLM provider配置（如果用户指定了）
-            llm_provider_option = options.get("provider")
-            llm_model_id_option = options.get("model_id")
+            # 解析具体的 LLM provider 与 model_id（与润色步骤、YouTube 路径保持一致）
+            # 用户未显式指定时回退到默认 provider + 默认 model_id，避免把 None 透传给
+            # SmartFactory.get_service("llm", ...) 触发 "model_id is required" 而导致整任务失败
+            llm_provider_option, llm_model_id_option = _resolve_llm_selection(task, str(task.user_id))
 
             logger.info(
                 "Task %s: Starting quality-aware summary generation (style: %s)",

@@ -144,22 +144,15 @@ def _regenerate_summary(
             options = task_result[1] or {}
             content_style = options.get("summary_style") or "meeting"
 
-        # 将旧摘要标记为非活跃
-        summary_stmt = select(Summary).where(
+        # 计算新版本号（覆盖全部历史版本，避免与对比版本号冲突）
+        # 注意：此处不停用旧摘要——停用推迟到新摘要成功写入时的同一事务中完成，
+        # 确保生成失败时用户仍有可用的活跃摘要（修复 regenerate 失败/对比导致无活跃摘要的问题）
+        version_stmt = select(Summary.version).where(
             Summary.task_id == task_id,
             Summary.summary_type == summary_type,
-            Summary.is_active.is_(True),
         )
-        summary_result = session.execute(summary_stmt)
-        old_summaries = summary_result.scalars().all()
-
-        for old_summary in old_summaries:
-            old_summary.is_active = False
-        session.commit()
-
-        # 计算新版本号
-        max_version = max([s.version for s in old_summaries], default=0)
-        new_version = max_version + 1
+        existing_versions = session.execute(version_stmt).scalars().all()
+        new_version = max(existing_versions, default=0) + 1
 
     max_wait = 50
     wait_count = 0
@@ -249,6 +242,17 @@ def _regenerate_summary(
         with get_sync_db_session() as session:
             # 对比模式下，摘要不设为活跃版本
             is_comparison = comparison_id is not None
+
+            # 非对比模式：在写入新活跃摘要的同一事务中停用旧摘要，确保任意时刻都有活跃摘要；
+            # 对比模式不停用旧摘要（对比结果默认不活跃，需用户显式 activate）
+            if not is_comparison:
+                old_active_stmt = select(Summary).where(
+                    Summary.task_id == task_id,
+                    Summary.summary_type == summary_type,
+                    Summary.is_active.is_(True),
+                )
+                for old_summary in session.execute(old_active_stmt).scalars().all():
+                    old_summary.is_active = False
 
             new_summary = Summary(
                 task_id=task_id,

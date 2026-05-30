@@ -167,11 +167,12 @@ class ASRService(ABC):
         raise NotImplementedError("健康检查功能待实现")
 
     @abstractmethod
-    def estimate_cost(self, duration_seconds: int) -> float:
+    def estimate_cost(self, duration_seconds: int, variant: str = "file") -> float:
         """估算成本
 
         Args:
             duration_seconds: 音频时长（秒）
+            variant: 服务变体（file=标准版, file_fast=极速版），不同变体单价不同
 
         Returns:
             预估成本（单位：元）

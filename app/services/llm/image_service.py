@@ -18,7 +18,13 @@ import httpx
 
 from app.config import settings
 from app.core.exceptions import BusinessError
-from app.core.fault_tolerance import CircuitBreaker, CircuitBreakerConfig, RetryConfig, retry
+from app.core.fault_tolerance import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitBreakerOpenError,
+    RetryConfig,
+    retry,
+)
 from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
@@ -92,6 +98,7 @@ def _resolve_size(aspect_ratio: str, image_size: str | None) -> str:
         display_name="Image Service (Gemini)",
         cost_per_million_tokens=0.0,
         rate_limit=20,
+        supports_text_generation=False,  # 仅支持 generate_image；文本类入口须把它过滤掉
     ),
 )
 class ImageServiceLLMService(LLMService):
@@ -144,22 +151,19 @@ class ImageServiceLLMService(LLMService):
         exceptions=(httpx.TimeoutException, httpx.NetworkError),
     )
     @monitor("llm", "image_service")
-    async def generate_image(
+    async def _request_generate_image(
         self,
         prompt: str,
-        aspect_ratio: str = "1:1",
-        image_size: str | None = "2K",
-        style: str | None = None,
-        **_: Any,
+        aspect_ratio: str,
+        image_size: str | None,
+        style: str | None,
     ) -> bytes:
-        """调用 image-service 生图并下载图片 bytes。
+        """实际调用 image-service 生图并下载图片 bytes。
 
-        额外的 ``system_message`` / ``temperature`` / ``max_tokens`` 等参数
-        被忽略（image-service 不支持），保证与既有 OpenRouter 调用签名兼容。
+        故意放行底层 httpx 异常（不在此层包成 BusinessError），以便外层 @retry 能识别
+        TimeoutException / NetworkError 并真正重试瞬时故障；缺少 image_url 等业务错误
+        以 BusinessError 直接上抛、不参与重试。
         """
-        if not prompt:
-            raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="prompt")
-
         # image-service 的 model 字段只接受裸 model id，例如 "gemini-3-pro-image-preview"
         # 兼容遗留配置形如 "google/gemini-3-pro-image-preview"
         model = self._model.split("/", 1)[-1] if self._model else None
@@ -174,11 +178,41 @@ class ImageServiceLLMService(LLMService):
         if style:
             payload["style"] = style
 
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=_REQUEST_TIMEOUT) as client:
+            resp = await client.post("/v1/generate", json=payload, headers=self._headers())
+            resp.raise_for_status()
+            data = resp.json()
+
+        image_url = data.get("image_url")
+        if not image_url:
+            raise BusinessError(
+                ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                reason=f"image-service returned no image_url: {data}",
+            )
+
+        # image-service 返回的可能是相对路径（如 "/static/images/abc.png"），需要拼上 base_url
+        download_url = image_url if image_url.startswith("http") else f"{self._base_url}{image_url}"
+
+        async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT) as client:
+            img_resp = await client.get(download_url)
+            img_resp.raise_for_status()
+            return img_resp.content
+
+    @_circuit_breaker.protected
+    async def _guarded_generate_image(
+        self,
+        prompt: str,
+        aspect_ratio: str,
+        image_size: str | None,
+        style: str | None,
+    ) -> bytes:
+        """在熔断器保护下生图，并把底层 httpx 异常映射为对外的 BusinessError。
+
+        重试由 _request_generate_image 内部完成；重试耗尽后上抛的原始 httpx 异常
+        在此映射为 BusinessError，并由熔断器按 expected_exception 计入失败计数。
+        """
         try:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=_REQUEST_TIMEOUT) as client:
-                resp = await client.post("/v1/generate", json=payload, headers=self._headers())
-                resp.raise_for_status()
-                data = resp.json()
+            return await self._request_generate_image(prompt, aspect_ratio, image_size, style)
         except httpx.TimeoutException as exc:
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
@@ -207,25 +241,29 @@ class ImageServiceLLMService(LLMService):
                 reason=f"image-service network error: {exc}",
             ) from exc
 
-        image_url = data.get("image_url")
-        if not image_url:
-            raise BusinessError(
-                ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                reason=f"image-service returned no image_url: {data}",
-            )
+    async def generate_image(
+        self,
+        prompt: str,
+        aspect_ratio: str = "1:1",
+        image_size: str | None = "2K",
+        style: str | None = None,
+        **_: Any,
+    ) -> bytes:
+        """调用 image-service 生图并下载图片 bytes。
 
-        # image-service 返回的可能是相对路径（如 "/static/images/abc.png"），需要拼上 base_url
-        download_url = image_url if image_url.startswith("http") else f"{self._base_url}{image_url}"
+        额外的 ``system_message`` / ``temperature`` / ``max_tokens`` 等参数
+        被忽略（image-service 不支持），保证与既有 OpenRouter 调用签名兼容。
+        熔断器打开时快速失败，并把熔断异常映射为对外的 BusinessError。
+        """
+        if not prompt:
+            raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="prompt")
 
         try:
-            async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT) as client:
-                img_resp = await client.get(download_url)
-                img_resp.raise_for_status()
-                return img_resp.content
-        except httpx.HTTPError as exc:
+            return await self._guarded_generate_image(prompt, aspect_ratio, image_size, style)
+        except CircuitBreakerOpenError as exc:
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                reason=f"image-service download failed ({download_url}): {exc}",
+                reason="image-service 熔断器已打开，快速失败",
             ) from exc
 
     async def health_check(self) -> bool:
@@ -241,15 +279,20 @@ class ImageServiceLLMService(LLMService):
 
     # ------------------------------------------------------------------
     # 以下方法仅为满足 LLMService 抽象接口；本 provider 仅支持生图。
+    # 入口层（对比/可视化）已按 supports_text_generation 过滤掉本 provider，
+    # 故这些方法理论上不可达；仍以 BusinessError 兜底，避免误路由时抛出
+    # 裸 NotImplementedError 触发 Celery 无谓重试或 500。
     # ------------------------------------------------------------------
 
+    _TEXT_UNSUPPORTED_REASON = "image_service 仅支持图像生成，不支持文本生成"
+
     async def summarize(self, text: str, summary_type: str, content_style: str = "meeting") -> str:
-        raise NotImplementedError("image_service provider only supports generate_image()")
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason=self._TEXT_UNSUPPORTED_REASON)
 
     async def summarize_stream(
         self, text: str, summary_type: str, content_style: str = "meeting"
     ) -> AsyncIterator[str]:
-        raise NotImplementedError("image_service provider only supports generate_image()")
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason=self._TEXT_UNSUPPORTED_REASON)
         yield  # pragma: no cover -- make it a generator
 
     async def generate(
@@ -260,13 +303,13 @@ class ImageServiceLLMService(LLMService):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> str:
-        raise NotImplementedError("image_service provider only supports generate_image()")
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason=self._TEXT_UNSUPPORTED_REASON)
 
     async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
-        raise NotImplementedError("image_service provider only supports generate_image()")
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason=self._TEXT_UNSUPPORTED_REASON)
 
     async def chat_stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
-        raise NotImplementedError("image_service provider only supports generate_image()")
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason=self._TEXT_UNSUPPORTED_REASON)
         yield  # pragma: no cover
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:

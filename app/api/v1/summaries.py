@@ -32,6 +32,18 @@ from app.services.media_url import build_media_download_url
 router = APIRouter(prefix="/summaries")
 
 
+def _text_capable_llm_providers() -> set[str]:
+    """已注册且支持文本生成的 LLM provider 白名单。
+
+    排除 image_service 这类 supports_text_generation=False 的「只生图」provider——
+    对比与文本类可视化（mindmap/timeline/flowchart）走的是 summarize()/generate()，
+    若放进白名单会一路到 worker 才崩。
+    """
+    from app.core.registry import ServiceRegistry
+
+    return set(ServiceRegistry.list_text_llm_providers())
+
+
 @router.get("/{task_id}")
 async def get_summaries(
     task_id: str,
@@ -387,15 +399,16 @@ async def compare_models(
         raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要")
 
     # 校验 provider 是否在已注册的 LLM 服务白名单内（目前只有 proxy 与 image_service，
-    # 之前 deepseek/qwen/doubao/moonshot/openrouter 已下线，应拦在 endpoint 层而不是 worker 里）
-    from app.core.registry import ServiceRegistry
-
-    valid_providers = set(ServiceRegistry.list_services("llm"))
+    # 之前 deepseek/qwen/doubao/moonshot/openrouter 已下线，应拦在 endpoint 层而不是 worker 里）。
+    # 对比生成的是文本摘要，必须排除 image_service 这类只支持生图的 provider，
+    # 否则 worker 调用 summarize() 会崩。
+    valid_providers = _text_capable_llm_providers()
     for model_selection in data.models:
         if model_selection.provider not in valid_providers:
             raise BusinessError(
                 ErrorCode.PARAMETER_ERROR,
-                reason=f"未知 LLM provider: {model_selection.provider}（可用: {sorted(valid_providers)}）",
+                reason=f"未知或不支持文本生成的 LLM provider: {model_selection.provider}"
+                f"（可用: {sorted(valid_providers)}）",
             )
 
     # Generate comparison ID
@@ -696,6 +709,18 @@ async def generate_visual_summary(
 
     if not has_transcripts:
         raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成可视化摘要")
+
+    # 校验显式指定的 provider：mindmap/timeline/flowchart 走文本 LLM（summarize/generate），
+    # 必须排除 image_service 这类只生图的 provider，否则 worker 调用文本方法会崩。
+    # outline 走 generate_image()，默认就是 image_service，这里不拦。
+    if data.provider and data.visual_type != "outline":
+        text_providers = _text_capable_llm_providers()
+        if data.provider not in text_providers:
+            raise BusinessError(
+                ErrorCode.PARAMETER_ERROR,
+                reason=f"未知或不支持文本生成的 LLM provider: {data.provider}"
+                f"（{data.visual_type} 可用: {sorted(text_providers)}）",
+            )
 
     # Check if visual summary already exists (unless regenerate=True)
     summary_type = f"visual_{data.visual_type}"

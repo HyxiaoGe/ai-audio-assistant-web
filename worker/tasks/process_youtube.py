@@ -974,7 +974,7 @@ def _process_youtube(
 
                         # 估算成本（全价）
                         if hasattr(asr_service, "estimate_cost"):
-                            estimated_cost = asr_service.estimate_cost(duration_seconds)
+                            estimated_cost = asr_service.estimate_cost(duration_seconds, variant=asr_variant)
 
                         logger.info(
                             "Task %s: Free quota consumed: %.1fs, paid: %.1fs, cost: %.4f",
@@ -990,7 +990,7 @@ def _process_youtube(
                             e,
                         )
                         if hasattr(asr_service, "estimate_cost"):
-                            estimated_cost = asr_service.estimate_cost(duration_seconds)
+                            estimated_cost = asr_service.estimate_cost(duration_seconds, variant=asr_variant)
                         actual_paid_cost = estimated_cost
 
                 asr_usage = ASRUsage(
