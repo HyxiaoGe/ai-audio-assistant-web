@@ -39,6 +39,7 @@ from app.services.transcript_polish import polish_transcripts
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_message_sync, publish_task_update_sync
+from worker.tasks.asr_idempotency import AsrRetryAction, decide_asr_action
 from worker.tasks.summary_generator import generate_summaries_with_quality_awareness
 
 logger = logging.getLogger("worker.process_audio")
@@ -290,6 +291,114 @@ def _effective_asr_variant(transcribe: Any, asr_variant: str) -> str:
     if "asr_variant" in inspect.signature(transcribe).parameters:
         return asr_variant
     return "file"
+
+
+def _segments_from_transcripts(transcripts: list[Transcript]) -> list[TranscriptSegment]:
+    """从已落库 Transcript 重建最小 TranscriptSegment（仅用于重试时估算时长/计费）。"""
+    return [
+        TranscriptSegment(
+            speaker_id=t.speaker_id,
+            content=t.content,
+            start_time=float(t.start_time) if t.start_time is not None else 0.0,
+            end_time=float(t.end_time) if t.end_time is not None else 0.0,
+            confidence=t.confidence,
+        )
+        for t in transcripts
+    ]
+
+
+async def _finalize_asr_cost(
+    session: Session,
+    task: Task,
+    *,
+    provider_name: str,
+    asr_variant: str,
+    duration_seconds: float,
+    asr_service: Any,
+    successful_audio_url: str | None,
+    diarization: Any,
+    processing_time_ms: int,
+    claim_row: ASRUsage | None,
+) -> None:
+    """原子补记一次 ASR 计费，并把终态 ASRUsage 置为 ``success``（D5-retry 钱路）。
+
+    幂等终态标记 = ``ASRUsage.status == "success"``。本函数把三处计费写入放进同一事务：
+    ``record_usage(commit=False)`` 累加 AsrUserQuota，``consume_quota`` 只 flush 分拆免费/付费，
+    最后随 ASRUsage(success) 一次性提交——要么全写要么全不写，关闭「转写后/ASRUsage 前」少计费窗口，
+    同时避免重试时重复累加配额。``claim_row`` 非空则就地收尾该 claim（不新增行），保证每个 task
+    只有一条计费记录。
+    """
+    duration_seconds = float(duration_seconds or 0.0)
+    estimated_cost = 0.0
+    free_quota_consumed = 0.0
+    paid_duration_seconds = duration_seconds
+    actual_paid_cost = 0.0
+
+    if provider_name and duration_seconds > 0:
+        if asr_service is not None and hasattr(asr_service, "estimate_cost"):
+            estimated_cost = asr_service.estimate_cost(int(duration_seconds), variant=asr_variant)
+        cost_tracker.record_usage(
+            "asr",
+            provider_name,
+            {"duration_seconds": duration_seconds},
+            estimated_cost,
+        )
+        # AsrUserQuota 累加：参与本事务，不单独提交（commit=False）
+        await record_usage(
+            session,
+            provider_name,
+            duration_seconds,
+            str(task.user_id),
+            variant=asr_variant,
+            commit=False,
+        )
+        # 免费/付费分拆：consume_quota 只 flush 不 commit，随下方 ASRUsage 一并提交
+        try:
+            from app.services.asr_free_quota_service import AsrFreeQuotaService
+
+            consumption = await AsrFreeQuotaService.consume_quota(
+                session,
+                provider_name,
+                asr_variant,
+                duration_seconds,
+                user_id=None,  # 全局配额
+            )
+            free_quota_consumed = consumption.free_consumed
+            paid_duration_seconds = consumption.paid_consumed
+            actual_paid_cost = consumption.cost
+        except Exception as exc:
+            logger.warning(
+                "Task %s: Failed to consume free quota, using full cost: %s",
+                task.id,
+                exc,
+            )
+            actual_paid_cost = estimated_cost
+
+    usage = claim_row if claim_row is not None else ASRUsage(user_id=str(task.user_id), task_id=str(task.id))
+    usage.provider = provider_name or "unknown"
+    usage.variant = asr_variant
+    usage.duration_seconds = duration_seconds
+    usage.estimated_cost = estimated_cost
+    if successful_audio_url:
+        usage.audio_url = successful_audio_url[:1000]
+    usage.status = "success"
+    usage.processing_time_ms = processing_time_ms
+    usage.request_params = {"enable_speaker_diarization": diarization, "asr_variant": asr_variant}
+    usage.free_quota_consumed = free_quota_consumed
+    usage.paid_duration_seconds = paid_duration_seconds
+    usage.actual_paid_cost = actual_paid_cost
+    if claim_row is None:
+        _add_record(session, usage)
+    await _commit(session)  # 原子提交：AsrUserQuota + 免费额度周期 + ASRUsage(success)
+    logger.info(
+        "Task %s: ASRUsage finalized (status=success) - provider=%s, duration=%ds, free=%.1fs, paid=%.1fs, cost=%.4f",
+        task.id,
+        usage.provider,
+        int(duration_seconds),
+        free_quota_consumed,
+        paid_duration_seconds,
+        actual_paid_cost,
+    )
 
 
 async def _update_task(
@@ -550,20 +659,88 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
 
             await _update_task(session, task, "transcribing", 40, "transcribing", request_id)
 
-            # 幂等保护：Celery autoretry_for 会从头重跑整个任务；若上一次尝试已写入转写结果，
-            # 直接复用并跳过 ASR 与计费，避免重复调用付费 ASR、重复写 Transcript/AsrQuota/ASRUsage。
-            existing_transcript_stmt = (
-                select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
+            # 幂等保护（D5-retry 钱路）：以「终态计费记录 ASRUsage(status=success)」为准，而非仅看转写是否存在。
+            # Celery autoretry_for 会从头重跑整个任务，decide_asr_action 把四种重试状态收敛成一个动作：
+            #   SKIP_ALL           已有 success 计费 -> 复用转写，不再付费/计费
+            #   FINALIZE_COST      有转写但无 success 计费 -> 复用转写、只原子补记一次计费（关闭「转写后/ASRUsage 前」少计费窗口）
+            #   RESUME_AFTER_CLAIM 有 processing claim 但无转写 -> 上次付费可能已扣费，重跑但复用 claim + 告警对账（双扣费窗口）
+            #   FULL_RUN           干净首跑 -> 付费前写 claim、付费转写、补记计费
+            existing_transcripts = (
+                await session.execute(
+                    select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
+                )
+            ).scalars().all()
+            usage_rows = (
+                await session.execute(
+                    select(ASRUsage).where(ASRUsage.task_id == str(task_id)).order_by(ASRUsage.created_at.desc())
+                )
+            ).scalars().all()
+            success_usage = next((u for u in usage_rows if u.status == "success"), None)
+            processing_claim = next((u for u in usage_rows if u.status == "processing"), None)
+            asr_action = decide_asr_action(
+                has_success_usage=success_usage is not None,
+                has_transcripts=bool(existing_transcripts),
+                has_processing_claim=processing_claim is not None,
             )
-            existing_transcripts = (await session.execute(existing_transcript_stmt)).scalars().all()
 
-            if existing_transcripts:
+            if asr_action is AsrRetryAction.SKIP_ALL:
                 logger.info(
-                    "Task %s: %d transcripts already present, skipping ASR & cost recording (retry-safe)",
+                    "Task %s: ASR + cost already finalized (success usage present), skipping (retry-safe)",
                     task_id,
-                    len(existing_transcripts),
                 )
                 transcripts = list(existing_transcripts)
+                segments = _segments_from_transcripts(transcripts)
+            elif asr_action is AsrRetryAction.FINALIZE_COST:
+                # 上次已落库转写但崩在计费前：复用转写、跳过付费 ASR，只原子补记一次计费。
+                # provider/variant 取自上次实跑的持久记录（claim 优先，否则 task），不能重新调度，
+                # 否则可能按另一家 provider 计费。
+                transcripts = list(existing_transcripts)
+                logger.warning(
+                    "Task %s: %d transcripts present but cost not finalized; recording cost once (retry-safe)",
+                    task_id,
+                    len(transcripts),
+                )
+                diarization = (
+                    task.options.get("enable_speaker_diarization") if isinstance(task.options, dict) else None
+                )
+                if processing_claim is not None:
+                    finalize_provider = processing_claim.provider
+                    finalize_variant = processing_claim.variant
+                    finalize_audio_url = processing_claim.audio_url
+                else:
+                    finalize_provider = _resolve_asr_provider(task) or task.asr_provider
+                    finalize_variant = _resolve_asr_variant(task)
+                    finalize_audio_url = None
+                segments = _segments_from_transcripts(transcripts)
+                finalize_duration = _estimate_asr_duration(task, segments)
+                finalize_service: ASRService | None = None
+                if finalize_provider:
+                    # provider 实例只用于可选的 estimate_cost；构造失败不能阻断计费，
+                    # 否则会把「已有转写」的任务误判为失败（_mark_failed）。
+                    try:
+                        finalize_service = await _maybe_await(
+                            _call_factory(get_asr_service, str(task.user_id), provider=finalize_provider)
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Task %s: ASR service lookup failed during FINALIZE_COST; "
+                            "recording cost without estimate_cost: %s",
+                            task.id,
+                            exc,
+                        )
+                        finalize_service = None
+                await _finalize_asr_cost(
+                    session,
+                    task,
+                    provider_name=(getattr(finalize_service, "provider", None) or finalize_provider or "unknown"),
+                    asr_variant=finalize_variant or "file",
+                    duration_seconds=float(finalize_duration),
+                    asr_service=finalize_service,
+                    successful_audio_url=finalize_audio_url,
+                    diarization=diarization,
+                    processing_time_ms=0,
+                    claim_row=processing_claim,
+                )
             else:
                 # 使用 SmartFactory 获取 ASR 服务（自动选择最优服务）
                 asr_provider = _resolve_asr_provider(task)
@@ -618,6 +795,31 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                     if isinstance(task.options, dict):
                         task.options["asr_variant"] = asr_variant
                     await _commit(session)
+                provider_name = getattr(asr_service, "provider", None) or asr_provider
+
+                # 付费 ASR 调用前写 claim（仅 FULL_RUN）：即便崩在转写中途/落库前，重试也能据此检测到
+                # 「上一次可能已扣费」，把双扣费风险显式记录、对账，而不是悄悄重复计费。RESUME 复用既有 claim 并告警。
+                claim_row: ASRUsage | None
+                if asr_action is AsrRetryAction.RESUME_AFTER_CLAIM and processing_claim is not None:
+                    claim_row = processing_claim
+                    logger.warning(
+                        "Task %s: prior ASR attempt was claimed but left no transcripts; re-running paid ASR. "
+                        "The earlier attempt may have charged the provider — reconcile ASRUsage claim id=%s.",
+                        task_id,
+                        str(processing_claim.id),
+                    )
+                else:
+                    claim_row = ASRUsage(
+                        user_id=str(task.user_id),
+                        task_id=str(task.id),
+                        provider=provider_name or "unknown",
+                        variant=asr_variant,
+                        duration_seconds=0.0,
+                        status="processing",
+                    )
+                    _add_record(session, claim_row)
+                    await _commit(session)  # claim 在付费调用前落库，崩溃后可检测/对账
+
                 last_error: BusinessError | None = None
                 segments: list[TranscriptSegment] = []
                 asr_start_time = time.time()
@@ -708,110 +910,20 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                 if duration_seconds and not task.duration_seconds:
                     task.duration_seconds = duration_seconds
                     await _commit(session)
-                provider_name = getattr(asr_service, "provider", None) or asr_provider
-                if provider_name and duration_seconds:
-                    estimated_cost = 0.0
-                    if hasattr(asr_service, "estimate_cost"):
-                        estimated_cost = asr_service.estimate_cost(duration_seconds, variant=asr_variant)
-                    cost_tracker.record_usage(
-                        "asr",
-                        provider_name,
-                        {"duration_seconds": duration_seconds},
-                        estimated_cost,
-                    )
-                if provider_name:
-                    await record_usage(
-                        session,
-                        provider_name,
-                        duration_seconds,
-                        str(task.user_id),
-                        variant=asr_variant,
-                    )
-
-                # Record ASRUsage for detailed tracking with free quota split
+                # 原子补记计费并把 claim 收尾为 success（终态幂等标记）。三处计费写入同一事务提交，
+                # 关闭「转写后/ASRUsage 前」少计费窗口，并避免重试重复累加配额（详见 _finalize_asr_cost）。
                 asr_processing_time_ms = int((time.time() - asr_start_time) * 1000)
-
-                # 使用免费额度服务计算免费/付费分拆
-                free_quota_consumed = 0.0
-                paid_duration_seconds = float(duration_seconds)
-                actual_paid_cost = 0.0
-                estimated_cost = 0.0
-
-                if provider_name and duration_seconds:
-                    try:
-                        from app.services.asr_free_quota_service import AsrFreeQuotaService
-
-                        # 消耗配额并获取分拆结果
-                        consumption = await AsrFreeQuotaService.consume_quota(
-                            session,
-                            provider_name,
-                            asr_variant,
-                            float(duration_seconds),
-                            user_id=None,  # 全局配额
-                        )
-                        free_quota_consumed = consumption.free_consumed
-                        paid_duration_seconds = consumption.paid_consumed
-                        actual_paid_cost = consumption.cost
-
-                        # 估算成本（全价）
-                        if hasattr(asr_service, "estimate_cost"):
-                            estimated_cost = asr_service.estimate_cost(duration_seconds, variant=asr_variant)
-
-                        logger.info(
-                            "Task %s: Free quota consumed: %.1fs, paid: %.1fs, cost: %.4f",
-                            task_id,
-                            free_quota_consumed,
-                            paid_duration_seconds,
-                            actual_paid_cost,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Task %s: Failed to consume free quota, using full cost: %s",
-                            task_id,
-                            e,
-                        )
-                        if hasattr(asr_service, "estimate_cost"):
-                            estimated_cost = asr_service.estimate_cost(duration_seconds, variant=asr_variant)
-                        actual_paid_cost = estimated_cost
-
-                asr_usage = ASRUsage(
-                    user_id=str(task.user_id),
-                    task_id=str(task.id),
-                    provider=provider_name or "unknown",
-                    variant=asr_variant,
+                await _finalize_asr_cost(
+                    session,
+                    task,
+                    provider_name=provider_name or "unknown",
+                    asr_variant=asr_variant,
                     duration_seconds=float(duration_seconds),
-                    estimated_cost=estimated_cost,
-                    audio_url=successful_audio_url[:1000] if successful_audio_url else None,
-                    status="success",
+                    asr_service=asr_service,
+                    successful_audio_url=successful_audio_url,
+                    diarization=diarization,
                     processing_time_ms=asr_processing_time_ms,
-                    request_params={
-                        "enable_speaker_diarization": diarization,
-                        "asr_variant": asr_variant,
-                    },
-                    # 免费额度分拆字段
-                    free_quota_consumed=free_quota_consumed,
-                    paid_duration_seconds=paid_duration_seconds,
-                    actual_paid_cost=actual_paid_cost,
-                )
-                _add_record(session, asr_usage)
-                await _commit(session)
-                logger.info(
-                    "Task %s: ASRUsage recorded - provider=%s, duration=%ds, free=%.1fs, paid=%.1fs, cost=%.4f, time=%dms",
-                    task_id,
-                    provider_name,
-                    duration_seconds,
-                    free_quota_consumed,
-                    paid_duration_seconds,
-                    actual_paid_cost,
-                    asr_processing_time_ms,
-                    extra={
-                        "task_id": task_id,
-                        "asr_usage_id": str(asr_usage.id),
-                        "provider": provider_name,
-                        "duration_seconds": duration_seconds,
-                        "free_quota_consumed": free_quota_consumed,
-                        "paid_duration_seconds": paid_duration_seconds,
-                    },
+                    claim_row=claim_row,
                 )
 
             try:
