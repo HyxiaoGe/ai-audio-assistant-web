@@ -41,7 +41,7 @@ async def upload_outline_image(
         str: 存储对象 key
     """
     # 生成唯一文件名
-    outline_id = str(uuid.uuid4())[:8]
+    outline_id = uuid.uuid4().hex
     object_key = f"visuals/{user_id}/{task_id}/outline_{outline_id}.{image_format}"
 
     # 获取存储服务

@@ -4,6 +4,7 @@ P1: upload file_key ownership/shape validation (task_service)
 P2: self-service config credential/endpoint field rejection (config_center)
 P3: field-level encryption at rest (app.core.crypto)
 P4: strict ingest URL validation against SSRF (task_service)
+P9: full-entropy media object ids (no 8-hex truncation)
 """
 
 from __future__ import annotations
@@ -135,3 +136,26 @@ def test_ingest_url_allowed(url: str) -> None:
 def test_ingest_url_rejected(url: str | None) -> None:
     with pytest.raises(BusinessError):
         TaskService.validate_ingest_url(url)
+
+
+# --------------------------------------------------------------------------- #
+# P9: full-entropy media object ids (defense-in-depth for the media proxy)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("module", "var"),
+    [
+        ("worker/tasks/image_generator.py", "image_id"),
+        ("worker/tasks/summary_visual_generator.py", "visual_id"),
+        ("worker/tasks/outline_generator.py", "outline_id"),
+    ],
+)
+def test_media_object_ids_use_full_uuid(module: str, var: str) -> None:
+    # Read the source (no heavy worker import) and assert the 8-hex truncation
+    # is gone and a full 128-bit hex id is used instead. Stops a regression of
+    # the format constant that made keys brute-forceable.
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    src = (root / module).read_text(encoding="utf-8")
+    assert "uuid.uuid4())[:8]" not in src, f"{module} still truncates the object id"
+    assert f"{var} = uuid.uuid4().hex" in src, f"{module} missing full-entropy id"
