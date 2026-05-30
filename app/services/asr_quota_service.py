@@ -238,7 +238,13 @@ def record_usage_sync(
     owner_user_id: str | None = None,
     variant: str = "file",
     now: datetime | None = None,
+    commit: bool = True,
 ) -> None:
+    """累加 AsrUserQuota 用量。
+
+    ``commit=False`` 时只在传入 session 上执行 UPDATE 而不提交，供调用方把配额累加与
+    ASRUsage 写入放进同一事务原子提交（worker 钱路幂等，避免重试重复累加）。
+    """
     if not provider or duration_seconds <= 0:
         return
 
@@ -270,7 +276,8 @@ def record_usage_sync(
             update(AsrUserQuota).where(AsrUserQuota.id == row.id).values(used_seconds=new_used, status=status)
         )
 
-    session.commit()
+    if commit:
+        session.commit()
 
 
 async def select_available_provider(
@@ -342,7 +349,13 @@ async def record_usage(
     owner_user_id: str | None = None,
     variant: str = "file",
     now: datetime | None = None,
+    commit: bool = True,
 ) -> None:
+    """累加 AsrUserQuota 用量（异步）。
+
+    ``commit=False`` 时只执行 UPDATE 不提交，供 worker 把配额累加与 ASRUsage 写入
+    放进同一事务原子提交（钱路幂等，避免重试重复累加）。
+    """
     if not provider or duration_seconds <= 0:
         return
 
@@ -370,7 +383,8 @@ async def record_usage(
             update(AsrUserQuota).where(AsrUserQuota.id == row.id).values(used_seconds=new_used, status=status),
         )
 
-    await _commit(session)
+    if commit:
+        await _commit(session)
 
 
 async def list_effective_quotas(

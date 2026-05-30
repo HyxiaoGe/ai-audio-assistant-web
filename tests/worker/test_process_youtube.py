@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from app.models.asr_usage import ASRUsage
+from app.models.task import Task
+from app.models.transcript import Transcript
+from worker.tasks import process_youtube
+
+
+class _FakeSyncQuery:
+    """Minimal chainable stand-in for a SQLAlchemy ``Session.query(...)`` chain."""
+
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def filter(self, *args: Any, **kwargs: Any) -> _FakeSyncQuery:
+        return self
+
+    def order_by(self, *args: Any, **kwargs: Any) -> _FakeSyncQuery:
+        return self
+
+    def all(self) -> list[Any]:
+        return list(self._rows)
+
+    def first(self) -> Any:
+        return self._rows[0] if self._rows else None
+
+
+class _FakeSyncSession:
+    """Returns preloaded transcripts / claim rows by queried model, no database."""
+
+    def __init__(self, transcripts: list[Transcript], claim: ASRUsage | None) -> None:
+        self._transcripts = transcripts
+        self._claim = claim
+
+    def query(self, model: Any) -> _FakeSyncQuery:
+        name = getattr(model, "__name__", str(model))
+        if name == "Transcript":
+            return _FakeSyncQuery(self._transcripts)
+        if name == "ASRUsage":
+            return _FakeSyncQuery([self._claim] if self._claim is not None else [])
+        return _FakeSyncQuery([])
+
+
+def _task() -> Task:
+    return Task(
+        user_id="user-1",
+        content_hash="hash-1",
+        title="demo",
+        source_type="youtube",
+        source_url="https://example.com/v",
+        duration_seconds=120.0,
+    )
+
+
+def _transcript(task: Task) -> Transcript:
+    return Transcript(
+        task_id=task.id,
+        speaker_id="1",
+        content="hello",
+        start_time=0.0,
+        end_time=2.0,
+        confidence=0.9,
+        sequence=1,
+    )
+
+
+def test_finalize_existing_cost_sync_tolerates_provider_lookup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FINALIZE_COST must record cost even when the ASR service can't be built.
+
+    The provider lookup only feeds the optional ``estimate_cost``. If it raises
+    (registry / credential / instantiation failure, force_new=True), the cost
+    must still be recorded atomically from the claim's provider/variant -- not
+    propagate and autoretry the youtube task into a stuck, never-charged state.
+    """
+    task = _task()
+    claim = ASRUsage(
+        user_id=str(task.user_id),
+        task_id=str(task.id),
+        provider="volcengine",
+        variant="file",
+        duration_seconds=0.0,
+        status="processing",
+    )
+    session = _FakeSyncSession([_transcript(task)], claim)
+
+    async def _raising_get_service(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("asr service construction failed")
+
+    finalize_calls: list[dict[str, Any]] = []
+
+    def _spy_finalize(*args: Any, **kwargs: Any) -> None:
+        finalize_calls.append(kwargs)
+
+    monkeypatch.setattr(process_youtube.SmartFactory, "get_service", _raising_get_service)
+    monkeypatch.setattr(process_youtube, "_finalize_asr_cost_sync", _spy_finalize)
+
+    # Must NOT raise even though the provider lookup blows up.
+    process_youtube._finalize_existing_transcript_cost_sync(session, task, str(task.id))
+
+    assert len(finalize_calls) == 1
+    assert finalize_calls[0]["asr_service"] is None  # fell back; lookup failure swallowed
+    assert finalize_calls[0]["provider_name"] == "volcengine"  # cost keyed off the claim
+    assert finalize_calls[0]["claim_row"] is claim  # finalized in place, no duplicate row

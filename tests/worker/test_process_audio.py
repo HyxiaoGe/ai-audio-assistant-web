@@ -8,6 +8,7 @@ import pytest
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
+from app.models.asr_usage import ASRUsage
 from app.models.summary import Summary
 from app.models.task import Task
 from app.models.transcript import Transcript
@@ -106,8 +107,10 @@ class _FakeASRService:
     def __init__(self, segments: list[TranscriptSegment] | None = None, error: Exception | None = None) -> None:
         self._segments = segments or []
         self._error = error
+        self.transcribe_calls = 0
 
     async def transcribe(self, audio_url: str) -> list[TranscriptSegment]:
+        self.transcribe_calls += 1
         if self._error is not None:
             raise self._error
         return self._segments
@@ -431,6 +434,223 @@ async def test_enforce_size_limit_disabled_skips_head(
     await process_audio._enforce_object_size_limit(fake, "k")
     assert fake.info_calls == []  # early-return before any HEAD
     assert fake.deleted == []
+
+
+# --------------------------------------------------------------------------- #
+# D5-retry: ASR money-path idempotency on Celery autoretry
+# --------------------------------------------------------------------------- #
+class _RetryFakeSession(_FakeSession):
+    """FakeSession preloadable with a prior attempt's transcripts + ASRUsage rows.
+
+    Lets a retry of ``_process_task`` observe the exact durable state a crashed
+    earlier attempt would have left, so the idempotency branches are exercised
+    end-to-end without a database.
+    """
+
+    def __init__(
+        self,
+        task: Task | None,
+        *,
+        existing_transcripts: list[Transcript] | None = None,
+        usage_rows: list[ASRUsage] | None = None,
+    ) -> None:
+        super().__init__(task)
+        self._existing = existing_transcripts or []
+        self._usage_rows = usage_rows or []
+        self.added_usages: list[ASRUsage] = []
+
+    async def execute(self, query: object) -> _FakeResult:
+        q = str(query).lower()
+        if "asr_usages" in q:
+            return _FakeResult(list(self._usage_rows))
+        if "transcripts" in q:
+            return _FakeResult(list(self._existing))
+        if "tasks" in q:
+            if self.task is None or self.task.deleted_at is not None:
+                return _FakeResult(None)
+            return _FakeResult(self.task)
+        return _FakeResult(None)
+
+    def add(self, item: object) -> None:
+        if isinstance(item, ASRUsage):
+            self.added_usages.append(item)
+        super().add(item)
+
+
+def _prior_transcript(task: Task) -> Transcript:
+    return Transcript(
+        task_id=task.id,
+        speaker_id="1",
+        content="hello",
+        start_time=0.0,
+        end_time=2.0,
+        confidence=0.9,
+        sequence=1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_audio_retry_finalizes_cost_without_recharge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Window C: transcripts persisted but cost never finalized.
+
+    A retry must reuse the transcripts (NOT re-call the paid ASR) and finalize
+    cost exactly once, flipping the existing ``processing`` claim to ``success``.
+    The old transcript-keyed guard skipped all cost recording here -> under-charge.
+    """
+    task = _build_task("youtube", "https://example.com/audio.mp3", None)
+    task.asr_provider = "volcengine"
+    claim = ASRUsage(
+        user_id=str(task.user_id),
+        task_id=str(task.id),
+        provider="volcengine",
+        variant="file",
+        duration_seconds=0.0,
+        status="processing",
+    )
+    session = _RetryFakeSession(task, existing_transcripts=[_prior_transcript(task)], usage_rows=[claim])
+    asr = _FakeASRService(segments=[])
+    llm = _FakeLLMService()
+    storage = _FakeStorageService()
+
+    consume_calls: list[tuple] = []
+
+    async def _tracking_consume_quota(*args: Any, **kwargs: Any) -> _FakeQuotaConsumptionResult:
+        consume_calls.append((args, kwargs))
+        return _FakeQuotaConsumptionResult(paid_consumed=2.0, cost=0.01)
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", lambda *args, **kwargs: asr)
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+
+    from app.services import asr_free_quota_service
+
+    monkeypatch.setattr(
+        asr_free_quota_service.AsrFreeQuotaService,
+        "consume_quota",
+        _tracking_consume_quota,
+    )
+
+    await process_audio._process_task(task.id, None)
+
+    assert asr.transcribe_calls == 0  # paid ASR NOT re-run
+    assert claim.status == "success"  # cost finalized on the existing claim (single record)
+    assert session.added_usages == []  # reused the claim, no duplicate usage row
+    assert len(consume_calls) == 1  # cost recorded exactly once
+    assert task.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_process_audio_retry_skips_when_already_finalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A terminal ``success`` ASRUsage means paid call + cost already completed.
+
+    A retry must skip both the paid ASR and all cost recording (no double charge).
+    """
+    task = _build_task("youtube", "https://example.com/audio.mp3", None)
+    success = ASRUsage(
+        user_id=str(task.user_id),
+        task_id=str(task.id),
+        provider="volcengine",
+        variant="file",
+        duration_seconds=120.0,
+        status="success",
+        actual_paid_cost=1.23,
+    )
+    session = _RetryFakeSession(task, existing_transcripts=[_prior_transcript(task)], usage_rows=[success])
+    asr = _FakeASRService(segments=[])
+    llm = _FakeLLMService()
+    storage = _FakeStorageService()
+
+    consume_calls: list[tuple] = []
+
+    async def _tracking_consume_quota(*args: Any, **kwargs: Any) -> _FakeQuotaConsumptionResult:
+        consume_calls.append((args, kwargs))
+        return _FakeQuotaConsumptionResult()
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", lambda *args, **kwargs: asr)
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+
+    from app.services import asr_free_quota_service
+
+    monkeypatch.setattr(
+        asr_free_quota_service.AsrFreeQuotaService,
+        "consume_quota",
+        _tracking_consume_quota,
+    )
+
+    await process_audio._process_task(task.id, None)
+
+    assert asr.transcribe_calls == 0  # paid ASR NOT re-run
+    assert consume_calls == []  # no cost recorded again
+    assert success.duration_seconds == 120.0  # terminal record left untouched
+    assert task.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_process_audio_retry_finalizes_cost_when_provider_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FINALIZE_COST must survive an ASR-service construction failure.
+
+    The provider lookup only feeds the optional ``estimate_cost``. If it raises
+    on retry (e.g. transient credential/instantiation error, force_new=True),
+    cost must still be finalized from the claim and the task must COMPLETE --
+    not get marked failed via _mark_failed (which would brick a task that
+    already holds valid transcripts).
+    """
+    task = _build_task("youtube", "https://example.com/audio.mp3", None)
+    task.asr_provider = "volcengine"
+    claim = ASRUsage(
+        user_id=str(task.user_id),
+        task_id=str(task.id),
+        provider="volcengine",
+        variant="file",
+        duration_seconds=0.0,
+        status="processing",
+    )
+    session = _RetryFakeSession(task, existing_transcripts=[_prior_transcript(task)], usage_rows=[claim])
+    llm = _FakeLLMService()
+    storage = _FakeStorageService()
+
+    consume_calls: list[tuple] = []
+
+    async def _tracking_consume_quota(*args: Any, **kwargs: Any) -> _FakeQuotaConsumptionResult:
+        consume_calls.append((args, kwargs))
+        return _FakeQuotaConsumptionResult(paid_consumed=2.0, cost=0.01)
+
+    def _raise_get_asr_service(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("asr service construction failed")
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", _raise_get_asr_service)
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+
+    from app.services import asr_free_quota_service
+
+    monkeypatch.setattr(
+        asr_free_quota_service.AsrFreeQuotaService,
+        "consume_quota",
+        _tracking_consume_quota,
+    )
+
+    await process_audio._process_task(task.id, None)
+
+    assert claim.status == "success"  # cost finalized despite the lookup failure
+    assert session.added_usages == []  # reused the claim, no duplicate usage row
+    assert len(consume_calls) == 1  # cost recorded exactly once
+    assert task.status == "completed"  # NOT failed via _mark_failed
 
 
 @pytest.mark.asyncio
