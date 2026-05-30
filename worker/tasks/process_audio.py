@@ -382,6 +382,9 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
             if task.source_type == "upload":
                 if not task.source_key:
                     raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_key")
+                # 纵深防御：绝不处理落在属主前缀之外的 key（即使脏数据进了库）
+                if not str(task.source_key).startswith(f"upload/{task.user_id}/"):
+                    raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_key")
 
                 # 提取音频时长并同步文件到 MinIO（用于前端播放）
                 if not task.duration_seconds:

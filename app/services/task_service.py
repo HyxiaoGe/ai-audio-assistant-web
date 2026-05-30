@@ -26,6 +26,11 @@ from app.services.media_url import build_media_download_url
 
 logger = logging.getLogger(__name__)
 
+# 上传对象 key 由 presign 接口签发，形如
+# ``upload/{user_id}/{YYYY}/{MM}/{DD}/{uuid4hex}{ext}``（见 app/api/v1/upload.py）。
+# 客户端只能引用自己前缀下、且严格匹配该形态的 key，否则可越权读/写/删他人对象。
+_UPLOAD_KEY_RE = re.compile(r"^upload/[^/]+/\d{4}/\d{2}/\d{2}/[0-9a-f]{32}(?:\.[A-Za-z0-9]+)?$")
+
 
 class TaskService:
     @staticmethod
@@ -243,12 +248,28 @@ class TaskService:
             )
 
     @staticmethod
+    def _validate_upload_file_key(file_key: str, user_id: str) -> None:
+        """校验客户端提交的上传 key 归属当前用户且形态合法。
+
+        防止认证用户把 ``source_key`` 指向他人对象（跨租户读 / 任意写 / 任意删）。
+        """
+        if (
+            ".." in file_key
+            or not file_key.startswith(f"upload/{user_id}/")
+            or _UPLOAD_KEY_RE.match(file_key) is None
+        ):
+            raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="file_key")
+
+    @staticmethod
     async def create_task(db: AsyncSession, user: CurrentUser, data: TaskCreateRequest, trace_id: str | None) -> Task:
         if data.source_type not in {"upload", "youtube"}:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_type")
 
-        if data.source_type == "upload" and not data.file_key:
-            raise BusinessError(ErrorCode.MISSING_REQUIRED_PARAMETER, field="file_key")
+        if data.source_type == "upload":
+            if not data.file_key:
+                raise BusinessError(ErrorCode.MISSING_REQUIRED_PARAMETER, field="file_key")
+            # 校验客户端提交的 file_key 属于当前用户且形态合法，避免越权访问共享存储对象
+            TaskService._validate_upload_file_key(data.file_key, str(user.id))
 
         # YouTube/Bilibili 任务：验证 URL 并自动生成 content_hash
         if data.source_type == "youtube":
