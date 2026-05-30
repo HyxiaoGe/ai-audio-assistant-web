@@ -14,7 +14,7 @@ from app.core.exceptions import BusinessError
 from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
-from app.services.asr.base import ASRService, TranscriptSegment
+from app.services.asr.base import ASRService, TranscriptSegment, redact_audio_url
 from app.services.config_utils import get_config_value
 
 logger = logging.getLogger("app.services.asr.volcengine")
@@ -265,7 +265,7 @@ class VolcengineASRService(ASRService):
             try:
                 segments = await self.transcribe(audio_url)
             except BusinessError as exc:
-                logger.error("Volcengine ASR failed for %s: %s", audio_url, exc)
+                logger.error("Volcengine ASR failed for %s: %s", redact_audio_url(audio_url), exc)
                 segments = []
             results.append(segments)
         return results

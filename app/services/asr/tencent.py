@@ -24,7 +24,7 @@ from app.core.exceptions import BusinessError
 from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
-from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp
+from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp, redact_audio_url
 from app.services.config_utils import get_config_value
 
 logger = logging.getLogger("app.services.asr.tencent")
@@ -176,7 +176,7 @@ class TencentASRService(ASRService):
         res_text_format = self._res_text_format
         speaker_dia, speaker_number = self._resolve_speaker_settings(enable_speaker_diarization)
 
-        logger.info(f"ASR submitting with audio_url: {audio_url}")
+        logger.info("ASR submitting with audio_url: %s", redact_audio_url(audio_url))
 
         # 创建请求对象（与测试脚本完全一致的方式）
         request = models.CreateRecTaskRequest()
@@ -660,7 +660,7 @@ class TencentASRService(ASRService):
                 segments = await self.transcribe(audio_url)
                 results.append(segments)
             except BusinessError as e:
-                logger.error(f"Batch transcribe failed for {audio_url}: {e}")
+                logger.error("Batch transcribe failed for %s: %s", redact_audio_url(audio_url), e)
                 # 失败的文件返回空列表
                 results.append([])
 

@@ -34,6 +34,7 @@ from app.models.transcript import Transcript
 from app.services.asr.base import TranscriptSegment, WordTimestamp
 from app.services.asr_quota_service import record_usage_sync
 from app.services.rag import ingest_task_chunks_sync
+from app.services.task_service import TaskService
 from app.services.transcript_polish import polish_transcripts
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
@@ -499,6 +500,13 @@ def _process_youtube(
                 BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_url"),
                 request_id,
             )
+            return
+        # 严格校验拉取 URL（白名单主机 + 拒绝 IP 字面量），防 SSRF。
+        # auto-transcribe 路径不经 create_task，此处是该路径的主要防线。
+        try:
+            TaskService.validate_ingest_url(task.source_url)
+        except BusinessError as exc:
+            _mark_failed(session, task, exc, request_id)
             return
 
     # ========== 检查是否可以跳过下载/上传阶段 ==========

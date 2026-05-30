@@ -1,8 +1,9 @@
-"""Tests for the P1–P3 security patches.
+"""Tests for the security patches.
 
 P1: upload file_key ownership/shape validation (task_service)
 P2: self-service config credential/endpoint field rejection (config_center)
 P3: field-level encryption at rest (app.core.crypto)
+P4: strict ingest URL validation against SSRF (task_service)
 P9: full-entropy media object ids (no 8-hex truncation)
 """
 
@@ -94,6 +95,47 @@ def test_allow_benign_fields() -> None:
     _reject_privileged_user_fields(
         {"timeout": 30, "retry_count": 3, "default_model": "m", "use_ssl": True}
     )
+
+
+# --------------------------------------------------------------------------- #
+# P4: SSRF — strict ingest URL validation
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.youtube.com/watch?v=abcdefghijk",
+        "https://youtu.be/abcdefghijk",
+        "https://www.bilibili.com/video/BV1xx",
+        "http://b23.tv/abcd",
+        "HTTPS://YouTube.Com/x",  # host is case-insensitive
+    ],
+)
+def test_ingest_url_allowed(url: str) -> None:
+    TaskService.validate_ingest_url(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/youtube.com",  # metadata IP, substring bypass
+        "http://youtube.com.attacker.tld/v",  # suffix spoof
+        "http://attacker.tld/?next=youtube.com",  # query substring
+        "http://youtu.be@169.254.169.254/",  # userinfo trick
+        "http://127.0.0.1/youtube.com",  # loopback v4
+        "http://[::1]/youtu.be",  # loopback v6
+        "http://10.0.0.5/",  # RFC1918
+        "https://2130706433/youtu.be",  # decimal-IP encoding (allowlist must catch)
+        "//youtube.com/x",  # scheme-relative (no scheme)
+        "file:///etc/passwd",  # non-http scheme
+        "httpx://youtube.com/x",  # bogus scheme passing old startswith('http')
+        "https://evil.com/",  # disallowed host
+        None,  # missing
+        "",  # empty
+    ],
+)
+def test_ingest_url_rejected(url: str | None) -> None:
+    with pytest.raises(BusinessError):
+        TaskService.validate_ingest_url(url)
 
 
 # --------------------------------------------------------------------------- #

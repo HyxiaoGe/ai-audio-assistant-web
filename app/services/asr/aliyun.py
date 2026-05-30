@@ -18,7 +18,7 @@ from app.core.exceptions import BusinessError
 from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
-from app.services.asr.base import ASRService, TranscriptSegment
+from app.services.asr.base import ASRService, TranscriptSegment, redact_audio_url
 from app.services.config_utils import get_config_value
 
 logger = logging.getLogger("app.services.asr.aliyun")
@@ -168,7 +168,7 @@ class AliyunASRService(ASRService):
             "audio_address": audio_url,  # Use audio_address instead of speech_file_url
         }
 
-        logger.info("Aliyun NLS ASR submitting: url=%s", audio_url)
+        logger.info("Aliyun NLS ASR submitting: url=%s", redact_audio_url(audio_url))
 
         try:
             headers = {
@@ -362,7 +362,7 @@ class AliyunASRService(ASRService):
                 segments = await self.transcribe(audio_url)
                 results.append(segments)
             except BusinessError as exc:
-                logger.error("Batch transcribe failed for %s: %s", audio_url, exc)
+                logger.error("Batch transcribe failed for %s: %s", redact_audio_url(audio_url), exc)
                 results.append([])
 
         return results
