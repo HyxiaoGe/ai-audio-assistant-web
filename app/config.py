@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -150,6 +150,24 @@ class Settings(BaseSettings):
     PROMPTHUB_API_KEY: str | None = Field(default=None)
     PROMPTHUB_CACHE_TTL: int = Field(default=300)  # seconds
     PROMPTHUB_IMAGE_GEN_PROJECT_ID: str | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def _require_prod_secrets(self) -> Settings:
+        """生产环境强制注入必需密钥，缺失即启动失败（fail-fast，不静默降级）。
+
+        仅校验 production；dev/staging 不受影响。这些密钥须由 secrets manager /
+        orchestrator 注入，绝不写入镜像或代码库。
+        """
+        if self.APP_ENV == "production":
+            missing: list[str] = []
+            if not self.FIELD_ENCRYPTION_KEY:
+                missing.append("FIELD_ENCRYPTION_KEY")
+            if missing:
+                raise ValueError(
+                    "生产环境缺少必需密钥（必须由 secrets manager/orchestrator 注入，不得写入镜像）: "
+                    + ", ".join(missing)
+                )
+        return self
 
 
 settings = Settings()
