@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentUser, get_current_user, get_db
 from app.config import settings
 from app.core.exceptions import BusinessError
+from app.core.rate_limit import rate_limit
 from app.core.response import success
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
@@ -81,6 +82,7 @@ async def presign_upload(
     data: UploadPresignRequest,
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    _rl: None = Depends(rate_limit(limit=settings.RATE_LIMIT_UPLOAD_PRESIGN_PER_MIN, scope="upload_presign")),
 ) -> JSONResponse:
     allowed = _get_allowed_extensions()
     _ensure_extension_allowed(data.filename, allowed)

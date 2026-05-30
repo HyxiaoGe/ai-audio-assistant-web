@@ -145,6 +145,12 @@ class Settings(BaseSettings):
 
     TASK_CLEANUP_DELAY_SECONDS: int = Field(default=300)
 
+    # 按用户每分钟限流（放大成本/抓取的端点；详见 app/core/rate_limit.py）
+    RATE_LIMIT_TASK_CREATE_PER_MIN: int = Field(default=20)
+    RATE_LIMIT_UPLOAD_PRESIGN_PER_MIN: int = Field(default=30)
+    RATE_LIMIT_SUMMARY_COMPARE_PER_MIN: int = Field(default=10)
+    RATE_LIMIT_YOUTUBE_SYNC_PER_MIN: int = Field(default=10)
+
     # PromptHub
     PROMPTHUB_BASE_URL: str | None = Field(default=None)
     PROMPTHUB_API_KEY: str | None = Field(default=None)

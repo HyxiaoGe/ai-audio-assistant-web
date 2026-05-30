@@ -9,7 +9,7 @@ import subprocess  # nosec B404
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -89,6 +89,32 @@ async def get_llm_service(provider: str, model_id: str, user_id: str | None = No
 
 async def get_storage_service(provider: str = "cos", user_id: str | None = None) -> StorageService:
     return await SmartFactory.get_service("storage", provider=provider, user_id=user_id)
+
+
+async def _enforce_object_size_limit(storage: StorageService, object_key: str) -> None:
+    """服务端强制校验已落库对象的真实大小，超限即删除并失败。
+
+    presigned PUT 只能签固定 Content-Length（客户端可绕过），无法签大小范围；
+    worker 这里 HEAD 一次对象，是唯一能看到真实大小、关掉这条 DoS 的地方。
+    HEAD 瞬时失败时 fail-open，仅对确认超限的对象动手。
+    """
+    max_size = settings.UPLOAD_MAX_SIZE_BYTES
+    if not max_size or max_size <= 0:
+        return
+    try:
+        info = await _maybe_await(storage.get_file_info(object_key))
+    except Exception:
+        return  # 瞬时 HEAD 失败 fail-open
+    size = int(info.get("size") or 0)
+    if size > max_size:
+        with suppress(Exception):
+            storage.delete_file(object_key)
+        limit_mb = max(1, max_size // (1024 * 1024))
+        raise BusinessError(
+            ErrorCode.FILE_TOO_LARGE,
+            reason=f"uploaded object exceeds the {limit_mb}MB limit",
+            max_size=f"{limit_mb}MB",
+        )
 
 
 async def publish_message(channel: str, message: str) -> None:
@@ -385,6 +411,10 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                 # 纵深防御：绝不处理落在属主前缀之外的 key（即使脏数据进了库）
                 if not str(task.source_key).startswith(f"upload/{task.user_id}/"):
                     raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_key")
+
+                # 服务端强制校验对象真实大小（presigned PUT 无法签 size，客户端 size_bytes 可绕过）
+                size_storage: StorageService = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
+                await _enforce_object_size_limit(size_storage, task.source_key)
 
                 # 提取音频时长并同步文件到 MinIO（用于前端播放）
                 if not task.duration_seconds:
