@@ -192,6 +192,35 @@ class TaskService:
             raise BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="视频验证超时，请检查网络连接或稍后重试")
 
     @staticmethod
+    def _validate_provider_selection(data: TaskCreateRequest) -> None:
+        """校验用户在 options 里指定的 provider 是否为已注册且可用的服务。
+
+        与配额无关，对所有用户（含管理员）一律校验——配额可以对管理员放行，但
+        「未知 provider」必须尽早在创建阶段挡掉，否则会一路漏到 worker，让
+        SmartFactory.get_service 抛裸 ValueError 并白白触发 3 次 Celery 重试。
+
+        - asr_provider：必须是已注册的 ASR 服务（修复管理员绕过校验的问题）
+        - provider（LLM）：必须是支持文本生成的 LLM 服务（排除 image_service 这类只生图的）
+        """
+        options = data.options.model_dump() if data.options else {}
+
+        asr_provider = options.get("asr_provider")
+        if asr_provider:
+            asr_providers = ServiceRegistry.list_services("asr")
+            # 仅在确有已注册 ASR 服务时才校验；空注册表交给后续配额预检处理
+            if asr_providers and asr_provider not in asr_providers:
+                raise BusinessError(ErrorCode.ASR_PROVIDER_NOT_AVAILABLE, provider=asr_provider)
+
+        llm_provider = options.get("llm_provider") or options.get("provider")
+        if llm_provider:
+            text_llm_providers = ServiceRegistry.list_text_llm_providers()
+            if text_llm_providers and llm_provider not in text_llm_providers:
+                raise BusinessError(
+                    ErrorCode.PARAMETER_ERROR,
+                    reason=f"未知或不支持文本生成的 LLM provider: {llm_provider}（可用: {sorted(text_llm_providers)}）",
+                )
+
+    @staticmethod
     async def _check_asr_quota_precheck(db: AsyncSession, user: CurrentUser, data: TaskCreateRequest) -> None:
         """ASR 配额预检
 
@@ -258,11 +287,7 @@ class TaskService:
 
         防止认证用户把 ``source_key`` 指向他人对象（跨租户读 / 任意写 / 任意删）。
         """
-        if (
-            ".." in file_key
-            or not file_key.startswith(f"upload/{user_id}/")
-            or _UPLOAD_KEY_RE.match(file_key) is None
-        ):
+        if ".." in file_key or not file_key.startswith(f"upload/{user_id}/") or _UPLOAD_KEY_RE.match(file_key) is None:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="file_key")
 
     @staticmethod
@@ -366,6 +391,9 @@ class TaskService:
 
                 # 失败的任务，允许创建新任务（或者可以提示用户是否重试旧任务）
                 # 这里暂时允许创建，后续可以优化为提示用户
+
+        # provider 合法性校验（对所有用户，含管理员）：未知 provider 尽早挡在创建阶段
+        TaskService._validate_provider_selection(data)
 
         # ASR 配额预检：确保有可用的 ASR 提供商
         await TaskService._check_asr_quota_precheck(db, user, data)

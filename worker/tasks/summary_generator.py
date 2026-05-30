@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.smart_factory import SmartFactory
 from app.models.summary import Summary
 from app.prompts.manager import get_prompt_manager
@@ -46,6 +47,15 @@ async def generate_summaries_with_quality_awareness(
     Returns:
         tuple: (生成的Summary列表, 元数据字典)
     """
+    # ===== Step 0: 归一 provider/model_id，杜绝把 None 传给 SmartFactory =====
+    # 本协程是公开入口，provider/model_id 默认 None；标准路径与 premium 失败回退路径
+    # 都会把它们透传给 SmartFactory.get_service("llm", ...)，而后者在 model_id 为空时会抛
+    # ValueError("model_id is required for llm services")。生产调用方（process_audio）已用
+    # _resolve_llm_selection 传入具体值，但此处再兜底一层，保证直接调用 / 测试 / 未来调用方
+    # 在 premium 回退分支也不会因 None 而崩（与 _default_model_id_for_provider 的默认保持一致）。
+    provider = provider or "proxy"
+    model_id = model_id or settings.LITELLM_MODEL
+
     # ===== Step 1: 评估转写质量 =====
     quality = TranscriptProcessor.assess_quality(segments)
 

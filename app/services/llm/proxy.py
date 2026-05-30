@@ -15,7 +15,13 @@ import httpx
 
 from app.config import settings
 from app.core.exceptions import BusinessError
-from app.core.fault_tolerance import CircuitBreaker, CircuitBreakerConfig, RetryConfig, retry
+from app.core.fault_tolerance import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitBreakerOpenError,
+    RetryConfig,
+    retry,
+)
 from app.core.monitoring import monitor
 from app.core.registry import ServiceMetadata, register_service
 from app.i18n.codes import ErrorCode
@@ -91,25 +97,38 @@ class ProxyLLMService(LLMService):
         exceptions=(httpx.TimeoutException, httpx.NetworkError),
     )
     @monitor("llm", "proxy")
-    async def _call_api(self, payload: dict) -> str:
-        """非流式调用 LiteLLM Proxy"""
-        try:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client:
-                response = await client.post(
-                    "/v1/chat/completions",
-                    json=payload,
-                    headers=self._headers(),
-                )
-                response.raise_for_status()
-                result = response.json()
-                content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-                if not content:
-                    raise BusinessError(
-                        ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                        reason="LiteLLM Proxy returned empty content",
-                    )
-                return content
+    async def _request_chat_completion(self, payload: dict) -> str:
+        """实际的 HTTP 调用与解析。
 
+        故意放行底层 httpx 异常（不在此层包成 BusinessError），以便外层 @retry 能识别
+        TimeoutException / NetworkError 并真正重试瞬时故障；HTTPStatusError(4xx/5xx)
+        不在重试白名单内，会直接上抛交由调用方映射。
+        """
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json=payload,
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            result = response.json()
+            content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if not content:
+                raise BusinessError(
+                    ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                    reason="LiteLLM Proxy returned empty content",
+                )
+            return content
+
+    @_circuit_breaker.protected
+    async def _guarded_call(self, payload: dict) -> str:
+        """在熔断器保护下完成调用，并把底层 httpx 异常映射为对外的 BusinessError。
+
+        重试由 _request_chat_completion 内部完成；重试耗尽后上抛的原始 httpx 异常
+        在此映射为 BusinessError，并由熔断器按 expected_exception 计入失败计数。
+        """
+        try:
+            return await self._request_chat_completion(payload)
         except httpx.TimeoutException as exc:
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
@@ -143,6 +162,16 @@ class ProxyLLMService(LLMService):
             raise BusinessError(
                 ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
                 reason=f"LiteLLM Proxy network error: {exc}",
+            ) from exc
+
+    async def _call_api(self, payload: dict) -> str:
+        """非流式调用入口：熔断器打开时快速失败，并把熔断异常映射为 BusinessError。"""
+        try:
+            return await self._guarded_call(payload)
+        except CircuitBreakerOpenError as exc:
+            raise BusinessError(
+                ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                reason="LiteLLM Proxy 熔断器已打开，快速失败",
             ) from exc
 
     async def _stream_api(self, payload: dict) -> AsyncIterator[str]:

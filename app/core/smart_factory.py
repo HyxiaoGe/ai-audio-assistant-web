@@ -5,6 +5,7 @@ Unifies registry, health checks, load balancing, cost optimization, and monitori
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -125,22 +126,26 @@ class SmartFactory:
         if not all_services:
             return None
 
-        # 先检查是否有健康检查结果，如果没有则运行一次
+        # 主动健康探测（尊重 HealthChecker 的 30s 缓存；缓存内为 no-op，不会每次选择都打满探测）：
+        # - 稳态（已有健康服务）时，只并发重探此前被标记 UNHEALTHY 的服务，给它们恢复的机会，
+        #   修复「服务一旦不健康就再不被重新纳入候选」(D4-001)。
+        # - 冷启动 / 全部不健康时，并发探测全部服务。
+        # 探测统一用 asyncio.gather 并发，修复原先串行 await 逐个探测的阻塞 (D4-004)。
         healthy_services = HealthChecker.get_healthy_services(service_type)
-        if not healthy_services:
-            # 可能是健康检查还没运行过，手动触发一次
-            logger.info("No health check results for %s, running health check...", service_type)
-            for service_name in all_services:
-                await HealthChecker.check_service(service_type, service_name, force=True)
-
-            # 再次获取健康服务列表
+        probe_targets = HealthChecker.get_unhealthy_services(service_type) if healthy_services else all_services
+        if probe_targets:
+            await asyncio.gather(
+                *(HealthChecker.check_service(service_type, name) for name in probe_targets),
+                return_exceptions=True,
+            )
             healthy_services = HealthChecker.get_healthy_services(service_type)
-            if not healthy_services:
-                logger.warning(
-                    "No healthy %s services available after health check; falling back to all services",
-                    service_type,
-                )
-                healthy_services = all_services
+
+        if not healthy_services:
+            logger.warning(
+                "No healthy %s services available after health check; falling back to all services",
+                service_type,
+            )
+            healthy_services = all_services
 
         if strategy == SelectionStrategy.HEALTH_FIRST:
             return self._select_by_health(service_type, healthy_services)

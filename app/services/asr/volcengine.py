@@ -89,11 +89,18 @@ class VolcengineASRService(ASRService):
 
         logger.info("Volcengine ASR submitting task %s", request_id)
 
-        async with httpx.AsyncClient(timeout=self._poll_interval * 2) as client:
-            response = await client.post(_SUBMIT_URL, headers=headers, json=payload)
-            response.raise_for_status()
-            status_code = response.headers.get("X-Api-Status-Code")
-            status_message = response.headers.get("X-Api-Message")
+        # 把底层 httpx 异常包装为 BusinessError，保持与 aliyun/tencent 一致，
+        # 让 worker 的「只 catch BusinessError」多 URL 回退循环能正确接管重试。
+        try:
+            async with httpx.AsyncClient(timeout=self._poll_interval * 2) as client:
+                response = await client.post(_SUBMIT_URL, headers=headers, json=payload)
+                response.raise_for_status()
+                status_code = response.headers.get("X-Api-Status-Code")
+                status_message = response.headers.get("X-Api-Message")
+        except httpx.TimeoutException as exc:
+            raise BusinessError(ErrorCode.ASR_SERVICE_TIMEOUT) from exc
+        except httpx.HTTPError as exc:
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Submit task failed: {exc}") from exc
 
         if status_code != "20000000":
             raise BusinessError(
@@ -115,31 +122,38 @@ class VolcengineASRService(ASRService):
             self._max_wait,
         )
 
-        async with httpx.AsyncClient(timeout=self._poll_interval * 2) as client:
-            while time.time() < deadline:
-                poll_count += 1
-                response = await client.post(_QUERY_URL, headers=headers, json={})
-                response.raise_for_status()
-                status_code = response.headers.get("X-Api-Status-Code")
-                status_message = response.headers.get("X-Api-Message")
+        # 把底层 httpx 异常包装为 BusinessError（轮询期内的瞬时网络故障也转为可重试的
+        # ASR 错误码），保持与 aliyun/tencent 的契约一致；状态码业务错误不受影响。
+        try:
+            async with httpx.AsyncClient(timeout=self._poll_interval * 2) as client:
+                while time.time() < deadline:
+                    poll_count += 1
+                    response = await client.post(_QUERY_URL, headers=headers, json={})
+                    response.raise_for_status()
+                    status_code = response.headers.get("X-Api-Status-Code")
+                    status_message = response.headers.get("X-Api-Message")
 
-                logger.info(
-                    "Volcengine ASR poll #%s for task %s: status=%s",
-                    poll_count,
-                    request_id,
-                    status_code,
-                )
+                    logger.info(
+                        "Volcengine ASR poll #%s for task %s: status=%s",
+                        poll_count,
+                        request_id,
+                        status_code,
+                    )
 
-                if status_code == "20000000":
-                    return response.json()
-                if status_code in {"20000001", "20000002"}:
-                    await asyncio.sleep(self._poll_interval)
-                    continue
+                    if status_code == "20000000":
+                        return response.json()
+                    if status_code in {"20000001", "20000002"}:
+                        await asyncio.sleep(self._poll_interval)
+                        continue
 
-                raise BusinessError(
-                    ErrorCode.ASR_SERVICE_FAILED,
-                    reason=f"Query failed: {status_code} {status_message}",
-                )
+                    raise BusinessError(
+                        ErrorCode.ASR_SERVICE_FAILED,
+                        reason=f"Query failed: {status_code} {status_message}",
+                    )
+        except httpx.TimeoutException as exc:
+            raise BusinessError(ErrorCode.ASR_SERVICE_TIMEOUT) from exc
+        except httpx.HTTPError as exc:
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Query task failed: {exc}") from exc
 
         raise BusinessError(ErrorCode.ASR_SERVICE_TIMEOUT)
 
@@ -230,10 +244,15 @@ class VolcengineASRService(ASRService):
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="task_id")
 
         headers = self._build_headers(task_id, include_sequence=False)
-        async with httpx.AsyncClient(timeout=self._poll_interval * 2) as client:
-            response = await client.post(_QUERY_URL, headers=headers, json={})
-            response.raise_for_status()
-            status_code = response.headers.get("X-Api-Status-Code")
+        try:
+            async with httpx.AsyncClient(timeout=self._poll_interval * 2) as client:
+                response = await client.post(_QUERY_URL, headers=headers, json={})
+                response.raise_for_status()
+                status_code = response.headers.get("X-Api-Status-Code")
+        except httpx.TimeoutException as exc:
+            raise BusinessError(ErrorCode.ASR_SERVICE_TIMEOUT) from exc
+        except httpx.HTTPError as exc:
+            raise BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason=f"Query status failed: {exc}") from exc
 
         status_map = {
             "20000001": "processing",

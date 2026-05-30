@@ -44,6 +44,9 @@ class ServiceMetadata:
         description: 服务描述
         display_name: 用户友好的显示名称（如 "豆包 (Doubao)"、"DeepSeek Chat"）
         cost_per_million_tokens: 每百万 token 的成本（元），用于前端显示
+        supports_text_generation: 是否支持文本生成（summarize/generate/chat）。
+            默认 True；image_service 这类只支持 generate_image 的 provider 应设为 False，
+            以便对比/可视化等文本类入口能在白名单层把它过滤掉，而不是到 worker 才崩。
     """
 
     name: str
@@ -58,6 +61,7 @@ class ServiceMetadata:
     description: str = ""
     display_name: str = ""
     cost_per_million_tokens: float = 0.0
+    supports_text_generation: bool = True
 
     def __post_init__(self) -> None:
         """初始化后处理：如果未设置 provider，默认使用 name"""
@@ -243,6 +247,21 @@ class ServiceRegistry:
             raise ValueError(f"Unsupported service_type: {service_type}")
 
         return list(cls._services[service_type].keys())
+
+    @classmethod
+    def list_text_llm_providers(cls) -> list[str]:
+        """列出已注册且支持文本生成（summarize/generate/chat）的 LLM provider。
+
+        排除 image_service 这类 ``supports_text_generation=False`` 的「只生图」provider。
+        供对比 / 可视化 / 任务创建等文本类入口做白名单校验，避免无效 provider 一路漏到
+        worker 才在 summarize() 崩或触发无谓的 Celery 重试。
+
+        Returns:
+            支持文本生成的 LLM 服务名称列表
+        """
+        return [
+            name for name, (_cls, metadata, _inst) in cls._services["llm"].items() if metadata.supports_text_generation
+        ]
 
     @classmethod
     def get_metadata(cls, service_type: str, name: str) -> ServiceMetadata:
