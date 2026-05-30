@@ -6,6 +6,7 @@ Proxy 提供 OpenAI 兼容的 /v1/chat/completions 端点。
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -175,57 +176,71 @@ class ProxyLLMService(LLMService):
             ) from exc
 
     async def _stream_api(self, payload: dict) -> AsyncIterator[str]:
-        """流式调用 LiteLLM Proxy，解析 SSE"""
-        payload["stream"] = True
-        try:
-            async with (
-                httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client,
-                client.stream("POST", "/v1/chat/completions", json=payload, headers=self._headers()) as response,
-            ):
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line or line.startswith(":"):
-                        continue
-                    if line.startswith("data: "):
-                        line = line[6:]
-                    if line == "[DONE]":
-                        break
-                    try:
-                        chunk_data = json.loads(line)
-                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            yield content
-                    except json.JSONDecodeError:
-                        continue
+        """流式调用 LiteLLM Proxy，解析 SSE。
 
-        except httpx.TimeoutException as exc:
-            raise BusinessError(
-                ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                reason=f"LiteLLM Proxy stream timeout: {exc}",
-            ) from exc
-        except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code
-            if status_code == 429:
+        瞬时故障（连接超时 / 网络错误）在「尚未产出任何 token」时按指数退避重试，对齐非流式
+        _request_chat_completion 的 @retry 语义（D7）：流式入口不经 _guarded_call / @retry，
+        原先把 Timeout/NetworkError 当场包成 BusinessError 即 0 重试。一旦已 yield 过内容则不能
+        重试（会重复输出），直接映射上抛。HTTPStatusError(4xx/5xx) 不在重试范围，立即映射。
+        """
+        payload["stream"] = True
+        max_attempts = 3
+        base_delay = 0.5
+        yielded_any = False
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with (
+                    httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client,
+                    client.stream("POST", "/v1/chat/completions", json=payload, headers=self._headers()) as response,
+                ):
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line or line.startswith(":"):
+                            continue
+                        if line.startswith("data: "):
+                            line = line[6:]
+                        if line == "[DONE]":
+                            break
+                        try:
+                            chunk_data = json.loads(line)
+                            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yielded_any = True
+                                yield content
+                        except json.JSONDecodeError:
+                            continue
+                return
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                # 已产出内容 / 重试用尽则无法安全重试（会重复 token），映射上抛；否则退避后重试。
+                if yielded_any or attempt >= max_attempts:
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                        reason=f"LiteLLM Proxy stream failed after {attempt} attempt(s): {exc}",
+                    ) from exc
+                await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                if status_code == 429:
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                        reason=f"LiteLLM Proxy rate limit exceeded (HTTP {status_code})",
+                    ) from exc
+                elif 500 <= status_code < 600:
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                        reason=f"LiteLLM Proxy server error (HTTP {status_code})",
+                    ) from exc
+                else:
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                        reason=f"LiteLLM Proxy stream failed (HTTP {status_code})",
+                    ) from exc
+            except httpx.HTTPError as exc:
                 raise BusinessError(
                     ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                    reason=f"LiteLLM Proxy rate limit exceeded (HTTP {status_code})",
+                    reason=f"LiteLLM Proxy network error: {exc}",
                 ) from exc
-            elif 500 <= status_code < 600:
-                raise BusinessError(
-                    ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                    reason=f"LiteLLM Proxy server error (HTTP {status_code})",
-                ) from exc
-            else:
-                raise BusinessError(
-                    ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                    reason=f"LiteLLM Proxy stream failed (HTTP {status_code})",
-                ) from exc
-        except httpx.HTTPError as exc:
-            raise BusinessError(
-                ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                reason=f"LiteLLM Proxy network error: {exc}",
-            ) from exc
 
     # ------------------------------------------------------------------
     # Public interface (LLMService abstract methods)

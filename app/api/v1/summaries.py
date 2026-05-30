@@ -122,6 +122,16 @@ async def regenerate_summary(
     if not has_transcripts:
         raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要")
 
+    # 校验 provider：与 compare/visual 端点一致，把"未知 / 仅支持生图(image_service)"的 provider
+    # 拦在 endpoint 层，而不是放到 worker 里崩。provider 为 None 表示自动选择，放行。
+    if data.provider:
+        valid_providers = _text_capable_llm_providers()
+        if data.provider not in valid_providers:
+            raise BusinessError(
+                ErrorCode.PARAMETER_ERROR,
+                reason=f"未知或不支持文本生成的 LLM provider: {data.provider}（可用: {sorted(valid_providers)}）",
+            )
+
     # Submit regeneration task
     trace_id = getattr(request.state, "trace_id", None)
     celery_app.send_task(

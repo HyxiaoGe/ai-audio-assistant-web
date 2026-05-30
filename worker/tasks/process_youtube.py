@@ -182,6 +182,17 @@ def _build_asr_kwargs(
     return kwargs
 
 
+def _effective_asr_variant(transcribe: Any, asr_variant: str) -> str:
+    """返回该 provider「实际会被执行」的 ASR 变体，供计费/记录使用（D5-variant）。
+
+    与 process_audio._effective_asr_variant 同口径：provider 的 transcribe 不消费 asr_variant 时
+    只会跑标准版 file，计费必须按 file，避免给只支持标准版的 provider 按极速版(file_fast)多收。
+    """
+    if "asr_variant" in inspect.signature(transcribe).parameters:
+        return asr_variant
+    return "file"
+
+
 def _get_download_dir() -> Path:
     raw_dir = settings.YOUTUBE_DOWNLOAD_DIR
     if not raw_dir:
@@ -421,56 +432,67 @@ def _update_task(
 
 
 def _mark_failed(session: Session, task: Task, error: BusinessError, request_id: str | None) -> None:
-    task.status = "failed"
-    task.progress = 0
-    task.error_code = error.code.value
-    task.error_message = error.kwargs.get("reason") or str(error)
-    if request_id:
-        task.request_id = request_id
-    session.commit()
+    # 失败处理必须「尽力而为且绝不向外抛异常」：它是各 except 分支的收尾步骤，若自身抛错
+    # （publish / 通知写库 / commit 失败）会冒泡触发 Celery autoretry_for=(Exception,) 把整个
+    # 任务（含已付费 ASR）从头重跑 → 重复转写/重复扣费 (D5-retry gap b)。整体兜底，子步骤异常只记日志。
+    try:
+        task.status = "failed"
+        task.progress = 0
+        task.error_code = error.code.value
+        task.error_message = error.kwargs.get("reason") or str(error)
+        if request_id:
+            task.request_id = request_id
+        session.commit()
 
-    # Create notification when task fails
-    from app.models.notification import Notification
+        # Create notification when task fails
+        from app.models.notification import Notification
 
-    task_title = task.title or "未命名任务"
-    error_message = error.kwargs.get("reason") or str(error)
+        task_title = task.title or "未命名任务"
+        error_message = error.kwargs.get("reason") or str(error)
 
-    notification = Notification(
-        user_id=str(task.user_id),
-        task_id=str(task.id),
-        category="task",
-        action="failed",
-        title=f"任务《{task_title}》处理失败",
-        message=error_message,
-        action_url=f"/tasks/{task.id}",
-        priority="high",  # Failed tasks have higher priority
-        extra_data={
-            "task_title": task_title,
-            "error_code": error.code.value,
-            "error_message": error_message,
-            "source_type": task.source_type,
-        },
-    )
-    session.add(notification)
-    session.commit()
-
-    trace_id = request_id or uuid4().hex
-    message = json.dumps(
-        {
-            "code": error.code.value,
-            "message": str(error),
-            "data": {
-                "type": "error",
-                "status": "failed",
-                "task_id": task.id,
-                "task_title": task.title,  # Add task_title for frontend
+        notification = Notification(
+            user_id=str(task.user_id),
+            task_id=str(task.id),
+            category="task",
+            action="failed",
+            title=f"任务《{task_title}》处理失败",
+            message=error_message,
+            action_url=f"/tasks/{task.id}",
+            priority="high",  # Failed tasks have higher priority
+            extra_data={
+                "task_title": task_title,
+                "error_code": error.code.value,
+                "error_message": error_message,
+                "source_type": task.source_type,
             },
-            "traceId": trace_id,
-        }
-    )
+        )
+        session.add(notification)
+        session.commit()
 
-    # Publish to both task-specific and user-global channels
-    publish_task_update_sync(task.id, str(task.user_id), message)
+        trace_id = request_id or uuid4().hex
+        message = json.dumps(
+            {
+                "code": error.code.value,
+                "message": str(error),
+                "data": {
+                    "type": "error",
+                    "status": "failed",
+                    "task_id": task.id,
+                    "task_title": task.title,  # Add task_title for frontend
+                },
+                "traceId": trace_id,
+            }
+        )
+
+        # Publish to both task-specific and user-global channels
+        publish_task_update_sync(task.id, str(task.user_id), message)
+    except Exception as exc:
+        logger.error(
+            "Task %s: _mark_failed best-effort path failed, suppressed to avoid task retry: %s",
+            getattr(task, "id", "?"),
+            exc,
+            exc_info=True,
+        )
 
 
 def _process_youtube(
@@ -839,11 +861,6 @@ def _process_youtube(
                                 "No ASR provider selected by scheduler, falling back to: %s",
                                 asr_provider,
                             )
-                if asr_provider:
-                    task.asr_provider = asr_provider
-                    if isinstance(task.options, dict):
-                        task.options["asr_variant"] = asr_variant
-                    session.commit()
                 asr_service = asyncio.run(
                     SmartFactory.get_service(
                         "asr",
@@ -851,6 +868,14 @@ def _process_youtube(
                         provider=asr_provider,
                     )
                 )
+                # 归一为「实际会被执行的变体」，与 process_audio 同口径，避免给只支持标准版的
+                # 钉死 provider 按 file_fast 多收（D5-variant）。
+                asr_variant = _effective_asr_variant(asr_service.transcribe, asr_variant)
+                if asr_provider:
+                    task.asr_provider = asr_provider
+                    if isinstance(task.options, dict):
+                        task.options["asr_variant"] = asr_variant
+                    session.commit()
                 last_error: BusinessError | None = None
                 segments = []
                 asr_start_time = time.time()

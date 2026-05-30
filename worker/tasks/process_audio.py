@@ -279,6 +279,19 @@ def _build_asr_kwargs(
     return kwargs
 
 
+def _effective_asr_variant(transcribe: Any, asr_variant: str) -> str:
+    """返回该 provider「实际会被执行」的 ASR 变体，供计费/记录使用（D5-variant）。
+
+    若 provider 的 transcribe 不接受 asr_variant 形参（如 aliyun/volcengine 只实现标准版），
+    则无论是否请求 file_fast 都只会按标准版 file 运行，计费也必须按 file，否则会出现
+    「实跑 ¥2.5 标准版、却按 ¥3.3 极速版计费」的多收。provider 真正消费该形参时（如 tencent）
+    按请求变体计费，与实跑一致。判定口径与 _build_asr_kwargs 的签名内省保持一致。
+    """
+    if "asr_variant" in inspect.signature(transcribe).parameters:
+        return asr_variant
+    return "file"
+
+
 async def _update_task(
     session: Session,
     task: Task,
@@ -343,55 +356,69 @@ async def _update_task(
 
 
 async def _mark_failed(session: Session, task: Task, error: BusinessError, request_id: str | None) -> None:
-    task.status = "failed"
-    task.progress = 0
-    task.error_code = error.code.value
-    task.error_message = error.kwargs.get("reason") or str(error)
-    if request_id:
-        task.request_id = request_id
-    await _commit(session)
+    # 失败处理必须「尽力而为且绝不向外抛异常」：本函数是 _process_task 两个 except 分支的最后一步，
+    # 若它自身抛错（Redis publish 失败 / 通知写库失败 / commit 失败）会冒泡出 asyncio.run，触发
+    # Celery autoretry_for=(Exception,) 把整个任务（含已付费 ASR）从头重跑 → 重复转写/重复扣费
+    # (D5-retry gap b)。这里整体兜底，记录失败状态尽力落库，任何子步骤异常都吞掉只记日志。
+    try:
+        task.status = "failed"
+        task.progress = 0
+        task.error_code = error.code.value
+        task.error_message = error.kwargs.get("reason") or str(error)
+        if request_id:
+            task.request_id = request_id
+        await _commit(session)
 
-    # Create notification when task fails
-    from app.models.notification import Notification
+        # Create notification when task fails
+        from app.models.notification import Notification
 
-    task_title = task.title or "未命名任务"
-    error_message = error.kwargs.get("reason") or str(error)
+        task_title = task.title or "未命名任务"
+        error_message = error.kwargs.get("reason") or str(error)
 
-    notification = Notification(
-        user_id=str(task.user_id),
-        task_id=str(task.id),
-        category="task",
-        action="failed",
-        title=f"任务《{task_title}》处理失败",
-        message=error_message,
-        action_url=f"/tasks/{task.id}",
-        priority="high",  # Failed tasks have higher priority
-        extra_data={
-            "task_title": task_title,
-            "error_code": error.code.value,
-            "error_message": error_message,
-            "source_type": task.source_type,
-        },
-    )
-    _add_record(session, notification)
-    await _commit(session)
-
-    trace_id = request_id or uuid4().hex
-    message = json.dumps(
-        {
-            "code": error.code.value,
-            "message": str(error),
-            "data": {
-                "type": "error",
-                "status": "failed",
-                "task_id": task.id,
-                "task_title": task.title,  # Add task_title for frontend
+        notification = Notification(
+            user_id=str(task.user_id),
+            task_id=str(task.id),
+            category="task",
+            action="failed",
+            title=f"任务《{task_title}》处理失败",
+            message=error_message,
+            action_url=f"/tasks/{task.id}",
+            priority="high",  # Failed tasks have higher priority
+            extra_data={
+                "task_title": task_title,
+                "error_code": error.code.value,
+                "error_message": error_message,
+                "source_type": task.source_type,
             },
-            "traceId": trace_id,
-        }
-    )
+        )
+        _add_record(session, notification)
+        await _commit(session)
 
-    await publish_message(f"{task.id}:{task.user_id}", message)
+        trace_id = request_id or uuid4().hex
+        message = json.dumps(
+            {
+                "code": error.code.value,
+                "message": str(error),
+                "data": {
+                    "type": "error",
+                    "status": "failed",
+                    "task_id": task.id,
+                    "task_title": task.title,  # Add task_title for frontend
+                },
+                "traceId": trace_id,
+            }
+        )
+
+        await publish_message(f"{task.id}:{task.user_id}", message)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Task %s: _mark_failed best-effort path failed, suppressed to avoid task retry: %s",
+            getattr(task, "id", "?"),
+            exc,
+            exc_info=True,
+        )
 
 
 async def _process_task(task_id: str, request_id: str | None) -> None:
@@ -579,14 +606,18 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                                 "No ASR provider selected by scheduler, falling back to: %s",
                                 asr_provider,
                             )
+                asr_service: ASRService = await _maybe_await(
+                    _call_factory(get_asr_service, str(task.user_id), provider=asr_provider)
+                )
+                # 归一为「实际会被执行的变体」：钉死的 provider 不经上面 auto-select 分支的
+                # _supports_file_fast 剥离，若其 transcribe 不消费 asr_variant 就只会跑标准版 file，
+                # 必须据此计费/记录，避免给只支持标准版的 provider 按 file_fast 多收（D5-variant）。
+                asr_variant = _effective_asr_variant(asr_service.transcribe, asr_variant)
                 if asr_provider:
                     task.asr_provider = asr_provider
                     if isinstance(task.options, dict):
                         task.options["asr_variant"] = asr_variant
                     await _commit(session)
-                asr_service: ASRService = await _maybe_await(
-                    _call_factory(get_asr_service, str(task.user_id), provider=asr_provider)
-                )
                 last_error: BusinessError | None = None
                 segments: list[TranscriptSegment] = []
                 asr_start_time = time.time()
