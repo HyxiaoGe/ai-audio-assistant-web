@@ -128,9 +128,16 @@ class ProxyLLMService(LLMService):
                     reason=f"LiteLLM Proxy server error (HTTP {status_code})",
                 ) from exc
             else:
+                # 上游响应体可能含敏感信息（密钥片段、内部地址等），仅记入服务端日志，
+                # 不回传给客户端；与上面 429/5xx 分支保持一致，对外只暴露状态码。
+                logger.warning(
+                    "LiteLLM Proxy request failed (HTTP %s): %s",
+                    status_code,
+                    exc.response.text,
+                )
                 raise BusinessError(
                     ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                    reason=f"LiteLLM Proxy request failed (HTTP {status_code}): {exc.response.text}",
+                    reason=f"LiteLLM Proxy request failed (HTTP {status_code})",
                 ) from exc
         except httpx.HTTPError as exc:
             raise BusinessError(
