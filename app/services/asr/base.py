@@ -3,6 +3,25 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from urllib.parse import urlsplit, urlunsplit
+
+
+def redact_audio_url(url: str) -> str:
+    """剥离（可能是预签名的）URL 的 query 与 userinfo，便于安全地写日志。
+
+    预签名下载 URL 把签名/凭证/有效期放在 query（q-signature / X-Amz-Signature /
+    X-Amz-Credential）；原样打日志等于把一条有时效的可下载链接交给任何能看日志的人。
+    本函数返回 scheme://host[:port]/path，去掉 query、fragment 以及 user:pass@ userinfo。
+    不像 URL 的不透明串（对象 key、本地路径）原样返回。
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<redacted-url>"
+    if not parts.scheme and not parts.netloc:
+        return url  # 非 URL（对象 key / 本地路径），无可剥离
+    host_port = parts.netloc.rsplit("@", 1)[-1]  # 去掉 user:pass@，保留 [ipv6]:port
+    return urlunsplit((parts.scheme, host_port, parts.path, "", ""))
 
 
 @dataclass(frozen=True)
