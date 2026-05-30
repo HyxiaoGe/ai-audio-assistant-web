@@ -37,13 +37,10 @@ def _get_download_format() -> str:
 
 
 def _validate_youtube_url(url: str) -> None:
-    if not url:
-        raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_url")
-    lower_url = url.lower()
-    if not lower_url.startswith("http"):
-        raise BusinessError(ErrorCode.INVALID_URL_FORMAT)
-    if "youtube.com" not in lower_url and "youtu.be" not in lower_url:
-        raise BusinessError(ErrorCode.UNSUPPORTED_YOUTUBE_URL_FORMAT)
+    # 委托给唯一的严格校验器，避免弱子串逻辑重复散落（本 task 已不再被派发）
+    from app.services.task_service import TaskService
+
+    TaskService.validate_ingest_url(url)
 
 
 def _download(url: str) -> str:
