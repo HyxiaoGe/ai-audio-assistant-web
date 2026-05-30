@@ -19,9 +19,10 @@ import logging
 from collections.abc import AsyncIterator
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
+from app.api.deps import CurrentUser, get_current_user_from_query
 from app.core.exceptions import BusinessError
 from app.core.health_checker import HealthChecker
 from app.core.registry import ServiceRegistry
@@ -52,6 +53,19 @@ _FORWARD_RESPONSE_HEADERS = {
     "cache-control",
 }
 
+# 每个媒体对象 key 都把所属用户编码在 `<prefix>/<user_id>/...` 第二段，
+# 据此校验归属，杜绝越权读取他人对象（以及目录穿越）。
+_OWNED_PREFIXES: tuple[str, ...] = ("upload", "youtube", "visuals", "summary_images")
+
+
+def assert_owns_media_key(object_key: str, user_id: str) -> None:
+    """校验调用方拥有该媒体对象，否则抛 RESOURCE_NOT_FOUND（不泄露存在性/权限信息）。"""
+    if ".." in object_key or object_key.startswith("/"):
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+    parts = object_key.split("/")
+    if len(parts) < 3 or parts[0] not in _OWNED_PREFIXES or parts[1] != user_id:
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+
 
 def _candidate_providers() -> list[str]:
     """Return storage providers to try, in priority order.
@@ -70,13 +84,19 @@ def _candidate_providers() -> list[str]:
 
 
 @router.get("/{file_path:path}")
-async def stream_media(file_path: str, request: Request) -> StreamingResponse:
+async def stream_media(
+    file_path: str,
+    request: Request,
+    user: CurrentUser = Depends(get_current_user_from_query),
+) -> StreamingResponse:
     """Stream a media file from whatever storage backend hosts it.
 
-    Unauthenticated by design — the `<audio>` / `<img>` element used by the
-    browser cannot send Authorization headers; security relies on object keys
-    being UUID-prefixed (effectively unguessable).
+    Access requires a valid token (Authorization header or `?token=` query, the
+    latter for browser `<audio>`/`<img>` elements that cannot send headers) and
+    is gated to the owner encoded in the object key — see assert_owns_media_key.
     """
+    assert_owns_media_key(file_path, user.id)
+
     forward_headers: dict[str, str] = {}
     range_header = request.headers.get("range")
     if range_header:

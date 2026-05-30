@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_current_user_from_query, get_db
+from app.api.v1.media import assert_owns_media_key
 from app.core.exceptions import BusinessError
 from app.core.response import success
 from app.i18n.codes import ErrorCode
@@ -805,10 +806,15 @@ async def get_visual_summary(
 
 
 @router.get("/images/{path:path}")
-async def get_summary_image(path: str) -> Response:
+async def get_summary_image(
+    path: str,
+    user: CurrentUser = Depends(get_current_user_from_query),
+) -> Response:
     """获取摘要配图（直接代理返回图片内容）
 
     path 格式: {user_id}/{task_id}/{image_id}.png
+
+    需携带 token（header 或 ?token=，供文章内联 <img> 使用），且仅限对象归属者访问。
     """
     from minio import Minio
 
@@ -816,6 +822,7 @@ async def get_summary_image(path: str) -> Response:
 
     # 完整的 object_key
     object_key = f"summary_images/{path}"
+    assert_owns_media_key(object_key, user.id)
 
     # 直接从 MinIO 获取图片内容
     client = Minio(

@@ -148,7 +148,7 @@ async def upload_visual_image(
         str: 存储对象 key
     """
     # 生成唯一文件名
-    visual_id = str(uuid.uuid4())[:8]
+    visual_id = uuid.uuid4().hex
     object_key = f"visuals/{user_id}/{task_id}/{visual_type}_{visual_id}.{image_format}"
 
     # 获取存储服务

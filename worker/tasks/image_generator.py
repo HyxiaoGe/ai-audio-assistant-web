@@ -271,7 +271,7 @@ async def upload_image(
         str: 存储对象 key
     """
     # 生成唯一文件名
-    image_id = str(uuid.uuid4())[:8]
+    image_id = uuid.uuid4().hex
     object_key = f"summary_images/{user_id}/{task_id}/{image_id}.{image_format}"
 
     # 写入临时文件
