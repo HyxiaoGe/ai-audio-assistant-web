@@ -462,10 +462,6 @@ Key variables (see `.env.example`):
 DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/audio_assistant
 REDIS_URL=redis://localhost:6379/0
 
-# JWT
-JWT_SECRET=your-secret
-JWT_ALGORITHM=HS256
-
 # Storage (choose one)
 MINIO_ENDPOINT=localhost:9000
 MINIO_ACCESS_KEY=minioadmin
@@ -476,16 +472,20 @@ TENCENT_SECRET_ID=xxx
 TENCENT_SECRET_KEY=xxx
 ALIYUN_ACCESS_KEY_ID=xxx
 ALIYUN_ACCESS_KEY_SECRET=xxx
-VOLCENGINE_ACCESS_KEY_ID=xxx
-VOLCENGINE_SECRET_ACCESS_KEY=xxx
+VOLC_ASR_APP_ID=xxx
+VOLC_ASR_ACCESS_TOKEN=xxx
 
-# LLM (configure providers you want to use)
-DOUBAO_API_KEY=xxx
-QWEN_API_KEY=xxx
-DEEPSEEK_API_KEY=xxx
-MOONSHOT_API_KEY=xxx
+# LLM — 路由统一经 LiteLLM Proxy；per-provider key（doubao/qwen/deepseek/moonshot）已下线
+LITELLM_BASE_URL=http://litellm-proxy:4000
+LITELLM_API_KEY=sk-xxx
+# OPENROUTER 仅保留给 RAG embedding
 OPENROUTER_API_KEY=xxx
+
+# 字段级加密：生产必填（由 secrets manager 注入；production 缺失则启动失败）
+FIELD_ENCRYPTION_KEY=<fernet-key>
 ```
+
+> 完整变量以 `.env.example` 为准；真实密钥由 orchestrator / secret manager 注入，切勿提交。
 
 **Provider Selection**: SmartFactory automatically discovers available services based on configured credentials. No need to set `ASR_PROVIDER` or `LLM_PROVIDER` environment variables.
 
