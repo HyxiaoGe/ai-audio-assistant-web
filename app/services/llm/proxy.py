@@ -176,6 +176,23 @@ class ProxyLLMService(LLMService):
             ) from exc
 
     async def _stream_api(self, payload: dict) -> AsyncIterator[str]:
+        """流式调用入口：在熔断器保护下转发到内部 SSE 实现（D3-002）。
+
+        与非流式 _call_api 对齐——熔断器 OPEN 时快速失败（不发起 HTTP、不进入内部重试循环），
+        避免对已知故障的后端形成重试风暴；流完成记成功、expected_exception 记失败。装饰器
+        ``@protected`` 会把异步生成器变成「返回协程」破坏 async for，故改用 guard() 上下文管理器。
+        """
+        try:
+            async with self._circuit_breaker.guard():
+                async for chunk in self._stream_api_inner(payload):
+                    yield chunk
+        except CircuitBreakerOpenError as exc:
+            raise BusinessError(
+                ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                reason="LiteLLM Proxy 熔断器已打开，快速失败",
+            ) from exc
+
+    async def _stream_api_inner(self, payload: dict) -> AsyncIterator[str]:
         """流式调用 LiteLLM Proxy，解析 SSE。
 
         瞬时故障（连接超时 / 网络错误）在「尚未产出任何 token」时按指数退避重试，对齐非流式

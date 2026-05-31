@@ -20,7 +20,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -332,6 +333,40 @@ class CircuitBreaker:
                 raise
 
         return wrapper
+
+    @asynccontextmanager
+    async def guard(self) -> AsyncIterator[None]:
+        """熔断器保护的异步上下文管理器（``protected`` 装饰器的等价物）。
+
+        用于无法被 ``@protected`` 装饰的场景——典型是异步生成器（流式响应）：装饰器返回的是
+        协程包装，会把生成器变成「返回协程」而破坏 ``async for``。改用上下文管理器把整段流式
+        调用包起来即可对齐语义：进入时按 OPEN/HALF_OPEN 规则放行或快速失败（抛
+        ``CircuitBreakerOpenError``），正常退出记成功、``expected_exception`` 记失败。
+
+        Example:
+            async def stream():
+                async with breaker.guard():
+                    async for chunk in upstream():
+                        yield chunk
+        """
+        # 检查是否应该尝试重置（与 protected 同口径）
+        if self._should_attempt_reset():
+            with self._state_lock:
+                logger.info(f"Circuit breaker '{self.name}' entering HALF_OPEN state")
+                self.state = CircuitState.HALF_OPEN
+                self.success_count = 0
+
+        # 如果熔断器打开，快速失败（在 yield 之前抛出，调用方进入不了受保护代码段）
+        if self.state == CircuitState.OPEN:
+            raise CircuitBreakerOpenError(f"Circuit breaker '{self.name}' is OPEN, failing fast")
+
+        try:
+            yield
+        except self.config.expected_exception:
+            self._record_failure()
+            raise
+        else:
+            self._record_success()
 
     def get_state(self) -> CircuitState:
         """获取当前状态"""

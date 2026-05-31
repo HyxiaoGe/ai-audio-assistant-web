@@ -654,6 +654,57 @@ async def test_process_audio_retry_finalizes_cost_when_provider_lookup_fails(
 
 
 @pytest.mark.asyncio
+async def test_finalize_asr_cost_keeps_claim_nonterminal_when_duration_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """时长为 0（提取静默失败 + provider 未回时间戳）不得记为终态 success。
+
+    否则 D5-retry 的 SKIP_ALL 幂等标记会把这条零成本记录永久锁死 -> 漏计费。
+    正确行为：保留 claim 的非终态 status 以便对账/重试补记，且不写任何配额。
+    """
+    task = _build_task("youtube", "https://example.com/audio.mp3", None)
+    claim = ASRUsage(
+        user_id=str(task.user_id),
+        task_id=str(task.id),
+        provider="volcengine",
+        variant="file",
+        duration_seconds=0.0,
+        status="processing",
+    )
+    session = _RetryFakeSession(task, usage_rows=[claim])
+
+    consume_calls: list[tuple] = []
+
+    async def _tracking_consume_quota(*args: Any, **kwargs: Any) -> _FakeQuotaConsumptionResult:
+        consume_calls.append((args, kwargs))
+        return _FakeQuotaConsumptionResult()
+
+    from app.services import asr_free_quota_service
+
+    monkeypatch.setattr(
+        asr_free_quota_service.AsrFreeQuotaService,
+        "consume_quota",
+        _tracking_consume_quota,
+    )
+
+    await process_audio._finalize_asr_cost(
+        session,
+        task,
+        provider_name="volcengine",
+        asr_variant="file",
+        duration_seconds=0.0,
+        asr_service=None,
+        successful_audio_url=None,
+        diarization=None,
+        processing_time_ms=0,
+        claim_row=claim,
+    )
+
+    assert claim.status == "processing"  # 非终态：未被锁死为零成本 success
+    assert consume_calls == []  # 时长未知 -> 不写任何配额
+
+
+@pytest.mark.asyncio
 async def test_process_audio_oversize_upload_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(process_audio.settings, "UPLOAD_MAX_SIZE_BYTES", 10, raising=False)
     task = _build_task("upload", None, _UPLOAD_KEY)

@@ -276,7 +276,19 @@ def _finalize_asr_cost_sync(
     usage.estimated_cost = estimated_cost
     if successful_audio_url:
         usage.audio_url = successful_audio_url[:1000]
-    usage.status = "success"
+    if duration_seconds > 0:
+        usage.status = "success"
+    else:
+        # 时长为 0（提取静默失败 + provider 未回时间戳）：不要把这条零成本记为终态 success，
+        # 否则 D5-retry 的 SKIP_ALL 幂等标记会把漏计费记录永久锁死。显式置非终态 "processing"
+        # （覆盖 ASRUsage.status 的 server_default 'success'），留待对账/重试按真实时长补记。
+        usage.status = "processing"
+        logger.warning(
+            "Task %s: ASR duration is 0 (provider=%s); leaving ASRUsage non-terminal (status=processing) "
+            "instead of locking a zero-cost success",
+            task.id,
+            provider_name or "unknown",
+        )
     usage.processing_time_ms = processing_time_ms
     usage.request_params = {"enable_speaker_diarization": diarization, "asr_variant": asr_variant}
     usage.free_quota_consumed = free_quota_consumed
