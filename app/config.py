@@ -127,6 +127,9 @@ class Settings(BaseSettings):
     UPLOAD_MAX_SIZE_BYTES: int | None = Field(default=None)
     UPLOAD_PRESIGN_EXPIRES: int | None = Field(default=None)
     MEDIA_DOWNLOAD_EXPIRES: int = Field(default=3600)
+    # 短期媒体/SSE 票据有效期（秒）。前端 <img>/<audio>/EventSource 无法带 header，
+    # 改用此短票放进 ?token=，避免长效 access JWT 暴露在 URL/代理日志里。
+    MEDIA_TOKEN_TTL: int = Field(default=300)
 
     YOUTUBE_DOWNLOAD_DIR: str | None = Field(default=None)
     YOUTUBE_OUTPUT_TEMPLATE: str | None = Field(default=None)
@@ -168,6 +171,9 @@ class Settings(BaseSettings):
             missing: list[str] = []
             if not self.FIELD_ENCRYPTION_KEY:
                 missing.append("FIELD_ENCRYPTION_KEY")
+            # 媒体/SSE 短票用 JWT_SECRET 自签（HS256）；生产缺失则无法签发安全的媒体 URL。
+            if not self.JWT_SECRET:
+                missing.append("JWT_SECRET")
             if missing:
                 raise ValueError(
                     "生产环境缺少必需密钥（必须由 secrets manager/orchestrator 注入，不得写入镜像）: "
