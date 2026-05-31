@@ -305,6 +305,17 @@ class AsrFreeQuotaService:
         config = await get_pricing_config(db, provider, variant)
 
         if not config:
+            # provider/variant 已注册但未播种定价：免费/付费分拆在此被跳过，AsrUsagePeriod 台账
+            # 会少记（用户经调用方的 ASRUsage 兜底仍按 estimated_cost 正确计费）。WARN 出
+            # provider/variant 便于 ops 定位并播种定价，而非静默漏记。防御性补写周期行不可行
+            # （无 reset_period 只能猜周期桶，与日后播种的真实桶冲突成孤儿重复行），故只做告警。
+            logger.warning(
+                "ASR pricing config MISSING for provider=%s variant=%s — AsrUsagePeriod ledger split "
+                "skipped (admin ledger under-reports; user still charged via ASRUsage fallback). "
+                "Ops: seed an asr_pricing_configs row for this provider/variant.",
+                provider,
+                variant,
+            )
             raise ValueError(f"Unknown provider/variant: {provider}/{variant}")
 
         period = await cls.get_or_create_period(db, provider, variant, user_id, now)
