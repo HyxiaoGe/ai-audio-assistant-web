@@ -17,9 +17,16 @@ from app.schemas.task import (
     TaskDetailResponse,
     TaskListItem,
 )
-from app.services.task_service import TaskService
+from app.services.task_service import PROCESSING_STATUSES, TaskService
 
 router = APIRouter(prefix="/tasks")
+
+# 列表筛选可接受的 status 取值：聚合关键字 "processing" + 终态 + 全部"处理中"子状态。
+# 派生自单一事实源 PROCESSING_STATUSES，避免与 list_tasks 的伞形筛选漂移（曾漏 polishing
+# 导致润色中的任务用 ?status=polishing 被静默回退为 "all"）。非白名单值一律回退 "all"。
+_LIST_STATUS_FILTERS: frozenset[str] = frozenset(
+    {"all", "processing", "completed", "failed", *PROCESSING_STATUSES}
+)
 
 
 @router.post("")
@@ -50,24 +57,7 @@ async def list_tasks(
     page_size: int = Query(default=20, ge=1, le=100),
     status: str = Query(default="all"),
 ) -> JSONResponse:
-    allowed_status = {
-        "all",
-        "pending",
-        "queued",
-        "resolving",
-        "downloading",
-        "downloaded",
-        "transcoding",
-        "uploading",
-        "uploaded",
-        "resolved",
-        "processing",
-        "asr_submitting",
-        "asr_polling",
-        "completed",
-        "failed",
-    }
-    if status not in allowed_status:
+    if status not in _LIST_STATUS_FILTERS:
         status = "all"
     items, total = await TaskService.list_tasks(db, user, page, page_size, status)
     response = PageResponse[TaskListItem](items=items, total=total, page=page, page_size=page_size)

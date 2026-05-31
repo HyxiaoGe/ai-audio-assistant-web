@@ -36,6 +36,27 @@ _UPLOAD_KEY_RE = re.compile(r"^upload/[^/]+/\d{4}/\d{2}/\d{2}/[0-9a-f]{32}(?:\.[
 # 仅允许从这些受信媒体站点的主机（或其子域）拉取，杜绝 SSRF 打内网 / 云元数据端点。
 _ALLOWED_INGEST_HOSTS: tuple[str, ...] = ("youtube.com", "youtu.be", "bilibili.com", "b23.tv")
 
+# 处于"处理中"（非终态 completed/failed）的任务状态全集——任务流水线的中间态。
+# list_tasks 的 status="processing" 伞形筛选、以及 tasks.py 路由的状态白名单都从这里派生，
+# 单一事实源避免新增流水线阶段（如 polishing）时漏改其中一处，导致该状态在筛选里隐身。
+PROCESSING_STATUSES: tuple[str, ...] = (
+    "pending",
+    "queued",
+    "resolving",
+    "downloading",
+    "downloaded",
+    "transcoding",
+    "uploading",
+    "uploaded",
+    "resolved",
+    "extracting",
+    "asr_submitting",
+    "asr_polling",
+    "transcribing",
+    "polishing",
+    "summarizing",
+)
+
 
 class TaskService:
     @staticmethod
@@ -464,26 +485,7 @@ class TaskService:
             Task.deleted_at.is_(None),
         )
         if status_filter == "processing":
-            base_query = base_query.where(
-                Task.status.in_(
-                    [
-                        "pending",
-                        "queued",
-                        "resolving",
-                        "downloading",
-                        "downloaded",
-                        "transcoding",
-                        "uploading",
-                        "uploaded",
-                        "resolved",
-                        "extracting",
-                        "asr_submitting",
-                        "asr_polling",
-                        "transcribing",
-                        "summarizing",
-                    ]
-                )
-            )
+            base_query = base_query.where(Task.status.in_(PROCESSING_STATUSES))
         elif status_filter != "all":
             base_query = base_query.where(Task.status == status_filter)
 
