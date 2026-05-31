@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import time
+from typing import Any
+
 from auth import AuthenticatedUser, JWTValidator
+from jose import jwt
+from jose.exceptions import ExpiredSignatureError, JWTError
 
 from app.config import settings
 from app.core.exceptions import BusinessError
@@ -8,6 +13,80 @@ from app.i18n.codes import ErrorCode
 
 # Singleton JWTValidator instance
 _validator: JWTValidator | None = None
+
+# --- Self-signed scoped tickets (media/SSE URLs) ----------------------------
+# These short-lived tickets are handed to the browser so that <img>/<audio>/
+# EventSource requests -- which cannot send an Authorization header -- can be
+# authenticated via a ``?token=`` query string WITHOUT exposing the long-lived
+# RS256 access JWT in URLs/proxy logs.
+#
+# They are deliberately isolated from the access JWT:
+#   * signed with the symmetric ``settings.JWT_SECRET`` (HMAC), not the
+#     auth-service RSA key;
+#   * stamped with a distinct ``typ``/``iss`` so a foreign token can never be
+#     accepted here;
+#   * verified with the algorithm HARD-PINNED to HS256 -- never widened, never
+#     read from config -- which closes the classic RS256<->HS256 confusion.
+_SCOPED_ALG = "HS256"
+_SCOPED_TYP = "scoped-ticket"
+_SCOPED_ISS = "aaa-web"
+
+SCOPE_MEDIA = "media"
+SCOPE_STREAM = "stream"
+
+
+def issue_scoped_token(*, sub: str, scope: str, ttl: int, resource: dict[str, Any] | None = None) -> str:
+    """Mint a short-lived HS256 ticket bound to ``sub`` and ``scope``.
+
+    ``resource`` (e.g. ``{"task_id": ..., "summary_type": ...}``) further pins
+    the ticket to a single resource for SSE streams.
+    """
+    if not settings.JWT_SECRET:
+        raise BusinessError(ErrorCode.INTERNAL_SERVER_ERROR)
+    now = int(time.time())
+    claims: dict[str, Any] = {
+        "sub": sub,
+        "scope": scope,
+        "typ": _SCOPED_TYP,
+        "iss": _SCOPED_ISS,
+        "iat": now,
+        "exp": now + ttl,
+    }
+    if resource:
+        claims["resource"] = resource
+    return jwt.encode(claims, settings.JWT_SECRET, algorithm=_SCOPED_ALG)
+
+
+def verify_scoped_token(token: str) -> dict[str, Any]:
+    """Verify a scoped ticket and return its claims.
+
+    Raises ``BusinessError`` with ``AUTH_TOKEN_*`` on any failure. This NEVER
+    accepts an RS256 access JWT: the algorithm whitelist is pinned to HS256 and
+    the ``typ``/``iss`` markers are checked explicitly.
+    """
+    if not token:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
+    if not settings.JWT_SECRET:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
+    try:
+        claims: dict[str, Any] = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[_SCOPED_ALG],
+        )
+    except ExpiredSignatureError as exc:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_EXPIRED) from exc
+    except JWTError as exc:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID) from exc
+    if (
+        "exp" not in claims
+        or claims.get("typ") != _SCOPED_TYP
+        or claims.get("iss") != _SCOPED_ISS
+        or not claims.get("sub")
+        or not claims.get("scope")
+    ):
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
+    return claims
 
 
 def get_jwt_validator() -> JWTValidator:

@@ -20,12 +20,15 @@ from collections.abc import AsyncIterator
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from app.api.deps import CurrentUser, get_current_user_from_query
+from app.api.deps import CurrentUser, get_current_user, get_media_user
+from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.health_checker import HealthChecker
 from app.core.registry import ServiceRegistry
+from app.core.response import success
+from app.core.security import SCOPE_MEDIA, issue_scoped_token
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 
@@ -83,11 +86,23 @@ def _candidate_providers() -> list[str]:
     return ordered
 
 
+@router.post("/ticket")
+async def mint_media_ticket(
+    user: CurrentUser = Depends(get_current_user),
+) -> JSONResponse:
+    """签发短期 media 票据，供前端 <img>/<audio> 用 ?token= 访问媒体资源。
+
+    必须用 Authorization header 鉴权（不接受 ?token= 自举），票据仅绑定调用方用户。
+    """
+    token = issue_scoped_token(sub=user.id, scope=SCOPE_MEDIA, ttl=settings.MEDIA_TOKEN_TTL)
+    return success(data={"token": token, "expires_in": settings.MEDIA_TOKEN_TTL})
+
+
 @router.get("/{file_path:path}")
 async def stream_media(
     file_path: str,
     request: Request,
-    user: CurrentUser = Depends(get_current_user_from_query),
+    user: CurrentUser = Depends(get_media_user),
 ) -> StreamingResponse:
     """Stream a media file from whatever storage backend hosts it.
 

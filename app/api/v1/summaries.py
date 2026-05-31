@@ -10,12 +10,13 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, get_current_user_from_query, get_db
+from app.api.deps import CurrentUser, get_current_user, get_db, get_media_user, get_stream_user
 from app.api.v1.media import assert_owns_media_key
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.rate_limit import rate_limit, rate_limit_query
 from app.core.response import success
+from app.core.security import SCOPE_STREAM, issue_scoped_token
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
@@ -155,12 +156,37 @@ async def regenerate_summary(
     )
 
 
+@router.post("/{task_id}/stream-ticket")
+async def mint_stream_ticket(
+    task_id: str,
+    summary_type: str = Query(..., description="摘要类型"),
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> JSONResponse:
+    """签发短期 stream 票据（绑定 task_id+summary_type），供 EventSource 用 ?token= 订阅。
+
+    需 Authorization header 鉴权并校验任务归属；票据仅能用于该任务、该摘要类型的流。
+    """
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
+    if not task:
+        raise BusinessError(ErrorCode.TASK_NOT_FOUND)
+
+    token = issue_scoped_token(
+        sub=user.id,
+        scope=SCOPE_STREAM,
+        ttl=settings.MEDIA_TOKEN_TTL,
+        resource={"task_id": task_id, "summary_type": summary_type},
+    )
+    return success(data={"token": token, "expires_in": settings.MEDIA_TOKEN_TTL})
+
+
 @router.get("/{task_id}/stream")
 async def stream_summary_regeneration(
     task_id: str,
     summary_type: str = Query(..., description="摘要类型"),
     db: AsyncSession = Depends(get_db),
-    user: CurrentUser = Depends(get_current_user_from_query),
+    user: CurrentUser = Depends(get_stream_user),
 ) -> StreamingResponse:
 
     # Verify task belongs to user
@@ -523,8 +549,14 @@ async def stream_comparison(
     comparison_id: str,
     summary_type: str = Query(..., description="摘要类型"),
     db: AsyncSession = Depends(get_db),
-    user: CurrentUser = Depends(get_current_user_from_query),
-    _rl: None = Depends(rate_limit_query(limit=settings.RATE_LIMIT_SUMMARY_COMPARE_PER_MIN, scope="summary_compare")),
+    user: CurrentUser = Depends(get_stream_user),
+    _rl: None = Depends(
+        rate_limit_query(
+            limit=settings.RATE_LIMIT_SUMMARY_COMPARE_PER_MIN,
+            scope="summary_compare",
+            auth=get_stream_user,
+        )
+    ),
 ) -> StreamingResponse:
     """流式获取多模型对比结果
 
@@ -847,7 +879,7 @@ async def get_visual_summary(
 @router.get("/images/{path:path}")
 async def get_summary_image(
     path: str,
-    user: CurrentUser = Depends(get_current_user_from_query),
+    user: CurrentUser = Depends(get_media_user),
 ) -> Response:
     """获取摘要配图（直接代理返回图片内容）
 

@@ -8,7 +8,13 @@ from fastapi import Depends, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessError
-from app.core.security import extract_bearer_token, verify_access_token
+from app.core.security import (
+    SCOPE_MEDIA,
+    SCOPE_STREAM,
+    extract_bearer_token,
+    verify_access_token,
+    verify_scoped_token,
+)
 from app.db import get_db_session
 from app.i18n.codes import ErrorCode
 from app.models.user import UserProfile
@@ -85,4 +91,75 @@ async def get_current_user_from_query(
     if not token:
         raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
 
+    return await _resolve_user(db, token)
+
+
+def _scoped_user_or_none(
+    token: str, *, expected_scope: str, resource: dict[str, str] | None = None
+) -> CurrentUser | None:
+    """Authenticate a short-lived scoped ticket carried in ``?token=``.
+
+    Returns ``None`` when the token is NOT a (valid) scoped ticket, so the caller
+    can fall back to the legacy long-lived access JWT (Phase 1 dual-accept).
+    Raises ``AUTH_TOKEN_INVALID`` when it IS a valid ticket but fails
+    authorization (wrong scope, or bound to a different resource).
+    """
+    try:
+        claims = verify_scoped_token(token)
+    except BusinessError:
+        return None  # not our ticket -> let caller try the RS256 access JWT
+    if claims.get("scope") != expected_scope:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
+    if resource is not None and claims.get("resource") != resource:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
+    # Ticket-authenticated requests only ever need the owner id (ownership gates
+    # downstream); the ticket intentionally carries no email/scopes.
+    return CurrentUser(id=str(claims["sub"]), email="")
+
+
+async def get_media_user(
+    db: AsyncSession = Depends(get_db),
+    token: str | None = Query(default=None, description="access token or media ticket"),
+    authorization: str | None = Header(default=None),
+) -> CurrentUser:
+    """Auth for media proxy / image URLs.
+
+    Accepts (in order): Authorization header, a short-lived ``media`` ticket in
+    ``?token=``, or -- during the Phase 1 transition -- the legacy access JWT in
+    ``?token=``.
+    """
+    if authorization:
+        return await get_current_user(db, authorization)
+    if not token:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
+    user = _scoped_user_or_none(token, expected_scope=SCOPE_MEDIA)
+    if user is not None:
+        return user
+    return await _resolve_user(db, token)
+
+
+async def get_stream_user(
+    task_id: str,
+    summary_type: str = Query(..., description="摘要类型"),
+    db: AsyncSession = Depends(get_db),
+    token: str | None = Query(default=None, description="access token or stream ticket"),
+    authorization: str | None = Header(default=None),
+) -> CurrentUser:
+    """Auth for SSE summary streams.
+
+    A ``stream`` ticket additionally pins the request to a single
+    ``(task_id, summary_type)`` pair so it cannot be replayed against another
+    stream. Falls back to the legacy access JWT during Phase 1.
+    """
+    if authorization:
+        return await get_current_user(db, authorization)
+    if not token:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
+    user = _scoped_user_or_none(
+        token,
+        expected_scope=SCOPE_STREAM,
+        resource={"task_id": task_id, "summary_type": summary_type},
+    )
+    if user is not None:
+        return user
     return await _resolve_user(db, token)

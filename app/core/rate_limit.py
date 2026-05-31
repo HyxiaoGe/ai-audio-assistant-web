@@ -44,8 +44,21 @@ def rate_limit(*, limit: int, window_seconds: int = 60, scope: str) -> Callable[
     return _dep
 
 
-def rate_limit_query(*, limit: int, window_seconds: int = 60, scope: str) -> Callable[..., Awaitable[None]]:
-    async def _dep(user: CurrentUser = Depends(get_current_user_from_query)) -> None:
+def rate_limit_query(
+    *,
+    limit: int,
+    window_seconds: int = 60,
+    scope: str,
+    auth: Callable[..., Awaitable[CurrentUser]] = get_current_user_from_query,
+) -> Callable[..., Awaitable[None]]:
+    """按用户限流（用户从 query/header token 解析）。
+
+    ``auth`` 让调用方指定具体的鉴权依赖（如 SSE 端点传 ``get_stream_user`` 以接受
+    短期 stream 票据）；默认沿用 ``get_current_user_from_query``。FastAPI 会缓存同一
+    依赖的结果，故与端点主鉴权共用同一个 ``auth`` 时只解析一次。
+    """
+
+    async def _dep(user: CurrentUser = Depends(auth)) -> None:
         bucket = int(time.time() // window_seconds)
         await _check(f"rl:{scope}:{user.id}:{bucket}", limit, window_seconds)
 
