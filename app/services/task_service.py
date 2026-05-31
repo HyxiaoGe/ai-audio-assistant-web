@@ -200,9 +200,21 @@ class TaskService:
         SmartFactory.get_service 抛裸 ValueError 并白白触发 3 次 Celery 重试。
 
         - asr_provider：必须是已注册的 ASR 服务（修复管理员绕过校验的问题）
+        - asr_variant：必须是已知计费变体（file / file_fast），否则会漏到 worker 让 consume_quota
+          因 get_pricing_config 返回 None 而早抛 ValueError，免费额度周期分拆漏写、成本台账少记
         - provider（LLM）：必须是支持文本生成的 LLM 服务（排除 image_service 这类只生图的）
         """
         options = data.options.model_dump() if data.options else {}
+
+        asr_variant = options.get("asr_variant")
+        if asr_variant:
+            from app.services.asr_quota_service import KNOWN_VARIANTS
+
+            if asr_variant not in KNOWN_VARIANTS:
+                raise BusinessError(
+                    ErrorCode.PARAMETER_ERROR,
+                    reason=f"未知 asr_variant: {asr_variant}（可用: {KNOWN_VARIANTS}）",
+                )
 
         asr_provider = options.get("asr_provider")
         if asr_provider:
