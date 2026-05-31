@@ -449,6 +449,15 @@ class ConfigManager:
         owner_user_id = record.owner_user_id
         config_class = cls._schemas.get(service_type, {}).get(provider)
         if config_class is None:
+            # 无注册 schema：丢弃该 DB 配置行。API 写入路径有 validate_config_data 兜底，故通常
+            # 只会被孤儿/历史遗留行触发——影响低，但静默丢弃使配置漂移不可诊断。改为告警而非
+            # 静默 return（log-only，不改控制流、不写任何行）。
+            logger.warning(
+                "Skipping DB config %s/%s (owner=%s): no schema registered for this provider",
+                service_type,
+                provider,
+                owner_user_id,
+            )
             return
         config_data = dict(record.config or {})
         config_data["enabled"] = record.enabled
