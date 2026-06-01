@@ -110,15 +110,30 @@ async def test_media_endpoint_requires_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_media_dual_accept_falls_back_to_legacy_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_media_query_token_no_longer_accepts_legacy_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Phase 3：?token= 只接受 media 短票。即便 _resolve_user 能解析旧 RS256 access JWT，
+    # 媒体鉴权也不再走它 —— 非票据一律 401，且 _resolve_user 绝不被调用（回退路径已摘除）。
+    called = {"resolve": False}
+
     async def _fake_resolve(_db: Any, _token: str) -> CurrentUser:
+        called["resolve"] = True
         return CurrentUser(id="legacy-user", email="legacy@example.com")
 
     monkeypatch.setattr("app.api.deps._resolve_user", _fake_resolve)
     async with _client(_media_probe_app()) as client:
         resp = await client.get("/probe-media", params={"token": "a-legacy-rs256-jwt"})
-    assert resp.status_code == 200
-    assert resp.json()["id"] == "legacy-user"
+    assert resp.status_code == 401
+    assert called["resolve"] is False
+
+
+@pytest.mark.asyncio
+async def test_media_expired_ticket_reports_expired() -> None:
+    # Phase 3：过期票据能正确报 EXPIRED；Phase 1 的 JWT 回退会把它掩成 INVALID。
+    token = issue_scoped_token(sub="u1", scope="media", ttl=-10)
+    async with _client(_media_probe_app()) as client:
+        resp = await client.get("/probe-media", params={"token": token})
+    assert resp.status_code == 401
+    assert resp.json()["code"] == int(ErrorCode.AUTH_TOKEN_EXPIRED)
 
 
 # --------------------------------------------------------------------------- #
@@ -189,8 +204,12 @@ async def test_stream_endpoint_requires_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_dual_accept_falls_back_to_legacy_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stream_query_token_no_longer_accepts_legacy_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Phase 3：SSE 的 ?token= 只接受 stream 短票；旧 access JWT 即便可解析也不再被接受。
+    called = {"resolve": False}
+
     async def _fake_resolve(_db: Any, _token: str) -> CurrentUser:
+        called["resolve"] = True
         return CurrentUser(id="legacy-user", email="legacy@example.com")
 
     monkeypatch.setattr("app.api.deps._resolve_user", _fake_resolve)
@@ -198,8 +217,20 @@ async def test_stream_dual_accept_falls_back_to_legacy_jwt(monkeypatch: pytest.M
         resp = await client.get(
             "/probe-stream/t1/stream", params={"token": "a-legacy-rs256-jwt", "summary_type": "overview"}
         )
-    assert resp.status_code == 200
-    assert resp.json()["id"] == "legacy-user"
+    assert resp.status_code == 401
+    assert called["resolve"] is False
+
+
+@pytest.mark.asyncio
+async def test_stream_expired_ticket_reports_expired() -> None:
+    # Phase 3：过期 stream 票据能正确报 EXPIRED（不再被 JWT 回退掩成 INVALID）。
+    token = issue_scoped_token(
+        sub="u1", scope="stream", ttl=-10, resource={"task_id": "t1", "summary_type": "overview"}
+    )
+    async with _client(_stream_probe_app()) as client:
+        resp = await client.get("/probe-stream/t1/stream", params={"token": token, "summary_type": "overview"})
+    assert resp.status_code == 401
+    assert resp.json()["code"] == int(ErrorCode.AUTH_TOKEN_EXPIRED)
 
 
 # --------------------------------------------------------------------------- #

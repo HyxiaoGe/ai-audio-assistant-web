@@ -94,20 +94,19 @@ async def get_current_user_from_query(
     return await _resolve_user(db, token)
 
 
-def _scoped_user_or_none(
+def _scoped_user(
     token: str, *, expected_scope: str, resource: dict[str, str] | None = None
-) -> CurrentUser | None:
+) -> CurrentUser:
     """Authenticate a short-lived scoped ticket carried in ``?token=``.
 
-    Returns ``None`` when the token is NOT a (valid) scoped ticket, so the caller
-    can fall back to the legacy long-lived access JWT (Phase 1 dual-accept).
-    Raises ``AUTH_TOKEN_INVALID`` when it IS a valid ticket but fails
-    authorization (wrong scope, or bound to a different resource).
+    Raises ``AUTH_TOKEN_EXPIRED`` / ``AUTH_TOKEN_INVALID`` directly. The legacy
+    long-lived access JWT is NO LONGER accepted on ``?token=`` (Phase 3): media
+    and SSE URLs must carry a scoped ticket of the expected scope (and, when
+    given, bound to the expected resource). Because verification is no longer
+    swallowed into a fallback, an expired ticket now surfaces as EXPIRED rather
+    than being masked as INVALID.
     """
-    try:
-        claims = verify_scoped_token(token)
-    except BusinessError:
-        return None  # not our ticket -> let caller try the RS256 access JWT
+    claims = verify_scoped_token(token)
     if claims.get("scope") != expected_scope:
         raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
     if resource is not None and claims.get("resource") != resource:
@@ -119,47 +118,41 @@ def _scoped_user_or_none(
 
 async def get_media_user(
     db: AsyncSession = Depends(get_db),
-    token: str | None = Query(default=None, description="access token or media ticket"),
+    token: str | None = Query(default=None, description="media ticket"),
     authorization: str | None = Header(default=None),
 ) -> CurrentUser:
     """Auth for media proxy / image URLs.
 
-    Accepts (in order): Authorization header, a short-lived ``media`` ticket in
-    ``?token=``, or -- during the Phase 1 transition -- the legacy access JWT in
-    ``?token=``.
+    Accepts an Authorization header, or a short-lived ``media`` ticket in
+    ``?token=``. The legacy long-lived access JWT is no longer accepted on
+    ``?token=`` (Phase 3).
     """
     if authorization:
         return await get_current_user(db, authorization)
     if not token:
         raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
-    user = _scoped_user_or_none(token, expected_scope=SCOPE_MEDIA)
-    if user is not None:
-        return user
-    return await _resolve_user(db, token)
+    return _scoped_user(token, expected_scope=SCOPE_MEDIA)
 
 
 async def get_stream_user(
     task_id: str,
     summary_type: str = Query(..., description="摘要类型"),
     db: AsyncSession = Depends(get_db),
-    token: str | None = Query(default=None, description="access token or stream ticket"),
+    token: str | None = Query(default=None, description="stream ticket"),
     authorization: str | None = Header(default=None),
 ) -> CurrentUser:
     """Auth for SSE summary streams.
 
-    A ``stream`` ticket additionally pins the request to a single
-    ``(task_id, summary_type)`` pair so it cannot be replayed against another
-    stream. Falls back to the legacy access JWT during Phase 1.
+    A ``stream`` ticket pins the request to a single ``(task_id, summary_type)``
+    pair so it cannot be replayed against another stream. The legacy access JWT
+    is no longer accepted on ``?token=`` (Phase 3).
     """
     if authorization:
         return await get_current_user(db, authorization)
     if not token:
         raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
-    user = _scoped_user_or_none(
+    return _scoped_user(
         token,
         expected_scope=SCOPE_STREAM,
         resource={"task_id": task_id, "summary_type": summary_type},
     )
-    if user is not None:
-        return user
-    return await _resolve_user(db, token)
