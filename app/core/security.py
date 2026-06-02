@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -9,10 +10,18 @@ from jose.exceptions import ExpiredSignatureError, JWTError
 
 from app.config import settings
 from app.core.exceptions import BusinessError
+from app.core.redis import get_redis_client
 from app.i18n.codes import ErrorCode
+
+logger = logging.getLogger(__name__)
 
 # Singleton JWTValidator instance
 _validator: JWTValidator | None = None
+
+# Single Logout: auth-service writes ``revoked_user:{sub}`` = logout instant into the SHARED
+# Redis (the same instance audio-web already uses). We reject any access token whose ``iat``
+# predates that marker -- see auth-service docs/AUTH_CONTRACT.md for the cross-app contract.
+USER_REVOKED_PREFIX = "revoked_user:"
 
 # --- Self-signed scoped tickets (media/SSE URLs) ----------------------------
 # These short-lived tickets are handed to the browser so that <img>/<audio>/
@@ -106,14 +115,43 @@ def extract_bearer_token(authorization: str | None) -> str:
     return token
 
 
+async def _is_user_access_revoked(sub: str, token_iat: float | int | None) -> bool:
+    """True iff the user's Single-Logout marker post-dates this token's ``iat``.
+
+    Mirrors auth-service's check (AUTH_CONTRACT.md): the marker is a float wall-clock instant
+    while a JWT ``iat`` is integer epoch seconds, so strict ``<`` deliberately over-revokes --
+    every token minted before the logout is rejected, and a re-login (which takes several OAuth
+    round-trips) lands in a later second and survives.
+
+    FAILS OPEN: this runs on every authenticated request, so a shared-Redis blip must not 500
+    the whole API -- we log and treat the token as not-revoked, degrading the revocation lag to
+    the token's own <=15-min expiry until Redis recovers.
+    """
+    if not sub or token_iat is None:
+        return False
+    try:
+        raw = await get_redis_client().get(f"{USER_REVOKED_PREFIX}{sub}")
+    except Exception:
+        logger.warning("SLO revocation check unavailable (Redis); failing open", exc_info=True)
+        return False
+    if raw is None:
+        return False
+    return float(token_iat) < float(raw)
+
+
 async def verify_access_token(token: str) -> AuthenticatedUser:
     if not token:
         raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
     validator = get_jwt_validator()
     try:
-        return await validator.verify_async(token)
+        user = await validator.verify_async(token)
     except Exception as exc:
         error_msg = str(exc).lower()
         if "expired" in error_msg:
             raise BusinessError(ErrorCode.AUTH_TOKEN_EXPIRED) from exc
         raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID) from exc
+    # Single Logout: the signature above is still valid after a foreign logout, so consult the
+    # shared-Redis marker and reject an access token issued before this user's last logout.
+    if await _is_user_access_revoked(user.sub, user.raw_payload.get("iat")):
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
+    return user
