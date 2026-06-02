@@ -45,7 +45,7 @@ with open("pyproject.toml", "rb") as f:
 
 GIT_DEPS = {
     "prompthub-sdk": "prompthub-sdk @ git+https://github.com/HyxiaoGe/prompthub.git@master#subdirectory=sdk",
-    "auth-client": "auth-client[fastapi] @ git+https://github.com/HyxiaoGe/auth-service.git@main#subdirectory=auth-client",
+    "auth-client": "auth-client[fastapi] @ git+https://github.com/HyxiaoGe/auth-service.git@auth-client-v0.2.0#subdirectory=auth-client",
 }
 
 requirements = data["project"]["dependencies"]
