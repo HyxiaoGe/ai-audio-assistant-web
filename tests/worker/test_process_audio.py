@@ -426,9 +426,7 @@ async def test_enforce_size_limit_head_error_fails_open(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit", [None, 0])
-async def test_enforce_size_limit_disabled_skips_head(
-    monkeypatch: pytest.MonkeyPatch, limit: int | None
-) -> None:
+async def test_enforce_size_limit_disabled_skips_head(monkeypatch: pytest.MonkeyPatch, limit: int | None) -> None:
     monkeypatch.setattr(process_audio.settings, "UPLOAD_MAX_SIZE_BYTES", limit, raising=False)
     fake = _FakeSizeStorage(size=10**9)
     await process_audio._enforce_object_size_limit(fake, "k")
@@ -750,11 +748,7 @@ async def test_process_audio_progress_envelope_has_task_progress_kind(
     task = _build_task("upload", None, _UPLOAD_KEY)
     session = _FakeSession(task)
     asr = _FakeASRService(
-        segments=[
-            TranscriptSegment(
-                speaker_id="1", start_time=0.0, end_time=1.0, content="hello", confidence=0.9
-            )
-        ]
+        segments=[TranscriptSegment(speaker_id="1", start_time=0.0, end_time=1.0, content="hello", confidence=0.9)]
     )
     llm = _FakeLLMService()
     storage = _FakeStorageService()
@@ -765,16 +759,12 @@ async def test_process_audio_progress_envelope_has_task_progress_kind(
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *a, **k: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *a, **k: storage)
     monkeypatch.setattr(process_audio, "publish_message", capture)
-    monkeypatch.setattr(
-        process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries
-    )
+    monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
     monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
 
     from app.services import asr_free_quota_service
 
-    monkeypatch.setattr(
-        asr_free_quota_service.AsrFreeQuotaService, "consume_quota", _fake_consume_quota
-    )
+    monkeypatch.setattr(asr_free_quota_service.AsrFreeQuotaService, "consume_quota", _fake_consume_quota)
 
     await process_audio._process_task(task.id, "req-1")
 
