@@ -183,3 +183,33 @@ def test_process_youtube_failure_envelope_has_task_progress_kind(
     assert task.status == "failed"
     assert capture.messages, "expected a failure progress message"
     assert json.loads(capture.messages[-1])["kind"] == "task_progress"
+
+
+def test_process_youtube_completed_calls_notify_task_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """YouTube 任务完成改调 NotificationService.notify(TASK_COMPLETED)。"""
+    from app.services.notifications.types import NotificationType
+
+    task = _task()  # duration_seconds=120.0, title="demo"
+    calls: list[dict[str, Any]] = []
+
+    def _spy_notify(sess: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(process_youtube.NotificationService, "notify", staticmethod(_spy_notify))
+    monkeypatch.setattr(process_youtube, "publish_task_update_sync", lambda *a, **k: None)
+
+    class _Sess:
+        def commit(self) -> None:
+            return None
+
+    process_youtube._update_task(_Sess(), task, "completed", 100, "completed", "req-1")
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["type"] == NotificationType.TASK_COMPLETED
+    assert kwargs["user_id"] == str(task.user_id)
+    assert kwargs["task_id"] == str(task.id)
+    assert kwargs["params"]["task_title"] == "demo"
+    assert kwargs["params"]["duration"] == 120.0
