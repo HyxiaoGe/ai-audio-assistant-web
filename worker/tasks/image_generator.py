@@ -17,12 +17,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy.orm.attributes import flag_modified
+
 from app.core.smart_factory import SmartFactory
+from app.models.summary import Summary
 from app.models.task import Task
 from app.prompts.manager import get_prompt_manager
 from app.services.notifications.service import NotificationService
 from app.services.notifications.types import NotificationType
 from worker.db import get_sync_db_session
+from worker.redis_client import publish_user_notification_sync
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +259,123 @@ def _insert_article_image_placeholder(content: str, placeholder: str) -> str:
         return f"{blocks[0]}{blocks[1]}{placeholder}\n\n{blocks[2]}"
 
     return f"{placeholder}\n\n{stripped}"
+
+
+def _alt_from_placeholder(placeholder: str) -> str:
+    """从占位符提取描述作为 alt，与 replace_placeholders 的取描述口径一致。
+
+    新格式 {{IMAGE: 类型 | 描述 | 关键文字}} -> 取「描述」；旧格式 {{IMAGE: 描述}} -> 取「描述」。
+    """
+    cleaned = placeholder.replace("{{IMAGE:", "").replace("}}", "")
+    cleaned = cleaned.replace("{IMAGE:", "").replace("}", "")
+    if "|" in cleaned:
+        parts = cleaned.split("|")
+        return parts[1].strip() if len(parts) >= 2 else parts[0].strip()
+    return cleaned.strip()
+
+
+def build_image_specs(content: str, content_style: str | None) -> tuple[str, list[dict[str, object]]]:
+    """规划 overview 配图占位符并返回 pending 状态的图集（不生成图片）。
+
+    复用 extract_image_placeholders / _build_default_article_image_placeholder 的规划逻辑：
+    - content 已含 {{IMAGE:…}} 占位符：原样保留 content，按占位符建 specs；
+    - content 无占位符：自动规划一张默认文章配图并把占位符插入 content（作为锚点），
+      返回插入后的 content（供调用方写回 Summary.content，保留锚点不被覆盖）。
+
+    返回 (content, specs)。specs 每项严格对齐跨仓契约：
+      {"placeholder","status":"pending","url":None,"alt","model_id":None,"error":None}
+    """
+    placeholders = extract_image_placeholders(content)
+    if not placeholders:
+        default_placeholder = _build_default_article_image_placeholder(content, content_style)
+        if default_placeholder is None:
+            return content, []
+        content = _insert_article_image_placeholder(content, default_placeholder["placeholder"])
+        placeholders = [default_placeholder]
+
+    specs: list[dict[str, object]] = []
+    for p in placeholders:
+        ph = p["placeholder"]
+        specs.append(
+            {
+                "placeholder": ph,
+                "status": "pending",
+                "url": None,
+                "alt": p.get("description") or _alt_from_placeholder(ph),
+                "model_id": None,
+                "error": None,
+            }
+        )
+    return content, specs
+
+
+def apply_image_result_to_summary(
+    session: Any,
+    summary_id: str,
+    result: dict[str, Any],
+) -> dict[str, object] | None:
+    """把单张图片生成结果回写到 Summary.images 对应项（按 placeholder 匹配）。
+
+    result 形如 generate_single_image 的返回：
+      {"placeholder","url","status"("success"|"failed"),"model_id","error"?}
+    回写后该项 status 归一为 "ready"|"failed"。返回更新后的 images 项；占位符不存在返回 None。
+    JSONB 就地改子项后须 flag_modified 才会被 SQLAlchemy 检测并 UPDATE。
+    """
+    summary = session.query(Summary).filter(Summary.id == summary_id).first()
+    if summary is None or not summary.images:
+        return None
+    placeholder = result.get("placeholder")
+    target: dict[str, object] | None = None
+    for item in summary.images:
+        if item.get("placeholder") == placeholder:
+            target = item
+            break
+    if target is None:
+        return None
+    if result.get("status") == "success" and result.get("url"):
+        target["status"] = "ready"
+        target["url"] = result.get("url")
+        target["error"] = None
+    else:
+        target["status"] = "failed"
+        target["url"] = None
+        target["error"] = result.get("error") or "image generation failed"
+    if result.get("model_id"):
+        target["model_id"] = result.get("model_id")
+    flag_modified(summary, "images")
+    session.commit()
+    return target
+
+
+def publish_image_ready_global(
+    *,
+    user_id: str,
+    task_id: str,
+    summary_id: str,
+    placeholder: str,
+    status: str,
+    url: str | None,
+    model_id: str | None,
+    summary_type: str = "overview",
+) -> None:
+    """发 image_ready 事件到全局 WS user:{uid}:updates（方案 A，跨仓契约信封）。
+
+    best-effort：发布失败只记日志，绝不冒泡（图主流程不受影响）。
+    """
+    envelope = {
+        "kind": "image_ready",
+        "task_id": task_id,
+        "summary_id": summary_id,
+        "summary_type": summary_type,
+        "placeholder": placeholder,
+        "status": status,
+        "url": url,
+        "model_id": model_id,
+    }
+    try:
+        publish_user_notification_sync(user_id, json.dumps(envelope, ensure_ascii=False))
+    except Exception:
+        logger.warning("Task %s: publish image_ready to global WS failed, suppressed", task_id, exc_info=True)
 
 
 async def upload_image(
