@@ -41,21 +41,18 @@ def publish_message_sync(channel: str, message: str) -> None:
 
 def publish_task_update_sync(task_id: str, user_id: str, message: str) -> None:
     """
-    Publish task update to both task-specific and user-global channels.
+    Publish task update to the user's global channel.
 
-    This ensures:
-    1. Legacy single-task WebSocket clients (/ws/tasks/{id}) receive updates
-    2. Global WebSocket clients (/ws/user) receive updates for all their tasks
+    Task-progress is delivered solely through the single user channel
+    (legacy /ws/tasks/{id} and the tasks:{id} dual-publish were retired);
+    the task_id arg is kept for call-site compatibility.
 
     Args:
-        task_id: Task ID for task-specific channel
-        user_id: User ID for user-global channel
-        message: JSON message to publish
+        task_id: Task ID (no longer used for a separate channel).
+        user_id: User ID for user-global channel.
+        message: JSON message to publish.
     """
     client = get_sync_redis_client()
-    # Publish to task-specific channel (legacy support)
-    client.publish(f"tasks:{task_id}", message)
-    # Publish to user-global channel (new global WebSocket)
     client.publish(f"user:{user_id}:updates", message)
 
 
