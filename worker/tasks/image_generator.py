@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.smart_factory import SmartFactory
+from app.models.task import Task
 from app.prompts.manager import get_prompt_manager
 from app.services.notifications.service import NotificationService
 from app.services.notifications.types import NotificationType
@@ -658,11 +659,19 @@ async def process_summary_images(
     if image_results and not any(r.get("status") == "success" for r in image_results):
         try:
             with get_sync_db_session() as notif_session:
+                # 边缘渲染契约：notif.visual_failed 文案含 {task_title} 占位符，必须随 params 提供，
+                # 否则前端/渠道会渲染出字面 {task_title}。本生产者作用域无 task 对象，就地查标题；
+                # 查询失败回退默认名，绝不阻断通知本身。
+                try:
+                    task_obj = notif_session.query(Task).filter(Task.id == task_id).first()
+                    task_title = (task_obj.title if task_obj else None) or "未命名任务"
+                except Exception:
+                    task_title = "未命名任务"
                 NotificationService.notify(
                     notif_session,
                     type=NotificationType.VISUAL_FAILED,
                     user_id=user_id,
-                    params={"summary_type": summary_type},
+                    params={"summary_type": summary_type, "task_title": task_title},
                     task_id=task_id,
                 )
         except Exception:  # best-effort：配图通知失败绝不影响摘要主流程

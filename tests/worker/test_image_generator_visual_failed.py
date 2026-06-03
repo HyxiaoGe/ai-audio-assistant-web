@@ -65,6 +65,10 @@ async def test_all_images_failed_emits_visual_failed(monkeypatch: pytest.MonkeyP
     assert calls[0]["type"] == NotificationType.VISUAL_FAILED
     assert calls[0]["user_id"] == "user-1"
     assert calls[0]["task_id"] == "t1"
+    # 边缘渲染契约：notif.visual_failed 文案含 {task_title}，params 必须带该键，
+    # 否则前端/渠道渲染出字面 {task_title}（此处 stub session 取标题失败回退默认名）。
+    assert calls[0]["params"]["summary_type"] == "overview"
+    assert "task_title" in calls[0]["params"]
 
 
 @pytest.mark.asyncio
