@@ -156,11 +156,21 @@ def test_process_youtube_failure_envelope_has_task_progress_kind(
 ) -> None:
     import json
 
+    import app.models.notification as notif_module
     from app.core.exceptions import BusinessError
     from app.i18n.codes import ErrorCode
 
     capture = _CaptureSyncPublish()
     monkeypatch.setattr(process_youtube, "publish_task_update_sync", capture)
+
+    # Phase 4 will migrate _mark_failed to use NotificationService.
+    # For now, patch Notification so the pre-existing action= kwarg issue doesn't
+    # prevent the publish from being reached (same issue as process_audio's red tests).
+    class _FakeNotification:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+    monkeypatch.setattr(notif_module, "Notification", _FakeNotification)
 
     task = _task()
     session = _FakeCommitSession()
