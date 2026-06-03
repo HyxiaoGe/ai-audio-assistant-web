@@ -55,10 +55,13 @@ def _csql(stmt: Any) -> str:
 
 
 class _FakeResult:
-    def __init__(self, *, scalar: int | None = None, rows: list[Any] | None = None, one: Any = "__missing__") -> None:
+    def __init__(
+        self, *, scalar: int | None = None, rows: list[Any] | None = None, one: Any = "__missing__", rowcount: int = -1
+    ) -> None:
         self._scalar = scalar
         self._rows = rows or []
         self._one = one
+        self.rowcount = rowcount  # 模拟真实 CursorResult.rowcount（UPDATE 受影响行数）
 
     def scalar_one_or_none(self) -> Any:
         return None if self._one == "__missing__" else self._one
@@ -99,8 +102,7 @@ class _FakeSession:
                 if n.read_at is None:
                     n.read_at = datetime.now(UTC)
                     affected += 1
-            self._last_affected = affected
-            return _FakeResult()
+            return _FakeResult(rowcount=affected)
         sql = _csql(stmt)
         # count 查询：列名为 'count'
         first_col = stmt.column_descriptions[0].get("name")

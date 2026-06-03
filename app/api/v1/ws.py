@@ -115,7 +115,8 @@ async def _forward_pubsub(websocket: WebSocket, user_id: str) -> None:
     其 get_message 阻塞，故放进 asyncio.to_thread 以免阻塞事件循环。
     """
     pubsub = get_event_bus().subscribe(user_id)
-    last_ping = 0.0
+    # 从当前时刻起算，首个心跳在 +HEARTBEAT_INTERVAL_SECONDS 后发，避免连上即多发一次 ping。
+    last_ping = asyncio.get_running_loop().time()
     try:
         while True:
             message = await asyncio.to_thread(pubsub.get_message, ignore_subscribe_messages=True, timeout=1.0)
@@ -125,7 +126,7 @@ async def _forward_pubsub(websocket: WebSocket, user_id: str) -> None:
                     data = data.decode("utf-8")
                 if isinstance(data, str):
                     await websocket.send_text(data)
-            now = asyncio.get_event_loop().time()
+            now = asyncio.get_running_loop().time()
             if now - last_ping >= HEARTBEAT_INTERVAL_SECONDS:
                 await websocket.send_text(json.dumps({"kind": "ping"}))
                 last_ping = now
@@ -171,5 +172,6 @@ async def user_updates(websocket: WebSocket) -> None:
         pass
     finally:
         forward_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        # 客户端断开时 forwarder 的 send_text 可能先抛 WebSocketDisconnect；连同取消一并吞掉，避免正常断连刷错误日志。
+        with contextlib.suppress(asyncio.CancelledError, WebSocketDisconnect):
             await forward_task

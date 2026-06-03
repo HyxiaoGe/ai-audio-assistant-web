@@ -83,3 +83,4 @@ async def test_forward_pubsub_subscribes_via_bus_and_forwards(monkeypatch) -> No
     assert bus.subscribed_user == "u1"
     assert '{"kind":"notification","data":{"id":"n1"}}' in ws.sent
     assert pubsub.unsubscribed is True
+    assert pubsub.closed is True

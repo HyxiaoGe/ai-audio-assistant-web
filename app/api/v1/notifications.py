@@ -97,9 +97,10 @@ async def mark_all_read(
     )
     result = await db.execute(stmt)
     await db.commit()
-    affected = getattr(result, "rowcount", None)
+    # asyncpg 单条 UPDATE 的 rowcount 即实际受影响行数；-1 是「不支持」哨兵，兜底 0。
+    affected = getattr(result, "rowcount", -1)
     if affected is None or affected < 0:
-        affected = getattr(db, "_last_affected", 0)
+        affected = 0
     return success(data={"affected": int(affected), "unread": 0})
 
 
