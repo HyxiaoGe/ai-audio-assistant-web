@@ -41,3 +41,72 @@ def test_backfill_sql_case_covers_all_rules() -> None:
     assert "when category = 'task' and action = 'failed' then 'task_failed'" in sql
     # 兜底 ELSE
     assert "else 'task_completed'" in sql
+
+
+import subprocess
+
+_ENV = {
+    "DATABASE_URL": "postgresql+asyncpg://u:p@localhost/db",
+    "REDIS_URL": "redis://localhost:6379/0",
+}
+
+def _alembic_sql(direction: str, rev_range: str) -> str:
+    import os
+    import sys
+
+    env = {**os.environ, **_ENV}
+    out = subprocess.run(
+        [sys.executable, "-m", "alembic", direction, rev_range, "--sql"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert out.returncode == 0, out.stderr
+    return out.stdout.lower()
+
+def test_upgrade_sql_emits_expected_ddl() -> None:
+    sql = _alembic_sql("upgrade", "e8f9a0b1c2d3:9a1b2c3d4e5f")
+
+    # 加列
+    assert "alter table notifications add column type" in sql
+    assert "alter table notifications add column dedup_key" in sql
+    # 回填 UPDATE 含 CASE 兜底
+    assert "update notifications set type" in sql
+    assert "else 'task_completed' end" in sql
+    # type 置 NOT NULL
+    assert "alter column type set not null" in sql
+    # dedup_key 部分唯一索引
+    assert "create unique index ix_notifications_dedup_key" in sql
+    assert "where dedup_key is not null" in sql
+    # 重建未读索引：去掉 dismissed 条件
+    assert "drop index ix_notifications_unread" in sql
+    assert "create index ix_notifications_unread" in sql
+    # 删 cleanup 索引
+    assert "drop index ix_notifications_cleanup" in sql
+    # title/message 改可空
+    assert "alter column title drop not null" in sql
+    assert "alter column message drop not null" in sql
+    # 删旧列
+    assert "drop column action" in sql
+    assert "drop column dismissed_at" in sql
+    assert "drop column expires_at" in sql
+    # FK 改 CASCADE
+    assert "drop constraint notifications_task_id_fkey" in sql
+    assert "on delete cascade" in sql
+
+def test_downgrade_sql_reverses_changes() -> None:
+    sql = _alembic_sql("downgrade", "9a1b2c3d4e5f:e8f9a0b1c2d3")
+
+    # 还原列
+    assert "drop column type" in sql
+    assert "drop column dedup_key" in sql
+    # 还原被删列
+    assert "add column action" in sql
+    assert "add column dismissed_at" in sql
+    assert "add column expires_at" in sql
+    # FK 还原 SET NULL
+    assert "on delete set null" in sql
+    # 还原 cleanup 索引
+    assert "create index ix_notifications_cleanup" in sql
+    # 还原 dedup 唯一索引被删
+    assert "drop index ix_notifications_dedup_key" in sql
