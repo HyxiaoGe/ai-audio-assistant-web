@@ -86,7 +86,8 @@ class _FakeSession:
         if "read_at is null" in sql:
             rows = [n for n in rows if n.read_at is None]
         if "category =" in sql:
-            cat = sql.split("category =")[1].strip().split()[0].strip("'")
+            # strip 既去引号也去 count 子查询包裹残留的右括号：`'system')` -> `system`
+            cat = sql.split("category =")[1].strip().split()[0].strip("')")
             rows = [n for n in rows if n.category == cat]
         return len(rows)
 
@@ -118,7 +119,8 @@ class _FakeSession:
         if "read_at is null" in sql:
             rows = [n for n in rows if n.read_at is None]
         if "category =" in sql:
-            cat = sql.split("category =")[1].strip().split()[0].strip("'")
+            # strip 既去引号也去 count 子查询包裹残留的右括号：`'system')` -> `system`
+            cat = sql.split("category =")[1].strip().split()[0].strip("')")
             rows = [n for n in rows if n.category == cat]
         rows.sort(key=lambda n: n.created_at, reverse=True)
         return _FakeResult(rows=rows)
