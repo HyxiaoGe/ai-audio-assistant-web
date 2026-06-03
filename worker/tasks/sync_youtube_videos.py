@@ -20,6 +20,8 @@ from app.config import settings
 from app.models.account import Account
 from app.models.youtube_subscription import YouTubeSubscription
 from app.models.youtube_video import YouTubeVideo
+from app.services.notifications.service import NotificationService
+from app.services.notifications.types import NotificationType
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_user_notification_sync
 
@@ -221,23 +223,16 @@ def sync_channel_videos(
                             session.commit()
                             logger.warning(f"Marked account for user {user_id} as needs_reauth=True")
 
-                            # Send WebSocket notification to frontend (only once)
-                            import json
+                            # reauth 升为持久化通知：notify 落库+推送；dedup_key 限每用户每天一条。
+                            from datetime import datetime
 
-                            notification = json.dumps(
-                                {
-                                    "code": 0,
-                                    "message": "success",
-                                    "data": {
-                                        "type": "youtube_reauth_required",
-                                        "reason": "refresh_token_expired",
-                                        "message": "YouTube authorization has expired. Please reconnect your account.",
-                                    },
-                                    "traceId": request_id or "",
-                                },
-                                ensure_ascii=False,
+                            NotificationService.notify(
+                                session,
+                                type=NotificationType.YOUTUBE_REAUTH_REQUIRED,
+                                user_id=user_id,
+                                params={"reason": "refresh_token_expired"},
+                                dedup_key=f"reauth:{user_id}:{datetime.now(UTC).date().isoformat()}",
                             )
-                            publish_user_notification_sync(user_id, notification)
 
                     return {
                         "status": "error",
