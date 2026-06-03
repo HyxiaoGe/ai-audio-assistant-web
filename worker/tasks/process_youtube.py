@@ -592,6 +592,7 @@ def _update_task(
 
     message = json.dumps(
         {
+            "kind": "task_progress",
             "code": 0,
             "message": "成功",
             "data": message_data,
@@ -644,6 +645,7 @@ def _mark_failed(session: Session, task: Task, error: BusinessError, request_id:
         trace_id = request_id or uuid4().hex
         message = json.dumps(
             {
+                "kind": "task_progress",
                 "code": error.code.value,
                 "message": str(error),
                 "data": {

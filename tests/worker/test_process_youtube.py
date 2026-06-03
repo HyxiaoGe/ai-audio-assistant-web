@@ -107,3 +107,67 @@ def test_finalize_existing_cost_sync_tolerates_provider_lookup_failure(
     assert finalize_calls[0]["asr_service"] is None  # fell back; lookup failure swallowed
     assert finalize_calls[0]["provider_name"] == "volcengine"  # cost keyed off the claim
     assert finalize_calls[0]["claim_row"] is claim  # finalized in place, no duplicate row
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2: kind="task_progress" 信封标签断言
+# --------------------------------------------------------------------------- #
+class _CaptureSyncPublish:
+    """捕获 process_youtube.publish_task_update_sync 的 message 以断言信封 kind。"""
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def __call__(self, task_id: str, user_id: str, message: str) -> None:
+        self.messages.append(message)
+
+
+class _FakeCommitSession:
+    """最小同步 Session 替身：commit/add 均为空操作，不依赖真实 DB。"""
+
+    def commit(self) -> None:
+        pass
+
+    def add(self, item: Any) -> None:
+        pass
+
+
+def test_process_youtube_progress_envelope_has_task_progress_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    capture = _CaptureSyncPublish()
+    monkeypatch.setattr(process_youtube, "publish_task_update_sync", capture)
+
+    task = _task()
+    session = _FakeCommitSession()
+
+    # _update_task は同期関数、直接呼び出せる（no asyncio needed）
+    process_youtube._update_task(session, task, "transcribing", 50, "transcribing", None)
+
+    assert capture.messages, "expected at least one published progress message"
+    for raw in capture.messages:
+        assert json.loads(raw)["kind"] == "task_progress"
+
+
+def test_process_youtube_failure_envelope_has_task_progress_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    from app.core.exceptions import BusinessError
+    from app.i18n.codes import ErrorCode
+
+    capture = _CaptureSyncPublish()
+    monkeypatch.setattr(process_youtube, "publish_task_update_sync", capture)
+
+    task = _task()
+    session = _FakeCommitSession()
+    error = BusinessError(ErrorCode.ASR_SERVICE_FAILED)
+
+    process_youtube._mark_failed(session, task, error, None)
+
+    assert task.status == "failed"
+    assert capture.messages, "expected a failure progress message"
+    assert json.loads(capture.messages[-1])["kind"] == "task_progress"
