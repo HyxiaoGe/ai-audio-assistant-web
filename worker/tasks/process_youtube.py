@@ -44,9 +44,8 @@ from worker.redis_client import publish_task_update_sync
 from worker.stage_manager import StageManager
 from worker.tasks.asr_idempotency import AsrRetryAction, decide_asr_action
 from worker.tasks.image_generator import (
-    extract_image_placeholders,
+    build_image_specs,
     is_auto_images_enabled,
-    process_summary_images,
 )
 
 logger = logging.getLogger("worker.process_youtube")
@@ -648,6 +647,55 @@ def _mark_failed(session: Session, task: Task, error: BusinessError, request_id:
             exc,
             exc_info=True,
         )
+
+
+def _init_overview_images(summary: Summary, content_style: str | None) -> bool:
+    """为 overview summary 初始化 images=[{status:"pending"}…] 并保留 content 占位锚点。
+
+    复用 build_image_specs：若摘要无 {{IMAGE:…}} 占位符，会规划默认占位符并写回 summary.content。
+    返回是否产生了图集（True 表示需后续异步生图）。非 overview / 未启用自动配图 / 无可规划占位符 -> False。
+    """
+    if summary.summary_type != "overview":
+        return False
+    if not is_auto_images_enabled("overview", content_style):
+        return False
+    new_content, specs = build_image_specs(summary.content, content_style)
+    if not specs:
+        return False
+    summary.content = new_content  # 保留 {{IMAGE:…}} 锚点（默认占位符已插入）
+    summary.images = specs
+    return True
+
+
+def _enqueue_summary_images(
+    *,
+    task_id: str,
+    user_id: str,
+    summaries: list[Summary],
+    content_style: str | None,
+) -> None:
+    """completed 之后异步触发 overview 配图任务（每个有 pending images 的 overview 一个任务）。
+
+    best-effort：入队失败只记日志，绝不影响已 completed 的任务。
+    """
+    for summary in summaries:
+        if summary.summary_type != "overview" or not summary.images:
+            continue
+        if not any(item.get("status") == "pending" for item in summary.images):
+            continue
+        try:
+            celery_app.send_task(
+                "worker.tasks.generate_summary_images_async",
+                kwargs={
+                    "task_id": task_id,
+                    "user_id": user_id,
+                    "summary_id": str(summary.id),
+                    "content": summary.content,
+                    "content_style": content_style,
+                },
+            )
+        except Exception:
+            logger.warning("Task %s: enqueue async summary images failed, suppressed", task_id, exc_info=True)
 
 
 def _process_youtube(
@@ -1444,67 +1492,23 @@ def _process_youtube(
                     session.add_all(llm_usages)
                 session.commit()
 
-                # ========== 处理 overview 摘要的图片 ==========
+                # ========== 初始化 overview 摘要的配图状态（不生图、不阻塞 completed）==========
+                # 渐进式展示：摘要文字此刻已落库；overview 配图改为 images=[{status:"pending"}…]，
+                # content 永久保留 {{IMAGE:…}} 占位锚点（不再被 replace_placeholders 覆盖）。
+                # 真正生图推迟到 completed 之后的异步段（见文末 _enqueue_summary_images）。
+                images_initialized = False
                 for summary in summaries:
-                    if summary.summary_type == "overview" and is_auto_images_enabled("overview", content_style):
-                        placeholders = extract_image_placeholders(summary.content)
-                        if placeholders:
-                            logger.info(
-                                "Task %s: Found %d image placeholders in overview summary",
-                                task_id,
-                                len(placeholders),
-                                extra={"task_id": task_id, "placeholder_count": len(placeholders)},
-                            )
-                        else:
-                            logger.info(
-                                "Task %s: No image placeholders in overview; planning default article image",
-                                task_id,
-                                extra={"task_id": task_id},
-                            )
-                        try:
-                            final_content, image_results = asyncio.run(
-                                process_summary_images(
-                                    content=summary.content,
-                                    task_id=str(task.id),
-                                    user_id=str(task.user_id),
-                                    summary_type="overview",
-                                    content_style=content_style,
-                                )
-                            )
-                            if image_results:
-                                success_count = sum(1 for r in image_results if r["status"] == "success")
-                                logger.info(
-                                    "Task %s: Generated %d/%d images for overview summary",
-                                    task_id,
-                                    success_count,
-                                    len(image_results),
-                                    extra={
-                                        "task_id": task_id,
-                                        "success_count": success_count,
-                                        "total_count": len(image_results),
-                                    },
-                                )
-                                # 提取图片模型名
-                                image_model = next(
-                                    (
-                                        r["model_id"]
-                                        for r in image_results
-                                        if r.get("status") == "success" and r.get("model_id")
-                                    ),
-                                    None,
-                                )
-                                # 更新摘要内容和图片模型
-                                summary.content = final_content
-                                if image_model:
-                                    summary.image_model_used = image_model
-                                session.commit()
-                        except Exception as img_err:
-                            logger.warning(
-                                "Task %s: Image processing failed: %s",
-                                task_id,
-                                img_err,
-                                extra={"task_id": task_id, "error": str(img_err)},
-                            )
+                    try:
+                        if _init_overview_images(summary, content_style):
+                            images_initialized = True
+                    except Exception:
+                        logger.warning(
+                            "Task %s: init overview images failed for one summary, suppressed",
+                            task_id,
+                            exc_info=True,
+                        )
+                if images_initialized:
+                    session.commit()
 
                 stage_manager.complete_stage(session, StageType.SUMMARIZE, {"summary_count": len(summaries)})
                 logger.info(
@@ -1513,18 +1517,24 @@ def _process_youtube(
                     extra={"task_id": task_id, "summary_count": len(summaries)},
                 )
         except Exception as exc:
-            logger.exception("Summarization failed: %s", exc)
+            # 渐进式展示 §C：摘要文字失败不再连带整任务 failed（否则会藏掉已好的转写）。
+            # 标记 SUMMARIZE 阶段失败用于诊断/前端摘要区局部报错，但不 _mark_failed、不 return：
+            # 任务仍按 completed 收尾，转写正常展示。转写失败才是 task failed（见上方 TRANSCRIBE except）。
+            logger.error(
+                "Task %s: Summarization failed but keeping task completed (transcript preserved): %s",
+                task_id,
+                exc,
+                exc_info=True,
+                extra={"task_id": task_id},
+            )
             with get_sync_db_session() as session:
                 task = _get_task(session, task_id)
                 if task is not None:
                     if isinstance(exc, BusinessError):
                         stage_manager.fail_stage(session, StageType.SUMMARIZE, exc.code, str(exc))
-                        _mark_failed(session, task, exc, request_id)
                     else:
                         error = BusinessError(ErrorCode.LLM_SERVICE_FAILED, reason=str(exc))
                         stage_manager.fail_stage(session, StageType.SUMMARIZE, error.code, str(error))
-                        _mark_failed(session, task, error, request_id)
-            return
 
     # ========== 任务完成 ==========
     with get_sync_db_session() as session:
@@ -1579,6 +1589,24 @@ def _process_youtube(
             "Task %s: YouTube video processing completed successfully",
             task_id,
             extra={"task_id": task_id},
+        )
+
+        # 渐进式展示 §B：completed 之后异步补 overview 配图（占位符已在 images 标 pending）。
+        overview_summaries = (
+            session.query(Summary)
+            .filter(
+                Summary.task_id == task_id,
+                Summary.summary_type == "overview",
+                Summary.is_active == True,  # noqa: E712
+            )
+            .all()
+        )
+        content_style_for_images = (task.options or {}).get("summary_style") or "meeting"
+        _enqueue_summary_images(
+            task_id=task_id,
+            user_id=str(task.user_id),
+            summaries=overview_summaries,
+            content_style=content_style_for_images,
         )
 
 
