@@ -834,3 +834,36 @@ async def test_process_audio_completed_calls_notify_task_completed(
     assert kwargs["params"]["duration"] == 123
     # 不再写库手搓的 Notification 行
     assert not hasattr(session, "notifications") or session.notifications == []
+
+
+@pytest.mark.asyncio
+async def test_process_audio_failed_calls_notify_task_failed_without_raw_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """失败时改调 notify(TASK_FAILED)，params 只带 error_code，绝不带原始错误文本。"""
+    from app.services.notifications.types import NotificationType
+
+    task = _build_task("upload", None, _UPLOAD_KEY)
+    session = _FakeSession(task)
+    error = BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="boom secret internal trace")
+
+    calls: list[dict[str, Any]] = []
+
+    def _spy_notify(sess: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(_spy_notify))
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+
+    await process_audio._mark_failed(session, task, error, "req-1")
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["type"] == NotificationType.TASK_FAILED
+    assert kwargs["user_id"] == str(task.user_id)
+    assert kwargs["task_id"] == str(task.id)
+    assert kwargs["params"]["error_code"] == ErrorCode.ASR_SERVICE_FAILED.value
+    assert kwargs["params"]["task_title"] == "demo"
+    # 原始错误文本不得出现在任何 user-facing params 字段
+    for value in kwargs["params"].values():
+        assert "boom secret internal trace" not in str(value)

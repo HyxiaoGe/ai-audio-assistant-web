@@ -484,30 +484,19 @@ async def _mark_failed(session: Session, task: Task, error: BusinessError, reque
             task.request_id = request_id
         await _commit(session)
 
-        # Create notification when task fails
-        from app.models.notification import Notification
-
-        task_title = task.title or "未命名任务"
-        error_message = error.kwargs.get("reason") or str(error)
-
-        notification = Notification(
+        # 失败通知：经 NotificationService 派发；params 只携带 error_code，
+        # 由前端/后端 i18n 目录按 error_code 渲染友好文案，绝不外泄原始内部错误。
+        NotificationService.notify(
+            session,
+            type=NotificationType.TASK_FAILED,
             user_id=str(task.user_id),
-            task_id=str(task.id),
-            category="task",
-            action="failed",
-            title=f"任务《{task_title}》处理失败",
-            message=error_message,
-            action_url=f"/tasks/{task.id}",
-            priority="high",  # Failed tasks have higher priority
-            extra_data={
-                "task_title": task_title,
+            params={
+                "task_title": task.title or "未命名任务",
                 "error_code": error.code.value,
-                "error_message": error_message,
                 "source_type": task.source_type,
             },
+            task_id=str(task.id),
         )
-        _add_record(session, notification)
-        await _commit(session)
 
         trace_id = request_id or uuid4().hex
         message = json.dumps(
