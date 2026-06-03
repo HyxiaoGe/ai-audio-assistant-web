@@ -25,3 +25,30 @@ class EventBus(ABC):
 
     @abstractmethod
     def subscribe(self, user_id: str): ...
+
+
+class RedisPubSubBus(EventBus):
+    """当前唯一实现：Redis pub/sub。生产侧用同步 redis（worker 上下文无 asyncio）。"""
+
+    def publish(self, user_id: str, envelope: dict) -> None:
+        client = get_sync_redis_client()
+        message = json.dumps(envelope, ensure_ascii=False)
+        client.publish(user_channel(user_id), message)
+
+    def subscribe(self, user_id: str):
+        """消费侧由 FastAPI /ws 在 Phase 5 接入；当前实现订阅同频道。"""
+        client = get_sync_redis_client()
+        pubsub = client.pubsub()
+        pubsub.subscribe(user_channel(user_id))
+        return pubsub
+
+
+_event_bus: EventBus | None = None
+
+
+def get_event_bus() -> EventBus:
+    """配置化的 EventBus 单例（当前固定 RedisPubSubBus）。"""
+    global _event_bus
+    if _event_bus is None:
+        _event_bus = RedisPubSubBus()
+    return _event_bus
