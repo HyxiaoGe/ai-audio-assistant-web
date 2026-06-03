@@ -33,6 +33,8 @@ from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import TranscriptSegment, WordTimestamp
 from app.services.asr_quota_service import record_usage_sync
+from app.services.notifications.service import NotificationService
+from app.services.notifications.types import NotificationType
 from app.services.rag import ingest_task_chunks_sync
 from app.services.task_service import TaskService
 from app.services.transcript_polish import polish_transcripts
@@ -554,28 +556,19 @@ def _update_task(
         task.request_id = request_id
     session.commit()
 
-    # Create notification when task is completed
+    # 任务完成：经唯一收口 NotificationService 派发
     if status == "completed":
-        from app.models.notification import Notification
-
-        task_title = task.title or "未命名任务"
-        notification = Notification(
+        NotificationService.notify(
+            session,
+            type=NotificationType.TASK_COMPLETED,
             user_id=str(task.user_id),
-            task_id=str(task.id),
-            category="task",
-            action="completed",
-            title=f"任务《{task_title}》已完成",
-            message="转写和摘要已生成，点击查看详情",
-            action_url=f"/tasks/{task.id}",
-            priority="normal",
-            extra_data={
-                "task_title": task_title,
-                "duration_seconds": task.duration_seconds,
+            params={
+                "task_title": task.title or "未命名任务",
+                "duration": task.duration_seconds,
                 "source_type": task.source_type,
             },
+            task_id=str(task.id),
         )
-        session.add(notification)
-        session.commit()
 
     trace_id = request_id or uuid4().hex
 
@@ -592,6 +585,7 @@ def _update_task(
 
     message = json.dumps(
         {
+            "kind": "task_progress",
             "code": 0,
             "message": "成功",
             "data": message_data,
@@ -616,34 +610,23 @@ def _mark_failed(session: Session, task: Task, error: BusinessError, request_id:
             task.request_id = request_id
         session.commit()
 
-        # Create notification when task fails
-        from app.models.notification import Notification
-
-        task_title = task.title or "未命名任务"
-        error_message = error.kwargs.get("reason") or str(error)
-
-        notification = Notification(
+        # 失败通知：params 只携带 error_code，由 i18n 目录渲染友好文案，绝不外泄原始错误。
+        NotificationService.notify(
+            session,
+            type=NotificationType.TASK_FAILED,
             user_id=str(task.user_id),
-            task_id=str(task.id),
-            category="task",
-            action="failed",
-            title=f"任务《{task_title}》处理失败",
-            message=error_message,
-            action_url=f"/tasks/{task.id}",
-            priority="high",  # Failed tasks have higher priority
-            extra_data={
-                "task_title": task_title,
+            params={
+                "task_title": task.title or "未命名任务",
                 "error_code": error.code.value,
-                "error_message": error_message,
                 "source_type": task.source_type,
             },
+            task_id=str(task.id),
         )
-        session.add(notification)
-        session.commit()
 
         trace_id = request_id or uuid4().hex
         message = json.dumps(
             {
+                "kind": "task_progress",
                 "code": error.code.value,
                 "message": str(error),
                 "data": {
@@ -941,10 +924,7 @@ def _process_youtube(
         # decide_asr_action 把四种重试状态收敛成动作（与 process_audio 同口径）。
         existing_transcripts = session.query(Transcript).filter(Transcript.task_id == task_id).count()
         usage_rows = (
-            session.query(ASRUsage)
-            .filter(ASRUsage.task_id == str(task_id))
-            .order_by(ASRUsage.created_at.desc())
-            .all()
+            session.query(ASRUsage).filter(ASRUsage.task_id == str(task_id)).order_by(ASRUsage.created_at.desc()).all()
         )
         asr_action = decide_asr_action(
             has_success_usage=any(u.status == "success" for u in usage_rows),

@@ -4,60 +4,29 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
-
-# ============================================================================
-# Request Schemas
-# ============================================================================
-
-
-class NotificationListRequest(BaseModel):
-    """Request schema for listing notifications."""
-
-    page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=100)
-    unread_only: bool = Field(default=False)
-    category: str | None = Field(default=None)  # task, system
-
-
-# ============================================================================
-# Response Schemas
-# ============================================================================
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class NotificationResponse(BaseModel):
-    """Response schema for a single notification."""
+    """Response schema for a single notification (type + 语言无关 params 形状)。"""
+
+    model_config = ConfigDict(from_attributes=True)
 
     id: str
-    user_id: str
-    task_id: str | None = None
-
-    # Core fields
-    category: str  # task, system
-    action: str  # completed, failed, progress
-    title: str
-    message: str
+    type: str
+    category: str
+    priority: str
+    # ORM 物理列名为 extra_data；API/前端暴露为 params。
+    params: dict = Field(default_factory=dict, validation_alias="extra_data")
     action_url: str | None = None
-
-    # Status fields
-    read_at: datetime | None = None
-    dismissed_at: datetime | None = None
-
-    # Extension fields
-    extra_data: dict = Field(default_factory=dict)
-    priority: str = "normal"
-    expires_at: datetime | None = None
-
-    # Timestamps
+    title: str | None = None
+    message: str | None = None
     created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
+    read_at: datetime | None = None
 
 
 class NotificationStatsResponse(BaseModel):
-    """Response schema for notification statistics."""
+    """Response schema for notification statistics（纯未读/已读，无 dismissed）。"""
 
     total: int
     unread: int
-    dismissed: int

@@ -28,9 +28,19 @@ class UiPreferences(BaseModel):
     timezone: str | None = Field(default=None)
 
 
+class NotificationChannelToggles(BaseModel):
+    in_app: bool = True
+    feishu: bool = False
+
+
+class NotificationTypeToggles(BaseModel):
+    in_app: bool | None = None
+    feishu: bool | None = None
+
+
 class NotificationPreferences(BaseModel):
-    task_completed: bool | None = Field(default=None)
-    task_failed: bool | None = Field(default=None)
+    channels: NotificationChannelToggles = Field(default_factory=NotificationChannelToggles)
+    types: dict[str, NotificationTypeToggles] = Field(default_factory=dict)
 
 
 class UserPreferencesResponse(BaseModel):

@@ -6,16 +6,14 @@ import json
 from dataclasses import dataclass
 from uuid import uuid4
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
-from sqlalchemy import select
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.i18n import get_message
-from app.core.redis import get_redis_client
 from app.core.security import extract_bearer_token, verify_access_token
 from app.db import async_session_factory
 from app.i18n.codes import ErrorCode
-from app.models.task import Task
+from app.services.notifications.bus import get_event_bus
 
 router = APIRouter(prefix="/ws")
 
@@ -23,6 +21,7 @@ AUTH_TIMEOUT_SECONDS = 5
 CLOSE_CODE_AUTH_TIMEOUT = 4001
 CLOSE_CODE_AUTH_FAILED = 4003
 CLOSE_CODE_TOKEN_EXPIRED = 4004
+HEARTBEAT_INTERVAL_SECONDS = 25
 
 
 @dataclass
@@ -109,21 +108,32 @@ async def _authenticate_in_band(
     return await _authenticate_token(token, session, locale, trace_id)
 
 
-async def _forward_pubsub(websocket: WebSocket, channel: str) -> None:
-    client = get_redis_client()
-    pubsub = client.pubsub()
-    await pubsub.subscribe(channel)
+async def _forward_pubsub(websocket: WebSocket, user_id: str) -> None:
+    """订阅用户全局频道（EventBus），把信封原样转发给 WS；同时周期发心跳 ping。
+
+    EventBus.subscribe 返回同步 redis pubsub（worker 侧 publish 也用同步 redis），
+    其 get_message 阻塞，故放进 asyncio.to_thread 以免阻塞事件循环。
+    """
+    pubsub = get_event_bus().subscribe(user_id)
+    # 从当前时刻起算，首个心跳在 +HEARTBEAT_INTERVAL_SECONDS 后发，避免连上即多发一次 ping。
+    last_ping = asyncio.get_running_loop().time()
     try:
         while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            message = await asyncio.to_thread(pubsub.get_message, ignore_subscribe_messages=True, timeout=1.0)
             if message and message.get("type") == "message":
                 data = message.get("data")
+                if isinstance(data, bytes):
+                    data = data.decode("utf-8")
                 if isinstance(data, str):
                     await websocket.send_text(data)
+            now = asyncio.get_running_loop().time()
+            if now - last_ping >= HEARTBEAT_INTERVAL_SECONDS:
+                await websocket.send_text(json.dumps({"kind": "ping"}))
+                last_ping = now
             await asyncio.sleep(0.05)
     finally:
-        await pubsub.unsubscribe(channel)
-        await pubsub.close()
+        await asyncio.to_thread(pubsub.unsubscribe)
+        await asyncio.to_thread(pubsub.close)
 
 
 @router.websocket("/user")
@@ -153,9 +163,8 @@ async def user_updates(websocket: WebSocket) -> None:
             trace_id,
         )
 
-    # Subscribe to user's global channel for all task updates and notifications
-    channel = f"user:{user.id}:updates"
-    forward_task = asyncio.create_task(_forward_pubsub(websocket, channel))
+    # Forward both kinds (notification + task_progress) via the EventBus seam.
+    forward_task = asyncio.create_task(_forward_pubsub(websocket, user.id))
     try:
         while True:
             await websocket.receive_text()
@@ -163,58 +172,6 @@ async def user_updates(websocket: WebSocket) -> None:
         pass
     finally:
         forward_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await forward_task
-
-
-@router.websocket("/tasks/{task_id}")
-async def task_progress(websocket: WebSocket, task_id: str) -> None:
-    """
-    Legacy WebSocket endpoint for single task updates.
-    Kept for backward compatibility.
-    """
-    await websocket.accept()
-    locale = _get_locale(websocket)
-    trace_id = uuid4().hex
-    async with async_session_factory() as session:
-        user, error_code = await _authenticate_header(websocket, session, locale, trace_id)
-        if user is None:
-            user, error_code = await _authenticate_in_band(websocket, session, locale, trace_id)
-            if user is None:
-                if error_code == ErrorCode.AUTH_TOKEN_NOT_PROVIDED:
-                    await websocket.close(code=CLOSE_CODE_AUTH_TIMEOUT)
-                    return
-                await _send_error(websocket, error_code, locale, trace_id)
-                await websocket.close(code=_get_close_code(error_code))
-                return
-        await _send_ok(
-            websocket,
-            "authenticated",
-            {"type": "authenticated", "task_id": task_id},
-            trace_id,
-        )
-
-        result = await session.execute(
-            select(Task).where(
-                Task.id == task_id,
-                Task.user_id == user.id,
-                Task.deleted_at.is_(None),
-            )
-        )
-        task = result.scalar_one_or_none()
-        if task is None:
-            await _send_error(websocket, ErrorCode.TASK_NOT_FOUND, locale, trace_id)
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
-
-    channel = f"tasks:{task_id}"
-    forward_task = asyncio.create_task(_forward_pubsub(websocket, channel))
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        forward_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        # 客户端断开时 forwarder 的 send_text 可能先抛 WebSocketDisconnect；连同取消一并吞掉，避免正常断连刷错误日志。
+        with contextlib.suppress(asyncio.CancelledError, WebSocketDisconnect):
             await forward_task

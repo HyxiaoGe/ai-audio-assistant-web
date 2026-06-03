@@ -33,6 +33,8 @@ from app.models.transcript import Transcript
 from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp
 from app.services.asr_quota_service import record_usage
 from app.services.llm.base import LLMService
+from app.services.notifications.service import NotificationService
+from app.services.notifications.types import NotificationType
 from app.services.rag import ingest_task_chunks_async
 from app.services.storage.base import StorageService
 from app.services.transcript_polish import polish_transcripts
@@ -428,28 +430,19 @@ async def _update_task(
         task.request_id = request_id
     await _commit(session)
 
-    # Create notification when task is completed
+    # 任务完成：经唯一收口 NotificationService 派发（落库+推送由 InAppChannel 负责）
     if status == "completed":
-        from app.models.notification import Notification
-
-        task_title = task.title or "未命名任务"
-        notification = Notification(
+        NotificationService.notify(
+            session,
+            type=NotificationType.TASK_COMPLETED,
             user_id=str(task.user_id),
-            task_id=str(task.id),
-            category="task",
-            action="completed",
-            title=f"任务《{task_title}》已完成",
-            message="转写和摘要已生成，点击查看详情",
-            action_url=f"/tasks/{task.id}",
-            priority="normal",
-            extra_data={
-                "task_title": task_title,
-                "duration_seconds": task.duration_seconds,
+            params={
+                "task_title": task.title or "未命名任务",
+                "duration": task.duration_seconds,
                 "source_type": task.source_type,
             },
+            task_id=str(task.id),
         )
-        _add_record(session, notification)
-        await _commit(session)
 
     trace_id = request_id or uuid4().hex
 
@@ -466,6 +459,7 @@ async def _update_task(
 
     message = json.dumps(
         {
+            "kind": "task_progress",
             "code": 0,
             "message": "成功",
             "data": message_data,
@@ -490,34 +484,24 @@ async def _mark_failed(session: Session, task: Task, error: BusinessError, reque
             task.request_id = request_id
         await _commit(session)
 
-        # Create notification when task fails
-        from app.models.notification import Notification
-
-        task_title = task.title or "未命名任务"
-        error_message = error.kwargs.get("reason") or str(error)
-
-        notification = Notification(
+        # 失败通知：经 NotificationService 派发；params 只携带 error_code，
+        # 由前端/后端 i18n 目录按 error_code 渲染友好文案，绝不外泄原始内部错误。
+        NotificationService.notify(
+            session,
+            type=NotificationType.TASK_FAILED,
             user_id=str(task.user_id),
-            task_id=str(task.id),
-            category="task",
-            action="failed",
-            title=f"任务《{task_title}》处理失败",
-            message=error_message,
-            action_url=f"/tasks/{task.id}",
-            priority="high",  # Failed tasks have higher priority
-            extra_data={
-                "task_title": task_title,
+            params={
+                "task_title": task.title or "未命名任务",
                 "error_code": error.code.value,
-                "error_message": error_message,
                 "source_type": task.source_type,
             },
+            task_id=str(task.id),
         )
-        _add_record(session, notification)
-        await _commit(session)
 
         trace_id = request_id or uuid4().hex
         message = json.dumps(
             {
+                "kind": "task_progress",
                 "code": error.code.value,
                 "message": str(error),
                 "data": {
@@ -678,15 +662,23 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
             #   RESUME_AFTER_CLAIM 有 processing claim 但无转写 -> 上次付费可能已扣费，重跑但复用 claim + 告警对账（双扣费窗口）
             #   FULL_RUN           干净首跑 -> 付费前写 claim、付费转写、补记计费
             existing_transcripts = (
-                await session.execute(
-                    select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
+                (
+                    await session.execute(
+                        select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             usage_rows = (
-                await session.execute(
-                    select(ASRUsage).where(ASRUsage.task_id == str(task_id)).order_by(ASRUsage.created_at.desc())
+                (
+                    await session.execute(
+                        select(ASRUsage).where(ASRUsage.task_id == str(task_id)).order_by(ASRUsage.created_at.desc())
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             success_usage = next((u for u in usage_rows if u.status == "success"), None)
             processing_claim = next((u for u in usage_rows if u.status == "processing"), None)
             asr_action = decide_asr_action(
@@ -712,9 +704,7 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                     task_id,
                     len(transcripts),
                 )
-                diarization = (
-                    task.options.get("enable_speaker_diarization") if isinstance(task.options, dict) else None
-                )
+                diarization = task.options.get("enable_speaker_diarization") if isinstance(task.options, dict) else None
                 if processing_claim is not None:
                     finalize_provider = processing_claim.provider
                     finalize_variant = processing_claim.variant

@@ -107,3 +107,131 @@ def test_finalize_existing_cost_sync_tolerates_provider_lookup_failure(
     assert finalize_calls[0]["asr_service"] is None  # fell back; lookup failure swallowed
     assert finalize_calls[0]["provider_name"] == "volcengine"  # cost keyed off the claim
     assert finalize_calls[0]["claim_row"] is claim  # finalized in place, no duplicate row
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2: kind="task_progress" 信封标签断言
+# --------------------------------------------------------------------------- #
+class _CaptureSyncPublish:
+    """捕获 process_youtube.publish_task_update_sync 的 message 以断言信封 kind。"""
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def __call__(self, task_id: str, user_id: str, message: str) -> None:
+        self.messages.append(message)
+
+
+class _FakeCommitSession:
+    """最小同步 Session 替身：commit/add 均为空操作，不依赖真实 DB。"""
+
+    def commit(self) -> None:
+        pass
+
+    def add(self, item: Any) -> None:
+        pass
+
+
+def test_process_youtube_progress_envelope_has_task_progress_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    capture = _CaptureSyncPublish()
+    monkeypatch.setattr(process_youtube, "publish_task_update_sync", capture)
+
+    task = _task()
+    session = _FakeCommitSession()
+
+    # _update_task 是同步函数，可直接调用（无需 asyncio）
+    process_youtube._update_task(session, task, "transcribing", 50, "transcribing", None)
+
+    assert capture.messages, "expected at least one published progress message"
+    for raw in capture.messages:
+        assert json.loads(raw)["kind"] == "task_progress"
+
+
+def test_process_youtube_failure_envelope_has_task_progress_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    from app.core.exceptions import BusinessError
+    from app.i18n.codes import ErrorCode
+
+    capture = _CaptureSyncPublish()
+    monkeypatch.setattr(process_youtube, "publish_task_update_sync", capture)
+    monkeypatch.setattr(process_youtube.NotificationService, "notify", staticmethod(lambda *a, **k: None))
+
+    task = _task()
+    session = _FakeCommitSession()
+    error = BusinessError(ErrorCode.ASR_SERVICE_FAILED)
+
+    process_youtube._mark_failed(session, task, error, None)
+
+    assert task.status == "failed"
+    assert capture.messages, "expected a failure progress message"
+    assert json.loads(capture.messages[-1])["kind"] == "task_progress"
+
+
+def test_process_youtube_completed_calls_notify_task_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """YouTube 任务完成改调 NotificationService.notify(TASK_COMPLETED)。"""
+    from app.services.notifications.types import NotificationType
+
+    task = _task()  # duration_seconds=120.0, title="demo"
+    calls: list[dict[str, Any]] = []
+
+    def _spy_notify(sess: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(process_youtube.NotificationService, "notify", staticmethod(_spy_notify))
+    monkeypatch.setattr(process_youtube, "publish_task_update_sync", lambda *a, **k: None)
+
+    class _Sess:
+        def commit(self) -> None:
+            return None
+
+    process_youtube._update_task(_Sess(), task, "completed", 100, "completed", "req-1")
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["type"] == NotificationType.TASK_COMPLETED
+    assert kwargs["user_id"] == str(task.user_id)
+    assert kwargs["task_id"] == str(task.id)
+    assert kwargs["params"]["task_title"] == "demo"
+    assert kwargs["params"]["duration"] == 120.0
+
+
+def test_process_youtube_failed_calls_notify_task_failed_without_raw_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """YouTube 失败改调 notify(TASK_FAILED)，params 只带 error_code，不带原始错误。"""
+    from app.core.exceptions import BusinessError
+    from app.i18n.codes import ErrorCode
+    from app.services.notifications.types import NotificationType
+
+    task = _task()
+    error = BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="leak this internal trace")
+    calls: list[dict[str, Any]] = []
+
+    def _spy_notify(sess: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(process_youtube.NotificationService, "notify", staticmethod(_spy_notify))
+    monkeypatch.setattr(process_youtube, "publish_task_update_sync", lambda *a, **k: None)
+
+    class _Sess:
+        def commit(self) -> None:
+            return None
+
+    process_youtube._mark_failed(_Sess(), task, error, "req-1")
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["type"] == NotificationType.TASK_FAILED
+    assert kwargs["task_id"] == str(task.id)
+    assert kwargs["params"]["error_code"] == ErrorCode.ASR_SERVICE_FAILED.value
+    for value in kwargs["params"].values():
+        assert "leak this internal trace" not in str(value)
