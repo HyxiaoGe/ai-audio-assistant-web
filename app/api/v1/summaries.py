@@ -22,6 +22,7 @@ from app.models.summary import Summary
 from app.models.task import Task
 from app.schemas.summary import (
     SummaryCompareRequest,
+    SummaryImageItem,
     SummaryItem,
     SummaryListResponse,
     SummaryRegenerateRequest,
@@ -43,6 +44,31 @@ def _text_capable_llm_providers() -> set[str]:
     from app.core.registry import ServiceRegistry
 
     return set(ServiceRegistry.list_text_llm_providers())
+
+
+def _to_summary_item(summary: Summary, image_url: str | None) -> SummaryItem:
+    """把 Summary ORM 映射为出参 SummaryItem（含渐进式展示的 images 图集）。
+
+    images 直接透传 JSONB 列；非 overview/无图时 summary.images 为 None -> 出参 images 为 None。
+    """
+    images: list[SummaryImageItem] | None = None
+    if summary.images:
+        images = [SummaryImageItem(**item) for item in summary.images]
+    return SummaryItem(
+        id=str(summary.id),
+        summary_type=summary.summary_type,
+        version=summary.version,
+        is_active=summary.is_active,
+        content=summary.content,
+        model_used=summary.model_used,
+        prompt_version=summary.prompt_version,
+        token_count=summary.token_count,
+        created_at=summary.created_at,
+        visual_format=summary.visual_format,
+        image_url=image_url,
+        image_model_used=summary.image_model_used,
+        images=images,
+    )
 
 
 @router.get("/{task_id}")
@@ -73,22 +99,7 @@ async def get_summaries(
         image_url = None
         if summary.image_key:
             image_url = await build_media_download_url(summary.image_key, user.id)
-        items.append(
-            SummaryItem(
-                id=str(summary.id),
-                summary_type=summary.summary_type,
-                version=summary.version,
-                is_active=summary.is_active,
-                content=summary.content,
-                model_used=summary.model_used,
-                prompt_version=summary.prompt_version,
-                token_count=summary.token_count,
-                created_at=summary.created_at,
-                visual_format=summary.visual_format,
-                image_url=image_url,
-                image_model_used=summary.image_model_used,
-            )
-        )
+        items.append(_to_summary_item(summary, image_url))
 
     response = SummaryListResponse(task_id=task_id, total=len(items), items=items)
     return success(data=jsonable_encoder(response))
