@@ -19,6 +19,9 @@ from typing import Any
 
 from app.core.smart_factory import SmartFactory
 from app.prompts.manager import get_prompt_manager
+from app.services.notifications.service import NotificationService
+from app.services.notifications.types import NotificationType
+from worker.db import get_sync_db_session
 
 logger = logging.getLogger(__name__)
 
@@ -650,6 +653,20 @@ async def process_summary_images(
 
     # 替换占位符
     final_content = replace_placeholders(content, image_results)
+
+    # 配图整体失败（无一成功）时发 VISUAL_FAILED；成功/部分成功不发。
+    if image_results and not any(r.get("status") == "success" for r in image_results):
+        try:
+            with get_sync_db_session() as notif_session:
+                NotificationService.notify(
+                    notif_session,
+                    type=NotificationType.VISUAL_FAILED,
+                    user_id=user_id,
+                    params={"summary_type": summary_type},
+                    task_id=task_id,
+                )
+        except Exception:  # best-effort：配图通知失败绝不影响摘要主流程
+            logger.warning("Task %s: VISUAL_FAILED notify failed, suppressed", task_id, exc_info=True)
 
     # 发布所有图片完成事件
     if redis_client and stream_key:
