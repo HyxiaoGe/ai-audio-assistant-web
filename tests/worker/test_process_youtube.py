@@ -156,23 +156,12 @@ def test_process_youtube_failure_envelope_has_task_progress_kind(
 ) -> None:
     import json
 
-    import app.models.notification as notif_module
     from app.core.exceptions import BusinessError
     from app.i18n.codes import ErrorCode
 
     capture = _CaptureSyncPublish()
     monkeypatch.setattr(process_youtube, "publish_task_update_sync", capture)
-
-    # Phase 4 会把 _mark_failed 改调 NotificationService。
-    # 当前 _mark_failed 仍以 Notification(action="failed", ...) 构造——action 列已在
-    # Phase 1 删除，SQLAlchemy 2.x 会因未知 kwarg 抛 TypeError，被 _mark_failed 的 except
-    # 吞掉而到不了 publish。这里把 Notification 打桩为空操作，让本用例能验到发布信封带
-    # kind（与 process_audio 那几个已知红测同源，Phase 4 修复 producer 后移除本桩）。
-    class _FakeNotification:
-        def __init__(self, **kwargs: Any) -> None:
-            pass
-
-    monkeypatch.setattr(notif_module, "Notification", _FakeNotification)
+    monkeypatch.setattr(process_youtube.NotificationService, "notify", staticmethod(lambda *a, **k: None))
 
     task = _task()
     session = _FakeCommitSession()

@@ -219,6 +219,7 @@ async def test_process_audio_success_upload(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(
         process_audio,
         "generate_summaries_with_quality_awareness",
@@ -267,6 +268,7 @@ async def test_process_audio_success_youtube(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(
         process_audio,
         "generate_summaries_with_quality_awareness",
@@ -304,6 +306,7 @@ async def test_process_audio_asr_failed(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
 
     await process_audio._process_task(task.id, None)
 
@@ -340,6 +343,7 @@ async def test_process_audio_llm_failed(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(
         process_audio,
         "generate_summaries_with_quality_awareness",
@@ -521,6 +525,7 @@ async def test_process_audio_retry_finalizes_cost_without_recharge(monkeypatch: 
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
     monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
 
@@ -573,6 +578,7 @@ async def test_process_audio_retry_skips_when_already_finalized(monkeypatch: pyt
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
     monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
 
@@ -632,6 +638,7 @@ async def test_process_audio_retry_finalizes_cost_when_provider_lookup_fails(
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
     monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
 
@@ -716,6 +723,7 @@ async def test_process_audio_oversize_upload_failed(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
 
     await process_audio._process_task(task.id, "req-1")
 
@@ -759,6 +767,7 @@ async def test_process_audio_progress_envelope_has_task_progress_kind(
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *a, **k: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *a, **k: storage)
     monkeypatch.setattr(process_audio, "publish_message", capture)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
     monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
 
@@ -768,10 +777,6 @@ async def test_process_audio_progress_envelope_has_task_progress_kind(
 
     await process_audio._process_task(task.id, "req-1")
 
-    # 注：当前成功路径在 completion 处构造 Notification(action=...) 会抛错（Phase 1 删了
-    # action 列），被 _process_task 捕获后转而发失败信封——故 capture 里是「若干进度信封 +
-    # 一条失败信封」，二者都应带 kind="task_progress"。本断言对「成功完成」与「中途失败」两
-    # 种结局都成立，故 Phase 4 修复 producer 后无需改动本用例。
     assert capture.messages, "expected at least one published progress message"
     for raw in capture.messages:
         assert json.loads(raw)["kind"] == "task_progress"
@@ -796,6 +801,7 @@ async def test_process_audio_failure_envelope_has_task_progress_kind(
     monkeypatch.setattr(process_audio, "get_llm_service", lambda *a, **k: llm)
     monkeypatch.setattr(process_audio, "get_storage_service", lambda *a, **k: storage)
     monkeypatch.setattr(process_audio, "publish_message", capture)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
 
     await process_audio._process_task(task.id, None)
 
