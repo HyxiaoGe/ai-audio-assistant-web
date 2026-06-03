@@ -725,3 +725,86 @@ async def test_process_audio_oversize_upload_failed(monkeypatch: pytest.MonkeyPa
     assert task.error_code == ErrorCode.FILE_TOO_LARGE.value
     assert storage.deleted == [_UPLOAD_KEY]
     assert session.transcripts == []  # aborted before transcribing
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2: kind="task_progress" 信封标签断言
+# --------------------------------------------------------------------------- #
+class _CapturePublish:
+    """捕获 process_audio.publish_message 发出的 (channel, message) 以断言信封 kind。"""
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    async def __call__(self, channel: str, message: str) -> None:
+        self.messages.append(message)
+
+
+@pytest.mark.asyncio
+async def test_process_audio_progress_envelope_has_task_progress_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    settings.UPLOAD_PRESIGN_EXPIRES = 60
+    task = _build_task("upload", None, _UPLOAD_KEY)
+    session = _FakeSession(task)
+    asr = _FakeASRService(
+        segments=[
+            TranscriptSegment(
+                speaker_id="1", start_time=0.0, end_time=1.0, content="hello", confidence=0.9
+            )
+        ]
+    )
+    llm = _FakeLLMService()
+    storage = _FakeStorageService()
+    capture = _CapturePublish()
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", lambda: asr)
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *a, **k: llm)
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *a, **k: storage)
+    monkeypatch.setattr(process_audio, "publish_message", capture)
+    monkeypatch.setattr(
+        process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries
+    )
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+
+    from app.services import asr_free_quota_service
+
+    monkeypatch.setattr(
+        asr_free_quota_service.AsrFreeQuotaService, "consume_quota", _fake_consume_quota
+    )
+
+    await process_audio._process_task(task.id, "req-1")
+
+    assert capture.messages, "expected at least one published progress message"
+    for raw in capture.messages:
+        assert json.loads(raw)["kind"] == "task_progress"
+
+
+@pytest.mark.asyncio
+async def test_process_audio_failure_envelope_has_task_progress_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    settings.UPLOAD_PRESIGN_EXPIRES = 60
+    task = _build_task("upload", None, _UPLOAD_KEY)
+    session = _FakeSession(task)
+    asr = _FakeASRService(error=BusinessError(ErrorCode.ASR_SERVICE_FAILED))
+    llm = _FakeLLMService()
+    storage = _FakeStorageService()
+    capture = _CapturePublish()
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", lambda: asr)
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *a, **k: llm)
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *a, **k: storage)
+    monkeypatch.setattr(process_audio, "publish_message", capture)
+
+    await process_audio._process_task(task.id, None)
+
+    assert task.status == "failed"
+    assert capture.messages, "expected a failure progress message"
+    assert json.loads(capture.messages[-1])["kind"] == "task_progress"
