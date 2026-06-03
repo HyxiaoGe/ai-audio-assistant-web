@@ -23,9 +23,8 @@ from app.services.user_preferences import get_app_preferences, resolve_enabled_c
 
 logger = logging.getLogger(__name__)
 
-# 确保 in_app / feishu 渠道在 import 时完成注册（@register_channel 副作用）。
-from app.services.notifications.channels import feishu as _feishu  # noqa: E402,F401
-from app.services.notifications.channels import in_app as _in_app  # noqa: E402,F401
+# 渠道注册副作用由 channels 子包 __init__ 触发：上面 `from ...channels.base import get_channel`
+# 已使父包 __init__ 先行执行，in_app / feishu 即完成 @register_channel 注册（见 channels/__init__.py）。
 
 
 def _load_preferences(session: object, user_id: str) -> NotificationPreferences:

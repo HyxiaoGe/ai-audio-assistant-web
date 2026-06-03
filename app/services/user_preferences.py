@@ -22,6 +22,10 @@ DEFAULT_TASK_DEFAULTS: dict[str, object] = {
     "llm_model_id": None,
 }
 
+# TODO(Phase 5): 该扁平默认已是通知 notify 路径的死键——新 NotificationPreferences
+# 矩阵 schema(model_validate)读时直接忽略这两个键。暂留是因为 legacy 偏好端点默认
+# (下方 get_user_preferences 合并)与 tests/test_user_identity.py 仍耦合它；待 Phase 5
+# 重写偏好端点时连同 update/读取一并迁到 channels/types 矩阵默认并删除本常量。
 DEFAULT_NOTIFICATIONS: dict[str, object] = {
     "task_completed": True,
     "task_failed": True,
@@ -155,9 +159,7 @@ async def update_user_preferences(
     return await get_user_preferences(profile, token)
 
 
-def resolve_enabled_channels(
-    prefs: NotificationPreferences, ntype: str, allowed: tuple[str, ...]
-) -> list[str]:
+def resolve_enabled_channels(prefs: NotificationPreferences, ntype: str, allowed: tuple[str, ...]) -> list[str]:
     """解析某 type 实际命中的渠道列表。
 
     (type, channel) 启用 ⟺ channel 在该 type 模板允许的 allowed 内

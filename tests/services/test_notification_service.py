@@ -136,7 +136,7 @@ def test_notify_best_effort_one_channel_failure_isolates_others(monkeypatch) -> 
     assert len(good.calls) == 1
 
 
-def test_notify_swallows_template_lookup_failure(monkeypatch) -> None:
+def test_notify_swallows_prefs_load_failure(monkeypatch) -> None:
     # 即便偏好加载层抛错，notify 也吞掉不冒泡（best-effort 整体兜底）
     def _boom(session: object, user_id: str) -> object:
         raise RuntimeError("prefs load failed")

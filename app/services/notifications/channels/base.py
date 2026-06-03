@@ -34,12 +34,13 @@ _CHANNEL_REGISTRY: dict[str, BaseNotificationChannel] = {}
 
 
 def register_channel(name: str) -> Callable[[type[BaseNotificationChannel]], type[BaseNotificationChannel]]:
-    """类装饰器：注册渠道并立即实例化为单例存入 _CHANNEL_REGISTRY。"""
+    """类装饰器：注册渠道并立即实例化为单例存入 _CHANNEL_REGISTRY。
+
+    name 同时是注册表键；渠道类须设同值的 name 类属性（单一事实源，约定二者一致）。
+    """
 
     def decorator(cls: type[BaseNotificationChannel]) -> type[BaseNotificationChannel]:
-        instance = cls()
-        instance.name = name
-        _CHANNEL_REGISTRY[name] = instance
+        _CHANNEL_REGISTRY[name] = cls()
         logger.info("Registered notification channel: %s (class=%s)", name, cls.__name__)
         return cls
 

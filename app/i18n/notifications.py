@@ -104,6 +104,8 @@ def render_notification(i18n_key: str, params: dict, locale: str) -> tuple[str, 
         fb = _GENERIC_FALLBACK[loc]
         return fb["title"], fb["body"]
 
+    # 假设 catalog 条目永不为空 dict（or 短路靠真值判断）：本表是模块级常量，扩充时须保证
+    # 每个 locale 项含非空 title/body，否则会意外回落到默认语言。
     texts = entry.get(loc) or entry.get(_DEFAULT_LOCALE) or _GENERIC_FALLBACK[loc]
     title_tmpl = texts.get("title", _GENERIC_FALLBACK[loc]["title"])
     body_tmpl = texts.get("body", _GENERIC_FALLBACK[loc]["body"])

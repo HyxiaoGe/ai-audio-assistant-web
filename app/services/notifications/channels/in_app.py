@@ -53,6 +53,11 @@ class InAppChannel(BaseNotificationChannel):
             logger.debug("Notification dedup hit, skipping: type=%s dedup_key=%s", event.type, event.dedup_key)
             return
 
+        # commit 后取 notif.id/created_at 安全：worker/db.py 的 SyncSessionFactory 用
+        # expire_on_commit=False，且 SA 2.0 + PostgreSQL 在 flush 时经 INSERT ... RETURNING
+        # 回填 server_default 列，故 commit() 返回后这些值仍在内存对象上、无需再次查库。
+        # （若哪天把 worker session 改成 expire_on_commit=True 或换用无 RETURNING 的库，
+        # 这里访问 notif.id 会触发懒加载/DetachedInstanceError——届时须改为 refresh 后再序列化。）
         response = NotificationResponse.model_validate(notif)
         envelope = notification_envelope(response.model_dump(mode="json"), trace_id="")
         try:
