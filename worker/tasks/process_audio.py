@@ -1079,18 +1079,16 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                 )
 
             except Exception as exc:
+                # 渐进式展示 §C：摘要文字失败不再连带整任务 failed（否则会藏掉已好的转写）。
+                # 仅记日志、不 raise；任务继续按 completed 收尾，转写正常展示，摘要区前端可重试。
+                # 注意：转写失败由 ASR 段抛 BusinessError 触发 except -> _mark_failed（仍 failed），不受此处影响。
                 logger.error(
-                    "Task %s: Summary generation failed: %s",
+                    "Task %s: Summary generation failed but keeping task completed (transcript preserved): %s",
                     task_id,
                     exc,
                     exc_info=True,
                     extra={"task_id": task_id},
                 )
-                # 摘要生成失败，任务标记为failed
-                raise BusinessError(
-                    ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                    reason=f"Failed to generate summaries: {exc}",
-                ) from exc
 
             # 设置语言（根据 ASR 模型推断，目前使用中文模型）
             if not task.detected_language:

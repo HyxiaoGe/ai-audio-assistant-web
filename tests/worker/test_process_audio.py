@@ -320,7 +320,8 @@ async def _fake_generate_summaries_error(*args: Any, **kwargs: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_audio_llm_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_process_audio_summary_failure_does_not_fail_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """渐进式展示 §C：摘要文字失败不连带——task 仍 completed，转写保留，摘要为空。"""
     task = _build_task("upload", None, _UPLOAD_KEY)
     session = _FakeSession(task)
     asr = _FakeASRService(
@@ -362,10 +363,10 @@ async def test_process_audio_llm_failed(monkeypatch: pytest.MonkeyPatch) -> None
 
     await process_audio._process_task(task.id, None)
 
-    assert task.status == "failed"
-    # process_audio wraps summary errors as AI_SUMMARY_GENERATION_FAILED
-    assert task.error_code == ErrorCode.AI_SUMMARY_GENERATION_FAILED.value
-    assert len(session.transcripts) == 1
+    assert task.status == "completed"          # 不再 failed
+    assert task.error_code is None
+    assert len(session.transcripts) == 1       # 转写保留
+    assert session.summaries == []             # 摘要为空（局部失败）
 
 
 @pytest.mark.asyncio
