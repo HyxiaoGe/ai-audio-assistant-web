@@ -494,7 +494,6 @@ FIELD_ENCRYPTION_KEY=<fernet-key>
 ### What NOT to Change
 
 - ❌ Don't add new databases (MongoDB, etc.)
-- ❌ Don't add new message queues (RabbitMQ, Kafka, etc.)
 - ❌ Don't switch to GraphQL
 - ❌ Don't add microservices architecture
 - ❌ Don't delete database tables
