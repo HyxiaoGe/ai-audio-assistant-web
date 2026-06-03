@@ -14,13 +14,11 @@ from celery import shared_task
 from sqlalchemy import func, select
 
 from app.core.registry import ServiceRegistry
-from app.models.notification import Notification
 from app.models.task import Task
 from app.models.youtube_auto_transcribe_log import YouTubeAutoTranscribeLog
 from app.models.youtube_subscription import YouTubeSubscription
 from app.models.youtube_video import YouTubeVideo
 from worker.db import get_sync_db_session
-from worker.redis_client import publish_user_notification_sync
 
 logger = logging.getLogger(__name__)
 
@@ -198,47 +196,7 @@ def _process_single_video(
         status="created",
     )
     session.add(log)
-
-    # Create notification for auto-transcribe start
-    notification = Notification(
-        user_id=user_id,
-        task_id=str(task.id),
-        category="task",
-        action="auto_transcribe_started",
-        title=f"自动转写《{video.title[:50]}》",
-        message=f"频道「{subscription.channel_title}」的新视频已开始自动转写",
-        action_url=f"/tasks/{task.id}",
-        priority="normal",
-        extra_data={
-            "video_id": video_id,
-            "channel_id": subscription.channel_id,
-            "channel_title": subscription.channel_title,
-            "auto_transcribed": True,
-        },
-    )
-    session.add(notification)
     session.commit()
-
-    # Publish WebSocket notification
-    import json as json_module
-
-    ws_notification = json_module.dumps(
-        {
-            "code": 0,
-            "message": "success",
-            "data": {
-                "type": "auto_transcribe_started",
-                "task_id": str(task.id),
-                "video_id": video_id,
-                "title": video.title,
-                "channel_id": subscription.channel_id,
-                "channel_title": subscription.channel_title,
-            },
-            "traceId": request_id or "",
-        },
-        ensure_ascii=False,
-    )
-    publish_user_notification_sync(user_id, ws_notification)
 
     # Trigger Celery task
     from worker.celery_app import celery_app
