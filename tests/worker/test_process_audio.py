@@ -768,6 +768,10 @@ async def test_process_audio_progress_envelope_has_task_progress_kind(
 
     await process_audio._process_task(task.id, "req-1")
 
+    # 注：当前成功路径在 completion 处构造 Notification(action=...) 会抛错（Phase 1 删了
+    # action 列），被 _process_task 捕获后转而发失败信封——故 capture 里是「若干进度信封 +
+    # 一条失败信封」，二者都应带 kind="task_progress"。本断言对「成功完成」与「中途失败」两
+    # 种结局都成立，故 Phase 4 修复 producer 后无需改动本用例。
     assert capture.messages, "expected at least one published progress message"
     for raw in capture.messages:
         assert json.loads(raw)["kind"] == "task_progress"

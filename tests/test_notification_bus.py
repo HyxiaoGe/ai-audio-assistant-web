@@ -53,7 +53,9 @@ def test_redis_pubsub_bus_publish_uses_ensure_ascii_false(monkeypatch) -> None:
     assert "中文" in message  # 未被转义成 \uXXXX
 
 
-def test_get_event_bus_is_singleton() -> None:
+def test_get_event_bus_is_singleton(monkeypatch) -> None:
+    # 重置模块级单例，避免测试间互相污染（monkeypatch 在用例结束自动还原）
+    monkeypatch.setattr(bus_module, "_event_bus", None)
     first = bus_module.get_event_bus()
     second = bus_module.get_event_bus()
     assert first is second

@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from worker.redis_client import get_sync_redis_client
+
+if TYPE_CHECKING:
+    from redis.client import PubSub
 
 
 def user_channel(user_id: str) -> str:
@@ -24,7 +28,9 @@ class EventBus(ABC):
     def publish(self, user_id: str, envelope: dict) -> None: ...
 
     @abstractmethod
-    def subscribe(self, user_id: str): ...
+    def subscribe(self, user_id: str) -> PubSub:
+        """订阅用户频道取流。调用方拥有连接生命周期，用完须 .unsubscribe() 并 .close()。"""
+        ...
 
 
 class RedisPubSubBus(EventBus):
@@ -35,8 +41,11 @@ class RedisPubSubBus(EventBus):
         message = json.dumps(envelope, ensure_ascii=False)
         client.publish(user_channel(user_id), message)
 
-    def subscribe(self, user_id: str):
-        """消费侧由 FastAPI /ws 在 Phase 5 接入；当前实现订阅同频道。"""
+    def subscribe(self, user_id: str) -> PubSub:
+        """消费侧由 FastAPI /ws 在 Phase 5 接入；订阅用户频道。
+
+        返回的 PubSub 持有底层连接，调用方用完须 .unsubscribe() 并 .close()。
+        """
         client = get_sync_redis_client()
         pubsub = client.pubsub()
         pubsub.subscribe(user_channel(user_id))

@@ -53,6 +53,8 @@ def publish_task_update_sync(task_id: str, user_id: str, message: str) -> None:
         message: JSON message to publish.
     """
     client = get_sync_redis_client()
+    # 频道串须与 app.services.notifications.bus.user_channel() 保持一致；
+    # 此处不直接 import 它以避免 worker→app.services 的循环依赖（bus 反向 import 本模块）。
     client.publish(f"user:{user_id}:updates", message)
 
 

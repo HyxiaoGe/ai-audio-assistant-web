@@ -35,7 +35,7 @@ def test_notification_envelope_shape() -> None:
     assert env == {"kind": "notification", "data": notif, "traceId": "trace-abc"}
 
 
-def test_notification_envelope_does_not_mutate_input() -> None:
+def test_notification_envelope_wraps_without_polluting_input_top_level() -> None:
     notif = {"id": "n1"}
     env = notification_envelope(notif, "t")
     env["data"]["id"] = "MUTATED"
