@@ -18,14 +18,15 @@ if TYPE_CHECKING:
 
 class Notification(BaseRecord):
     """
-    User notification model for task-related notifications.
+    User notification model.
 
-    Design principles:
-    - Use read_at instead of read boolean (know WHEN it was read)
-    - Support dismissal separate from reading
-    - JSONB metadata for flexible extension
-    - Partial indexes for performance
-    - SET NULL on task deletion (keep notification history)
+    Design principles (after refactor):
+    - Pure unread/read lifecycle (read_at only; no dismiss/delete).
+    - `type` is the canonical selector for i18n key + template metadata.
+    - `extra_data` holds language-agnostic params (exposed as "params" at schema/API layer).
+    - `title`/`message` are nullable transition fallbacks (zh rendered by InAppChannel).
+    - `dedup_key` enables atomic dedup via partial unique index.
+    - Deleting a task cascades to its notifications.
     """
 
     __tablename__ = "notifications"
@@ -36,38 +37,37 @@ class Notification(BaseRecord):
     )
     task_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tasks.id", ondelete="SET NULL"),  # 任务删除后通知仍保留
+        ForeignKey("tasks.id", ondelete="CASCADE"),  # 删任务连带删通知
         nullable=True,
     )
 
     # Core notification fields
-    category: Mapped[str] = mapped_column(String(50), nullable=False)  # task, system
+    type: Mapped[str] = mapped_column(String(50), nullable=False)  # 规范化类型 = i18n key 选择器
 
-    action: Mapped[str] = mapped_column(String(50), nullable=False)  # completed, failed, progress
+    category: Mapped[str] = mapped_column(String(50), nullable=False)  # task, system, youtube
 
-    title: Mapped[str] = mapped_column(String(255), nullable=False)  # "任务《xxx》已完成"
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)  # 过渡期 zh 兜底串
 
-    message: Mapped[str] = mapped_column(Text, nullable=False)  # 详细描述
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)  # 过渡期 zh 兜底串
 
     action_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 跳转链接 /tasks/{id}
 
-    # Status fields
+    # Dedup
+    dedup_key: Mapped[str | None] = mapped_column(String(255), nullable=True)  # 原子去重键
+
+    # Status field（唯一状态位）
     read_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )  # NULL = 未读，有值 = 已读时间
 
-    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 用户主动关闭的时间
-
     # Extension fields
     extra_data: Mapped[dict] = mapped_column(
         JSONB, default=dict, server_default=text("'{}'::jsonb"), nullable=False
-    )  # 扩展数据: {"task_title": "xxx", "duration": 120, "error_code": 500}
+    )  # 语言无关渲染参数: {"task_title": "xxx", "duration": 120, "error_code": 500}
 
     priority: Mapped[str] = mapped_column(
         String(10), default="normal", server_default=text("'normal'"), nullable=False
-    )  # urgent, high, normal, low
-
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 过期时间（可选）
+    )  # normal, high
 
     # Relationships
     user: Mapped[UserProfile] = relationship("UserProfile", back_populates="notifications")  # type: ignore
@@ -75,29 +75,28 @@ class Notification(BaseRecord):
         "Task", back_populates="notifications"
     )
 
-    # Indexes - 使用部分索引提升性能
+    # Indexes - 部分索引提升性能
     __table_args__ = (
-        # 查询未读通知（最常用的查询）
+        # 查询未读通知（最常用）；纯未读/已读，不再含 dismissed 条件
         Index(
             "ix_notifications_unread",
             "user_id",
             "created_at",
-            postgresql_where=text("read_at IS NULL AND dismissed_at IS NULL"),
+            postgresql_where=text("read_at IS NULL"),
         ),
         # 按分类查询
         Index("ix_notifications_category", "user_id", "category", "created_at"),
-        # 清理已读通知（定时任务用）
+        # 原子去重：dedup_key 部分唯一索引
         Index(
-            "ix_notifications_cleanup",
-            "read_at",
-            "created_at",
-            postgresql_where=text("read_at IS NOT NULL"),
+            "ix_notifications_dedup_key",
+            "dedup_key",
+            unique=True,
+            postgresql_where=text("dedup_key IS NOT NULL"),
         ),
     )
 
     def __repr__(self) -> str:
         return (
             f"<Notification(id={self.id}, user_id={self.user_id}, "
-            f"category={self.category}, action={self.action}, "
-            f"read={self.read_at is not None})>"
+            f"type={self.type}, read={self.read_at is not None})>"
         )

@@ -75,7 +75,7 @@ class Task(BaseModel):
 
     # Relationships
     notifications: Mapped[list[Notification]] = relationship(
-        "Notification", back_populates="task", cascade="all, delete-orphan"
+        "Notification", back_populates="task", cascade="all, delete-orphan", passive_deletes=True
     )
     stages: Mapped[list[TaskStage]] = relationship(
         "TaskStage",

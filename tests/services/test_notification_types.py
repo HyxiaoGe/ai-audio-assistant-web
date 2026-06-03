@@ -94,3 +94,55 @@ def test_template_invariants() -> None:
 
         with __import__("pytest").raises(dataclasses.FrozenInstanceError):
             tmpl.priority = tmpl.priority  # type: ignore[misc]
+
+
+def test_notification_model_columns() -> None:
+    from app.models.notification import Notification
+
+    cols = Notification.__table__.columns
+    # 新增列
+    assert "type" in cols
+    assert "dedup_key" in cols
+    assert cols["type"].nullable is False
+    assert cols["dedup_key"].nullable is True
+    # 删除列
+    for dead in ("action", "dismissed_at", "expires_at"):
+        assert dead not in cols, f"{dead} 应已删除"
+    # title/message 降为可空
+    assert cols["title"].nullable is True
+    assert cols["message"].nullable is True
+    # extra_data 保留（params 物理列）
+    assert "extra_data" in cols
+
+def test_notification_task_fk_is_cascade() -> None:
+    from app.models.notification import Notification
+
+    fk = next(
+        fk
+        for fk in Notification.__table__.foreign_keys
+        if fk.column.table.name == "tasks"
+    )
+    assert fk.ondelete == "CASCADE"
+
+def test_notification_indexes() -> None:
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.schema import CreateIndex
+
+    from app.models.notification import Notification
+
+    ddl = {
+        idx.name: str(
+            CreateIndex(idx).compile(dialect=postgresql.dialect())
+        ).lower()
+        for idx in Notification.__table__.indexes
+    }
+    # 未读部分索引：保留，但条件里不再含 dismissed
+    assert "ix_notifications_unread" in ddl
+    assert "read_at is null" in ddl["ix_notifications_unread"]
+    assert "dismissed_at" not in ddl["ix_notifications_unread"]
+    # dedup_key 部分唯一索引
+    assert "ix_notifications_dedup_key" in ddl
+    assert "unique" in ddl["ix_notifications_dedup_key"]
+    assert "dedup_key is not null" in ddl["ix_notifications_dedup_key"]
+    # 删除的旧索引
+    assert "ix_notifications_cleanup" not in ddl
