@@ -213,3 +213,36 @@ def test_process_youtube_completed_calls_notify_task_completed(
     assert kwargs["task_id"] == str(task.id)
     assert kwargs["params"]["task_title"] == "demo"
     assert kwargs["params"]["duration"] == 120.0
+
+
+def test_process_youtube_failed_calls_notify_task_failed_without_raw_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """YouTube 失败改调 notify(TASK_FAILED)，params 只带 error_code，不带原始错误。"""
+    from app.core.exceptions import BusinessError
+    from app.i18n.codes import ErrorCode
+    from app.services.notifications.types import NotificationType
+
+    task = _task()
+    error = BusinessError(ErrorCode.ASR_SERVICE_FAILED, reason="leak this internal trace")
+    calls: list[dict[str, Any]] = []
+
+    def _spy_notify(sess: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(process_youtube.NotificationService, "notify", staticmethod(_spy_notify))
+    monkeypatch.setattr(process_youtube, "publish_task_update_sync", lambda *a, **k: None)
+
+    class _Sess:
+        def commit(self) -> None:
+            return None
+
+    process_youtube._mark_failed(_Sess(), task, error, "req-1")
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["type"] == NotificationType.TASK_FAILED
+    assert kwargs["task_id"] == str(task.id)
+    assert kwargs["params"]["error_code"] == ErrorCode.ASR_SERVICE_FAILED.value
+    for value in kwargs["params"].values():
+        assert "leak this internal trace" not in str(value)
