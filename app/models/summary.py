@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import BaseRecord
@@ -39,3 +39,8 @@ class Summary(BaseRecord):
     image_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     image_format: Mapped[str | None] = mapped_column(String(10), nullable=True)
     image_model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Progressive disclosure: overview 配图的带状态图集。
+    # 每项: {"placeholder","status"(pending|ready|failed),"url","alt","model_id","error"}
+    # content 永久保留 {{IMAGE:…}} 占位锚点；overview 路径不再用 replace_placeholders 覆盖 content。
+    images: Mapped[list[dict[str, object]] | None] = mapped_column(JSONB, nullable=True)

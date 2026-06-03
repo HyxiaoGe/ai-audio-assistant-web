@@ -6,6 +6,20 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class SummaryImageItem(BaseModel):
+    """overview 配图的单项状态（持久化于 summaries.images JSONB）。
+
+    placeholder 既是 content 里的锚点，也是前端 Map 的 key（无额外 id）。
+    """
+
+    placeholder: str
+    status: Literal["pending", "ready", "failed"]
+    url: str | None = None
+    alt: str = ""
+    model_id: str | None = None
+    error: str | None = None
+
+
 class SummaryItem(BaseModel):
     id: str
     summary_type: str
@@ -20,6 +34,8 @@ class SummaryItem(BaseModel):
     visual_format: str | None = None
     image_url: str | None = None
     image_model_used: str | None = None
+    # Progressive disclosure: overview 配图状态集；非 overview/无图时为 None 或 []
+    images: list[SummaryImageItem] | None = None
 
 
 class SummaryListResponse(BaseModel):

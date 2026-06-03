@@ -21,9 +21,13 @@ from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import get_sync_redis_client
 from worker.tasks.image_generator import (
+    apply_image_result_to_summary,
+    build_image_specs,
     extract_image_placeholders,
+    generate_images_parallel,
+    get_auto_images_config,
     is_auto_images_enabled,
-    process_summary_images,
+    publish_image_ready_global,
 )
 
 logger = logging.getLogger("worker.regenerate_summary")
@@ -113,6 +117,73 @@ def regenerate_summary(
     except Exception:
         logger.exception(f"[{request_id}] Unexpected error during summary regeneration")
         raise
+
+
+async def _process_regenerated_images(
+    *,
+    task_id: str,
+    user_id: str,
+    summary_id: str,
+    content: str,
+    content_style: str | None,
+    request_id: str | None = None,
+) -> None:
+    """regenerate overview 配图：写 summary.images（pending→ready/failed）+ 发全局 WS image_ready。
+
+    与首跑(process_youtube)对齐：content 永久保留 {{IMAGE:…}} 占位锚点，绝不覆盖；
+    除既有 SSE summary_stream(本函数不改)外，每张完成额外上全局 WS user:{uid}:updates。
+    """
+    new_content, specs = build_image_specs(content, content_style)
+    if not specs:
+        return
+    # 初始化 images=pending（若插入了默认占位符，同时把 content 写回 DB 以保留锚点）
+    with get_sync_db_session() as session:
+        summary = session.query(Summary).filter(Summary.id == summary_id).first()
+        if summary is None:
+            return
+        if new_content != content:
+            summary.content = new_content
+        summary.images = specs
+        session.commit()
+
+    placeholders = extract_image_placeholders(new_content)
+    config = get_auto_images_config()
+    max_images = config.get("max_images", 3)
+    timeout = config.get("timeout_seconds", 60)
+
+    def on_image_ready(result: dict, current: int, total: int) -> None:
+        updated = None
+        try:
+            with get_sync_db_session() as session:
+                updated = apply_image_result_to_summary(session, summary_id, result)
+        except Exception:
+            logger.warning(
+                "[%s] [regen] Task %s: persist image result failed, suppressed",
+                request_id,
+                task_id,
+                exc_info=True,
+            )
+        status = (updated or {}).get("status") or ("ready" if result.get("status") == "success" else "failed")
+        publish_image_ready_global(
+            user_id=user_id,
+            task_id=task_id,
+            summary_id=summary_id,
+            placeholder=result.get("placeholder", ""),
+            status=str(status),
+            url=result.get("url") if status == "ready" else None,
+            model_id=result.get("model_id"),
+        )
+
+    await generate_images_parallel(
+        placeholders,
+        user_id,
+        task_id,
+        content_style=content_style or "general",
+        locale="zh-CN",
+        max_images=max_images,
+        timeout=timeout,
+        on_image_ready=on_image_ready,
+    )
 
 
 def _regenerate_summary(
@@ -315,45 +386,25 @@ def _regenerate_summary(
         )
         logger.info(f"[{request_id}] Published summary.completed event for summary {summary_id}")
 
-        # 处理文章配图。没有占位符时，process_summary_images 会为 overview 自动规划默认配图。
+        # 处理 overview 配图：写 summary.images（pending→ready/failed）+ 全局 WS image_ready。
+        # content 永久保留 {{IMAGE:…}} 占位符（不再被 process_summary_images 覆盖）。
         if auto_images_enabled:
             logger.info(
                 f"[{request_id}] Processing overview images for task {task_id}: placeholders={len(placeholders)}"
             )
-
-            async def _process_images():
-                return await process_summary_images(
-                    content=full_content,
-                    task_id=task_id,
-                    user_id=user_id or "",
-                    summary_type=summary_type,
-                    content_style=content_style,
-                    redis_client=redis_client,
-                    stream_key=stream_key,
-                )
-
             try:
-                final_content, image_results = asyncio.run(_process_images())
-
-                # 更新摘要内容
-                if image_results:
-                    image_model = next(
-                        (r["model_id"] for r in image_results if r.get("status") == "success" and r.get("model_id")),
-                        None,
+                asyncio.run(
+                    _process_regenerated_images(
+                        task_id=task_id,
+                        user_id=user_id or "",
+                        summary_id=summary_id,
+                        content=full_content,
+                        content_style=content_style,
+                        request_id=request_id,
                     )
-                    with get_sync_db_session() as session:
-                        summary_to_update = session.query(Summary).filter(Summary.id == summary_id).first()
-                        if summary_to_update:
-                            summary_to_update.content = final_content
-                            if image_model:
-                                summary_to_update.image_model_used = image_model
-                            session.commit()
-                            logger.info(
-                                f"[{request_id}] Updated summary {summary_id} with "
-                                f"{len([r for r in image_results if r['status'] == 'success'])} images"
-                            )
+                )
             except Exception as img_err:
-                # 图片生成失败不影响摘要，只记录日志
+                # 图片生成失败不影响摘要，只记录日志（单图失败已写入 images[i].status="failed"）。
                 logger.warning(f"[{request_id}] Image processing failed for task {task_id}: {img_err}")
 
     except Exception as e:

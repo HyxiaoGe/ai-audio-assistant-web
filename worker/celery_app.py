@@ -85,6 +85,7 @@ from worker.tasks import (
     process_youtube,  # noqa: F401, E402
     quota_alert,  # noqa: F401, E402
     regenerate_summary,  # noqa: F401, E402
+    summary_image_task,  # noqa: F401, E402
     sync_youtube_subscriptions,  # noqa: F401, E402
     sync_youtube_videos,  # noqa: F401, E402
     youtube_auto_transcribe,  # noqa: F401, E402
