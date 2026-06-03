@@ -51,14 +51,11 @@ def _make_notif(
 
 
 def _csql(stmt: Any) -> str:
-    return str(
-        stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
-    ).lower()
+    return str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})).lower()
 
 
 class _FakeResult:
-    def __init__(self, *, scalar: int | None = None, rows: list[Any] | None = None,
-                 one: Any = "__missing__") -> None:
+    def __init__(self, *, scalar: int | None = None, rows: list[Any] | None = None, one: Any = "__missing__") -> None:
         self._scalar = scalar
         self._rows = rows or []
         self._one = one
@@ -112,9 +109,7 @@ class _FakeSession:
         # 单条按 id：WHERE 带 id =
         if "notifications.id =" in sql:
             wanted = sql.split("notifications.id =")[1].strip().split()[0].strip("'")
-            match = next(
-                (n for n in self.store if n.id == wanted and n.user_id == _USER_ID), None
-            )
+            match = next((n for n in self.store if n.id == wanted and n.user_id == _USER_ID), None)
             return _FakeResult(one=match)
         # 分页 rows：施加过滤 + created_at desc
         rows = [n for n in self.store if n.user_id == _USER_ID]
@@ -175,10 +170,12 @@ async def test_list_returns_type_and_params() -> None:
 
 
 async def test_list_unread_only_filter() -> None:
-    session = _FakeSession([
-        _make_notif(id="n1", read=False),
-        _make_notif(id="n2", read=True),
-    ])
+    session = _FakeSession(
+        [
+            _make_notif(id="n1", read=False),
+            _make_notif(id="n2", read=True),
+        ]
+    )
     async with _client(_app(session)) as client:
         resp = await client.get("/api/v1/notifications", params={"unread_only": "true"})
     data = resp.json()["data"]
@@ -187,10 +184,12 @@ async def test_list_unread_only_filter() -> None:
 
 
 async def test_list_category_filter() -> None:
-    session = _FakeSession([
-        _make_notif(id="n1", category="task"),
-        _make_notif(id="n2", category="system"),
-    ])
+    session = _FakeSession(
+        [
+            _make_notif(id="n1", category="task"),
+            _make_notif(id="n2", category="system"),
+        ]
+    )
     async with _client(_app(session)) as client:
         resp = await client.get("/api/v1/notifications", params={"category": "system"})
     data = resp.json()["data"]
@@ -199,11 +198,13 @@ async def test_list_category_filter() -> None:
 
 
 async def test_stats_returns_total_and_unread() -> None:
-    session = _FakeSession([
-        _make_notif(id="n1", read=False),
-        _make_notif(id="n2", read=False),
-        _make_notif(id="n3", read=True),
-    ])
+    session = _FakeSession(
+        [
+            _make_notif(id="n1", read=False),
+            _make_notif(id="n2", read=False),
+            _make_notif(id="n3", read=True),
+        ]
+    )
     async with _client(_app(session)) as client:
         resp = await client.get("/api/v1/notifications/stats")
     assert resp.status_code == 200
@@ -219,10 +220,12 @@ async def test_stats_has_no_dismissed_field() -> None:
 
 
 async def test_mark_read_returns_unread_and_sets_read_at() -> None:
-    session = _FakeSession([
-        _make_notif(id="n1", read=False),
-        _make_notif(id="n2", read=False),
-    ])
+    session = _FakeSession(
+        [
+            _make_notif(id="n1", read=False),
+            _make_notif(id="n2", read=False),
+        ]
+    )
     async with _client(_app(session)) as client:
         resp = await client.patch("/api/v1/notifications/n1/read")
     assert resp.status_code == 200
@@ -252,11 +255,13 @@ async def test_mark_read_missing_id_returns_404() -> None:
 
 
 async def test_read_all_returns_affected_count() -> None:
-    session = _FakeSession([
-        _make_notif(id="n1", read=False),
-        _make_notif(id="n2", read=False),
-        _make_notif(id="n3", read=True),  # 已读不计入 affected
-    ])
+    session = _FakeSession(
+        [
+            _make_notif(id="n1", read=False),
+            _make_notif(id="n2", read=False),
+            _make_notif(id="n3", read=True),  # 已读不计入 affected
+        ]
+    )
     async with _client(_app(session)) as client:
         resp = await client.patch("/api/v1/notifications/read-all")
     assert resp.status_code == 200
