@@ -224,8 +224,6 @@ def sync_channel_videos(
                             logger.warning(f"Marked account for user {user_id} as needs_reauth=True")
 
                             # reauth 升为持久化通知：notify 落库+推送；dedup_key 限每用户每天一条。
-                            from datetime import datetime
-
                             NotificationService.notify(
                                 session,
                                 type=NotificationType.YOUTUBE_REAUTH_REQUIRED,
