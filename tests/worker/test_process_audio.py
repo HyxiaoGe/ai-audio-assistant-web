@@ -802,3 +802,35 @@ async def test_process_audio_failure_envelope_has_task_progress_kind(
     assert task.status == "failed"
     assert capture.messages, "expected a failure progress message"
     assert json.loads(capture.messages[-1])["kind"] == "task_progress"
+
+
+@pytest.mark.asyncio
+async def test_process_audio_completed_calls_notify_task_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """完成时不再手搓 Notification 行，改调 NotificationService.notify(TASK_COMPLETED)。"""
+    from app.services.notifications.types import NotificationType
+
+    task = _build_task("youtube", "https://example.com/a.mp3", None)
+    task.duration_seconds = 123
+    session = _FakeSession(task)
+
+    calls: list[dict[str, Any]] = []
+
+    def _spy_notify(sess: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(_spy_notify))
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+
+    await process_audio._update_task(session, task, "completed", 100, "completed", "req-1")
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["type"] == NotificationType.TASK_COMPLETED
+    assert kwargs["user_id"] == str(task.user_id)
+    assert kwargs["task_id"] == str(task.id)
+    assert kwargs["params"]["task_title"] == "demo"
+    assert kwargs["params"]["duration"] == 123
+    # 不再写库手搓的 Notification 行
+    assert not hasattr(session, "notifications") or session.notifications == []
