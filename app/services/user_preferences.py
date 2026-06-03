@@ -8,7 +8,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import settings
 from app.models.user import UserProfile
-from app.schemas.user import UserPreferencesUpdateRequest
+from app.schemas.user import NotificationPreferences, UserPreferencesUpdateRequest
 
 logger = logging.getLogger("app.user_preferences")
 
@@ -153,3 +153,27 @@ async def update_user_preferences(
         )
 
     return await get_user_preferences(profile, token)
+
+
+def resolve_enabled_channels(
+    prefs: NotificationPreferences, ntype: str, allowed: tuple[str, ...]
+) -> list[str]:
+    """解析某 type 实际命中的渠道列表。
+
+    (type, channel) 启用 ⟺ channel 在该 type 模板允许的 allowed 内
+        AND 渠道总开关 prefs.channels.<ch> 为 True
+        AND 该 type 未显式把 <ch> 关掉（prefs.types[ntype].<ch> 不为 False；None=继承）。
+    返回顺序与 allowed 一致，便于呈现稳定。
+    """
+    channel_master = prefs.channels.model_dump()
+    type_override = prefs.types.get(ntype)
+    type_override_map = type_override.model_dump() if type_override is not None else {}
+
+    enabled: list[str] = []
+    for ch in allowed:
+        if not channel_master.get(ch, False):
+            continue
+        if type_override_map.get(ch) is False:
+            continue
+        enabled.append(ch)
+    return enabled
