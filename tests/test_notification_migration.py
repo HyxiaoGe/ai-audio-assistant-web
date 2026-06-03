@@ -10,12 +10,13 @@ tests/services/test_task_list_status_filter.py），故迁移测试走：
 from __future__ import annotations
 
 import importlib
+import subprocess
+from types import ModuleType
 
 
-def _load_migration():
-    return importlib.import_module(
-        "alembic.versions.9a1b2c3d4e5f_notification_refactor_schema"
-    )
+def _load_migration() -> ModuleType:
+    return importlib.import_module("alembic.versions.9a1b2c3d4e5f_notification_refactor_schema")
+
 
 def test_backfill_rules_map_known_pairs() -> None:
     mig = _load_migration()
@@ -24,6 +25,7 @@ def test_backfill_rules_map_known_pairs() -> None:
     assert mig.backfill_type_for("task", "completed") == "task_completed"
     assert mig.backfill_type_for("task", "failed") == "task_failed"
 
+
 def test_backfill_unknown_pair_falls_back_to_default() -> None:
     mig = _load_migration()
 
@@ -31,6 +33,7 @@ def test_backfill_unknown_pair_falls_back_to_default() -> None:
     assert mig.backfill_type_for("task", "progress") == mig._DEFAULT_BACKFILL_TYPE
     assert mig.backfill_type_for("youtube", "whatever") == mig._DEFAULT_BACKFILL_TYPE
     assert mig._DEFAULT_BACKFILL_TYPE == "task_completed"
+
 
 def test_backfill_sql_case_covers_all_rules() -> None:
     mig = _load_migration()
@@ -43,12 +46,11 @@ def test_backfill_sql_case_covers_all_rules() -> None:
     assert "else 'task_completed'" in sql
 
 
-import subprocess
-
 _ENV = {
     "DATABASE_URL": "postgresql+asyncpg://u:p@localhost/db",
     "REDIS_URL": "redis://localhost:6379/0",
 }
+
 
 def _alembic_sql(direction: str, rev_range: str) -> str:
     import os
@@ -63,6 +65,7 @@ def _alembic_sql(direction: str, rev_range: str) -> str:
     )
     assert out.returncode == 0, out.stderr
     return out.stdout.lower()
+
 
 def test_upgrade_sql_emits_expected_ddl() -> None:
     sql = _alembic_sql("upgrade", "e8f9a0b1c2d3:9a1b2c3d4e5f")
@@ -94,6 +97,7 @@ def test_upgrade_sql_emits_expected_ddl() -> None:
     assert "drop constraint notifications_task_id_fkey" in sql
     assert "on delete cascade" in sql
 
+
 def test_downgrade_sql_reverses_changes() -> None:
     sql = _alembic_sql("downgrade", "9a1b2c3d4e5f:e8f9a0b1c2d3")
 
@@ -106,6 +110,9 @@ def test_downgrade_sql_reverses_changes() -> None:
     assert "add column expires_at" in sql
     # FK 还原 SET NULL
     assert "on delete set null" in sql
+    # 还原旧未读部分索引：必须带回 dismissed 条件（这是 up/down 唯一谓词差异处）
+    assert "create index ix_notifications_unread" in sql
+    assert "dismissed_at is null" in sql
     # 还原 cleanup 索引
     assert "create index ix_notifications_cleanup" in sql
     # 还原 dedup 唯一索引被删

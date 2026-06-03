@@ -97,6 +97,5 @@ class Notification(BaseRecord):
 
     def __repr__(self) -> str:
         return (
-            f"<Notification(id={self.id}, user_id={self.user_id}, "
-            f"type={self.type}, read={self.read_at is not None})>"
+            f"<Notification(id={self.id}, user_id={self.user_id}, type={self.type}, read={self.read_at is not None})>"
         )

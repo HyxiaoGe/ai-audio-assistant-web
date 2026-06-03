@@ -36,8 +36,7 @@ def backfill_type_for(category: str, action: str) -> str:
 def _backfill_type_case_sql() -> str:
     """生成与 `backfill_type_for` 等价的 SQL CASE 表达式（迁移 UPDATE 用）。"""
     whens = " ".join(
-        f"WHEN category = '{cat}' AND action = '{act}' THEN '{ntype}'"
-        for cat, act, ntype in _TYPE_BACKFILL_RULES
+        f"WHEN category = '{cat}' AND action = '{act}' THEN '{ntype}'" for cat, act, ntype in _TYPE_BACKFILL_RULES
     )
     return f"CASE {whens} ELSE '{_DEFAULT_BACKFILL_TYPE}' END"
 

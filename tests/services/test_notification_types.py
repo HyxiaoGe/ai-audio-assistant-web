@@ -77,6 +77,7 @@ def test_template_table_matches_spec() -> None:
         NotificationPriority.NORMAL,
     )
 
+
 def test_template_invariants() -> None:
     from app.services.notifications.types import (
         NOTIFICATION_TEMPLATES,
@@ -114,15 +115,13 @@ def test_notification_model_columns() -> None:
     # extra_data 保留（params 物理列）
     assert "extra_data" in cols
 
+
 def test_notification_task_fk_is_cascade() -> None:
     from app.models.notification import Notification
 
-    fk = next(
-        fk
-        for fk in Notification.__table__.foreign_keys
-        if fk.column.table.name == "tasks"
-    )
+    fk = next(fk for fk in Notification.__table__.foreign_keys if fk.column.table.name == "tasks")
     assert fk.ondelete == "CASCADE"
+
 
 def test_notification_indexes() -> None:
     from sqlalchemy.dialects import postgresql
@@ -131,9 +130,7 @@ def test_notification_indexes() -> None:
     from app.models.notification import Notification
 
     ddl = {
-        idx.name: str(
-            CreateIndex(idx).compile(dialect=postgresql.dialect())
-        ).lower()
+        idx.name: str(CreateIndex(idx).compile(dialect=postgresql.dialect())).lower()
         for idx in Notification.__table__.indexes
     }
     # 未读部分索引：保留，但条件里不再含 dismissed
