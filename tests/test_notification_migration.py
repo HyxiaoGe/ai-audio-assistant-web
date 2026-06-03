@@ -110,3 +110,21 @@ def test_downgrade_sql_reverses_changes() -> None:
     assert "create index ix_notifications_cleanup" in sql
     # 还原 dedup 唯一索引被删
     assert "drop index ix_notifications_dedup_key" in sql
+
+
+def test_single_alembic_head_is_new_revision() -> None:
+    import os
+    import sys
+
+    env = {**os.environ, **_ENV}
+    out = subprocess.run(
+        [sys.executable, "-m", "alembic", "heads"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert out.returncode == 0, out.stderr
+    heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
+    # 必须恰好单 head，且为新迁移（否则说明迁移链分叉）
+    assert len(heads) == 1, f"alembic 出现多 head：{out.stdout}"
+    assert "9a1b2c3d4e5f" in heads[0]
