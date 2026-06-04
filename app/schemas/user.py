@@ -15,8 +15,6 @@ class TaskDefaultsPreferences(BaseModel):
     language: str | None = Field(default=None)
     summary_style: str | None = Field(default=None)
     enable_speaker_diarization: bool | None = Field(default=None)
-    enable_visual_summary: bool | None = Field(default=None)
-    visual_types: list[str] | None = Field(default=None)
     asr_provider: str | None = Field(default=None)
     asr_variant: str | None = Field(default=None)
     llm_provider: str | None = Field(default=None)

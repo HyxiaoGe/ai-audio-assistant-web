@@ -19,13 +19,9 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
-        nodejs \
-        npm \
         curl \
         unzip \
         git \
-    && npm install -g @mermaid-js/mermaid-cli \
-    && mmdc --version \
     # Install deno for yt-dlp YouTube extraction
     && curl -fsSL https://deno.land/install.sh | sh \
     && mv /root/.deno/bin/deno /usr/local/bin/ \

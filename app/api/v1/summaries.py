@@ -26,8 +26,6 @@ from app.schemas.summary import (
     SummaryItem,
     SummaryListResponse,
     SummaryRegenerateRequest,
-    VisualSummaryRequest,
-    VisualSummaryResponse,
 )
 from app.services.media_url import build_media_download_url
 
@@ -38,7 +36,7 @@ def _text_capable_llm_providers() -> set[str]:
     """已注册且支持文本生成的 LLM provider 白名单。
 
     排除 image_service 这类 supports_text_generation=False 的「只生图」provider——
-    对比与文本类可视化（mindmap/timeline/flowchart）走的是 summarize()/generate()，
+    重新生成与多模型对比走的是 summarize()/generate()，
     若放进白名单会一路到 worker 才崩。
     """
     from app.core.registry import ServiceRegistry
@@ -134,7 +132,7 @@ async def regenerate_summary(
     if not has_transcripts:
         raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成摘要")
 
-    # 校验 provider：与 compare/visual 端点一致，把"未知 / 仅支持生图(image_service)"的 provider
+    # 校验 provider：与 compare 端点一致，把"未知 / 仅支持生图(image_service)"的 provider
     # 拦在 endpoint 层，而不是放到 worker 里崩。provider 为 None 表示自动选择，放行。
     if data.provider:
         valid_providers = _text_capable_llm_providers()
@@ -723,165 +721,6 @@ async def stream_comparison(
             "X-Accel-Buffering": "no",
         },
     )
-
-
-# ===== Visual Summary Endpoints =====
-
-
-@router.post("/{task_id}/visual")
-async def generate_visual_summary(
-    request: Request,
-    task_id: str,
-    data: VisualSummaryRequest,
-    db: AsyncSession = Depends(get_db),
-    user: CurrentUser = Depends(get_current_user),
-) -> JSONResponse:
-    """生成可视化摘要（思维导图/时间轴/流程图/大纲图）
-
-    - mindmap: 思维导图（Mermaid 格式）
-    - timeline: 时间轴（Mermaid 格式）
-    - flowchart: 流程图（Mermaid 格式）
-    - outline: 大纲图（AI 图像生成，默认使用 google/gemini-3-pro-image-preview）
-    """
-    from worker.celery_app import celery_app
-
-    # Verify task exists and belongs to user
-    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
-    task_result = await db.execute(task_stmt)
-    task = task_result.scalar_one_or_none()
-
-    if not task:
-        raise BusinessError(ErrorCode.TASK_NOT_FOUND)
-
-    # Check if task has transcripts
-    from app.models.transcript import Transcript
-
-    transcript_stmt = select(Transcript).where(Transcript.task_id == task_id).limit(1)
-    transcript_result = await db.execute(transcript_stmt)
-    has_transcripts = transcript_result.scalar_one_or_none() is not None
-
-    if not has_transcripts:
-        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="任务没有转写结果，无法生成可视化摘要")
-
-    # 校验显式指定的 provider：mindmap/timeline/flowchart 走文本 LLM（summarize/generate），
-    # 必须排除 image_service 这类只生图的 provider，否则 worker 调用文本方法会崩。
-    # outline 走 generate_image()，默认就是 image_service，这里不拦。
-    if data.provider and data.visual_type != "outline":
-        text_providers = _text_capable_llm_providers()
-        if data.provider not in text_providers:
-            raise BusinessError(
-                ErrorCode.PARAMETER_ERROR,
-                reason=f"未知或不支持文本生成的 LLM provider: {data.provider}"
-                f"（{data.visual_type} 可用: {sorted(text_providers)}）",
-            )
-
-    # Check if visual summary already exists (unless regenerate=True)
-    summary_type = f"visual_{data.visual_type}"
-    if not data.regenerate:
-        existing_stmt = (
-            select(Summary)
-            .where(
-                Summary.task_id == task_id,
-                Summary.summary_type == summary_type,
-                Summary.is_active.is_(True),
-            )
-            .order_by(Summary.created_at.desc())
-            .limit(1)
-        )
-        existing_result = await db.execute(existing_stmt)
-        existing_summary = existing_result.scalar_one_or_none()
-
-        if existing_summary:
-            # Return existing summary instead of creating new one
-            return success(
-                data={
-                    "task_id": task_id,
-                    "summary_id": str(existing_summary.id),
-                    "visual_type": data.visual_type,
-                    "status": "exists",
-                    "message": "可视化摘要已存在，如需重新生成请设置 regenerate=true",
-                }
-            )
-
-    # Auto-detect content_style if not provided
-    content_style = data.content_style or "general"
-
-    # Submit visual summary generation task
-    # Note: regenerate flag is passed to worker, which will deactivate old records
-    # after successfully creating new one (atomic operation)
-    trace_id = getattr(request.state, "trace_id", None)
-    celery_app.send_task(
-        "worker.tasks.process_visual_summary",
-        args=[task_id, data.visual_type, content_style],
-        kwargs={
-            "provider": data.provider,
-            "model_id": data.model_id,
-            "generate_image": data.generate_image,
-            "image_format": data.image_format,
-            "user_id": user.id,
-            "request_id": trace_id,
-            "regenerate": data.regenerate,
-        },
-    )
-
-    return success(
-        data={
-            "task_id": task_id,
-            "visual_type": data.visual_type,
-            "content_style": content_style,
-            "generate_image": data.generate_image,
-            "status": "queued",
-        }
-    )
-
-
-@router.get("/{task_id}/visual/{visual_type}")
-async def get_visual_summary(
-    task_id: str,
-    visual_type: str,
-    db: AsyncSession = Depends(get_db),
-    user: CurrentUser = Depends(get_current_user),
-) -> JSONResponse:
-    """获取已生成的可视化摘要"""
-
-    # Verify task exists and belongs to user
-    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
-    task_result = await db.execute(task_stmt)
-    task = task_result.scalar_one_or_none()
-
-    if not task:
-        raise BusinessError(ErrorCode.TASK_NOT_FOUND)
-
-    # Query visual summary
-    summary_stmt = (
-        select(Summary)
-        .where(
-            Summary.task_id == task_id,
-            Summary.summary_type == f"visual_{visual_type}",
-            Summary.is_active.is_(True),
-        )
-        .order_by(Summary.version.desc())
-        .limit(1)
-    )
-    summary_result = await db.execute(summary_stmt)
-    summary = summary_result.scalar_one_or_none()
-
-    if not summary:
-        raise BusinessError(ErrorCode.SUMMARY_NOT_FOUND, reason=f"未找到 {visual_type} 类型的可视化摘要")
-
-    response = VisualSummaryResponse(
-        id=str(summary.id),
-        task_id=task_id,
-        visual_type=visual_type,
-        format=summary.visual_format or "mermaid",
-        content=summary.visual_content or summary.content,
-        image_url=await build_media_download_url(summary.image_key, user.id) if summary.image_key else None,
-        model_used=summary.model_used,
-        token_count=summary.token_count,
-        created_at=summary.created_at,
-    )
-
-    return success(data=jsonable_encoder(response))
 
 
 # ===== Summary Images Endpoint =====

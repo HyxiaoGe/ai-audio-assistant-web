@@ -81,7 +81,6 @@ from worker.tasks import (
     cleanup_task,  # noqa: F401, E402
     download_youtube,  # noqa: F401, E402
     process_audio,  # noqa: F401, E402
-    process_visual_summary,  # noqa: F401, E402
     process_youtube,  # noqa: F401, E402
     quota_alert,  # noqa: F401, E402
     regenerate_summary,  # noqa: F401, E402

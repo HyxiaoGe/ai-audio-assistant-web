@@ -145,8 +145,6 @@ def test_ingest_url_rejected(url: str | None) -> None:
     ("module", "var"),
     [
         ("worker/tasks/image_generator.py", "image_id"),
-        ("worker/tasks/summary_visual_generator.py", "visual_id"),
-        ("worker/tasks/outline_generator.py", "outline_id"),
     ],
 )
 def test_media_object_ids_use_full_uuid(module: str, var: str) -> None:

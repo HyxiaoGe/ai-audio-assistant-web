@@ -14,7 +14,6 @@ FastAPI-based backend service that processes audio/video content through ASR (Au
 - PostgreSQL
 - Redis
 - FFmpeg (for audio extraction)
-- Node.js + npm (for Mermaid CLI visual rendering)
 
 ## Development Commands
 
@@ -594,28 +593,3 @@ Complete one task at a time:
 - `docs/API.md`: API specifications (if exists)
 - `docs/ARCH.md`: Architecture details (if exists)
 - Interactive API docs: http://localhost:8000/docs
-
----
-
-## Visual Summaries (v1.3+)
-
-Multi-modal visual summary generation using Mermaid diagrams.
-
-### Visual Types
-
-- **Mindmap** (思维导图): Hierarchical concept maps
-- **Timeline** (时间轴): Chronological event sequences
-- **Flowchart** (流程图): Process flows
-
-### Key Components
-
-- `app/prompts/templates/visual/`: Prompt templates by locale and content style
-- `worker/tasks/summary_visual_generator.py`: Generation logic
-- `worker/tasks/process_visual_summary.py`: Celery task
-- `app/api/v1/summaries.py`: API endpoints (`POST /{task_id}/visual`, `GET /{task_id}/visual/{type}`)
-
-### Image Rendering
-
-Uses Mermaid CLI (`mmdc`) to render diagrams:
-- Install: `npm install -g @mermaid-js/mermaid-cli`
-- Falls back to Mermaid syntax if rendering fails
