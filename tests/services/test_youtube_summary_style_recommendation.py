@@ -174,7 +174,9 @@ async def test_recommend_summary_style_for_video_uses_llm_and_creates_cache_reco
     assert result.cached is False
     assert len(llm.calls) == 1
     messages, kwargs = llm.calls[0]
-    assert kwargs == {"max_tokens": 300, "temperature": 0.2}
+    # 见 summary_style_recommendation 注释：放大到 2048 给 deepseek-chat reasoning_content 留余量，
+    # 避免推理链挤掉正文导致空返回误兜底。
+    assert kwargs == {"max_tokens": 2048, "temperature": 0.2}
     assert "How to build a reliable FastAPI upload workflow" in messages[-1]["content"]
     assert "tutorial" in messages[-1]["content"]
     assert session.committed is True

@@ -153,7 +153,10 @@ async def _recommend_style_with_llm(
         duration_seconds=duration_seconds,
         locale=locale,
     )
-    raw = await llm_service.chat(messages, max_tokens=300, temperature=0.2)
+    # 与 style_detection 同源：deepseek-chat 经代理会先产出 reasoning_content，与正文共享
+    # max_tokens；300 偏薄时推理链偶发吃满额度挤掉正文 → 空返回 → 误兜底。分类输出本身很小，
+    # 放大到 2048 只为给推理链留余量（上限非预付，按实际生成计费）。
+    raw = await llm_service.chat(messages, max_tokens=2048, temperature=0.2)
     return _parse_llm_recommendation(raw, locale)
 
 
