@@ -48,17 +48,27 @@ def _load_styles_config() -> dict[str, Any]:
 # Predefined style order for consistent display
 STYLE_ORDER = [
     "meeting",
+    "conversation",
     "lecture",
-    "podcast",
-    "interview",
     "tutorial",
     "review",
     "news",
-    "explainer",
-    "documentary",
-    "video",
     "general",
 ]
+
+# Synthesized "auto" item (default). Not sourced from styles_i18n.json.
+_AUTO_STYLE_I18N = {
+    "zh": {
+        "name": "自动识别",
+        "description": "由 AI 根据内容自动选择最合适的风格",
+        "focus": "自动识别内容类型并匹配最佳摘要取向",
+    },
+    "en": {
+        "name": "Auto-detect",
+        "description": "Let AI pick the best style based on the content",
+        "focus": "Automatically detect the content type and match the best summary approach",
+    },
+}
 
 
 @router.get("")
@@ -82,6 +92,19 @@ async def get_summary_styles(request: Request) -> dict[str, Any]:
     config = _load_styles_config()
 
     styles: list[SummaryStyleItem] = []
+
+    # Prepend synthesized "auto" item as the default first option.
+    auto_i18n = _AUTO_STYLE_I18N.get(lang, _AUTO_STYLE_I18N["zh"])
+    styles.append(
+        SummaryStyleItem(
+            id="auto",
+            name=auto_i18n["name"],
+            description=auto_i18n["description"],
+            focus=auto_i18n["focus"],
+            icon="sparkles",
+            recommended_visual_types=[],
+        )
+    )
 
     # Build styles list in predefined order
     for style_id in STYLE_ORDER:
