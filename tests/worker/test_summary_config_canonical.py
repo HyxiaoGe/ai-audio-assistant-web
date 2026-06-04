@@ -36,7 +36,7 @@ def test_style_specific_prompt_types_preserved(cfg: dict) -> None:
 
 
 def test_version_current_and_changelog_history(cfg: dict) -> None:
-    assert cfg["version"] == "1.6.0"
+    assert cfg["version"] == "1.7.0"
     assert cfg["version"] in cfg["changelog"]
     # 历史条目保留
     assert "1.5.0" in cfg["changelog"]
@@ -44,8 +44,9 @@ def test_version_current_and_changelog_history(cfg: dict) -> None:
 
 def test_max_tokens_enlarged_for_reasoning_models(cfg: dict) -> None:
     # deepseek-chat 经代理会产出 reasoning_content，max_tokens 需为正文留足预算，
-    # 否则推理链挤占额度导致正文截断或为空（详见 1.6.0 changelog）。
+    # 否则推理链挤占额度导致正文截断或为空（详见 1.6.0/1.7.0 changelog）。
+    # 1.7.0 起统一放大到 12000（max_tokens 是上限非预付，按实际生成计费）。
     mp = cfg["model_params"]
-    assert mp["overview"]["max_tokens"] == 4096
-    assert mp["key_points"]["max_tokens"] == 2048
-    assert mp["action_items"]["max_tokens"] == 2048
+    assert mp["overview"]["max_tokens"] == 12000
+    assert mp["key_points"]["max_tokens"] == 12000
+    assert mp["action_items"]["max_tokens"] == 12000
