@@ -1,5 +1,5 @@
 {
-  "version": "1.6.0",
+  "version": "1.7.0",
   "features": {
     "auto_images": {
       "enabled": true,
@@ -36,21 +36,21 @@
   "model_params": {
     "overview": {
       "temperature": 0.6,
-      "max_tokens": 4096,
+      "max_tokens": 12000,
       "top_p": 0.9,
       "frequency_penalty": 0.0,
       "presence_penalty": 0.0
     },
     "key_points": {
       "temperature": 0.5,
-      "max_tokens": 2048,
+      "max_tokens": 12000,
       "top_p": 0.9,
       "frequency_penalty": 0.3,
       "presence_penalty": 0.0
     },
     "action_items": {
       "temperature": 0.3,
-      "max_tokens": 2048,
+      "max_tokens": 12000,
       "top_p": 0.9,
       "frequency_penalty": 0.0,
       "presence_penalty": 0.0
@@ -59,6 +59,12 @@
   "default_locale": "zh-CN",
   "supported_locales": ["zh-CN", "en-US"],
   "changelog": {
+    "1.7.0": {
+      "date": "2026-06-05",
+      "changes": [
+        "max_tokens 统一放大至 12000（overview/key_points/action_items）：实测代理对 deepseek-chat 放行 16k 仍全额给，12k 毫无障碍；max_tokens 是上限非预付（按实际生成计费），为 reasoning_content 留足余量、彻底消除贴边截断/空返回风险"
+      ]
+    },
     "1.6.0": {
       "date": "2026-06-05",
       "changes": [

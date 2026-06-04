@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "章节划分提示词配置",
   "supported_content_styles": [
     "meeting",
@@ -14,7 +14,7 @@
   "model_params": {
     "segment": {
       "temperature": 0.3,
-      "max_tokens": 4096,
+      "max_tokens": 12000,
       "top_p": 0.9,
       "frequency_penalty": 0.0,
       "presence_penalty": 0.0
@@ -22,6 +22,12 @@
   },
   "default_locale": "zh-CN",
   "changelog": {
+    "1.2.0": {
+      "date": "2026-06-05",
+      "changes": [
+        "segment max_tokens 4096→12000：与 summary 统一档位，给 reasoning_content 留足余量；实测最重转写 reasoning 已达 3468，4096 余量偏薄，12k 彻底消除贴边风险（代理放行无障碍，按实际生成计费）"
+      ]
+    },
     "1.1.0": {
       "date": "2026-06-05",
       "changes": [
