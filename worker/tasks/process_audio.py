@@ -37,6 +37,11 @@ from app.services.notifications.service import NotificationService
 from app.services.notifications.types import NotificationType
 from app.services.rag import ingest_task_chunks_async
 from app.services.storage.base import StorageService
+from app.services.summary.style_resolution import (
+    is_auto_style,
+    persist_detected_style,
+    resolve_content_style,
+)
 from app.services.transcript_polish import polish_transcripts
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
@@ -1001,27 +1006,16 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
 
             await _update_task(session, task, "summarizing", 82, "summarizing", request_id)
 
-            # 提取content_style和LLM配置
+            # 提取请求的 summary_style（可能是 auto/空/具体风格）
             options = task.options or {}
-            content_style = options.get("summary_style", "meeting")
-            if not isinstance(content_style, str):
-                content_style = "meeting"
+            requested_style = options.get("summary_style")
+            if not isinstance(requested_style, str):
+                requested_style = ""
 
             # 解析具体的 LLM provider 与 model_id（与润色步骤、YouTube 路径保持一致）
             # 用户未显式指定时回退到默认 provider + 默认 model_id，避免把 None 透传给
             # SmartFactory.get_service("llm", ...) 触发 "model_id is required" 而导致整任务失败
             llm_provider_option, llm_model_id_option = _resolve_llm_selection(task, str(task.user_id))
-
-            logger.info(
-                "Task %s: Starting quality-aware summary generation (style: %s)",
-                task_id,
-                content_style,
-                extra={
-                    "task_id": task_id,
-                    "content_style": content_style,
-                    "segments_count": len(segments),
-                },
-            )
 
             # 从 DB 读取最新转写内容（可能已被润色修改）
             summarize_query = select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
@@ -1038,6 +1032,29 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                 )
                 for t in latest_transcripts
             ]
+
+            # ===== 解析内容风格：auto/空 → 据转写识别为 7 规范风格之一；显式 → 归一 =====
+            detection_text = "\n".join(seg.content for seg in latest_segments)
+            content_style = await resolve_content_style(
+                requested_style=requested_style,
+                transcript=detection_text,
+                title=task.title,
+                locale="zh-CN",
+                user_id=str(task.user_id),
+            )
+            # 写回 task.options.summary_style + auto_detected 来源标记，供配图 / regenerate
+            # 复用并供前端仅对 auto 识别结果展示「AI 识别为：X」
+            if is_auto_style(requested_style) and content_style != requested_style:
+                task.options = persist_detected_style(
+                    task.options, content_style, auto_detected=True
+                )
+                await _commit(session)
+            logger.info(
+                "Task %s: resolved content_style=%s (requested=%r)",
+                task_id,
+                content_style,
+                requested_style or "auto",
+            )
 
             # 使用新的质量感知摘要生成函数
             try:

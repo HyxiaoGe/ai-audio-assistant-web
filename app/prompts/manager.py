@@ -11,6 +11,7 @@ from prompthub import NotFoundError, PromptHubClient, PromptHubError
 
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
+from app.services.summary.style_catalog import normalize_content_style
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ class PromptManager:
             prompt_type: 提示词类型（如 overview, key_points, action_items, segment）
             locale: 语言（如 zh-CN, en-US）
             variables: 模板变量（如 {transcript}, {quality_notice}）
-            content_style: 内容风格（如 meeting, lecture, podcast）
+            content_style: 内容风格（如 meeting, conversation, lecture, tutorial, review, news, general）
 
         Returns:
             包含 system, user_prompt, model_params 的字典
@@ -90,6 +91,7 @@ class PromptManager:
 
         if content_style is None:
             content_style = (variables or {}).get("content_style", "meeting")
+        content_style = normalize_content_style(content_style)
 
         slugs = self._build_prompt_slug_candidates(category, prompt_type, locale, content_style)
         selected_slug: str | None = None
@@ -110,7 +112,12 @@ class PromptManager:
 
             # Merge shared vars + caller vars, then render server-side
             shared_vars = self._resolve_shared_vars(locale)
-            all_vars = {**shared_vars, **(variables or {})}
+            all_vars = {
+                **shared_vars,
+                **(variables or {}),
+                "content_style": content_style,
+                "content_style_name": self._resolve_content_style_name(content_style, locale),
+            }
 
             rendered = self._client.prompts.render(prompt.id, variables=all_vars)
             user_prompt = rendered.rendered_content
@@ -151,6 +158,16 @@ class PromptManager:
             },
         }
 
+    def _resolve_content_style_name(self, content_style: str, locale: str) -> str:
+        """从 images/config 的 content_style_names 取本地化风格名,fallback 用 key 本身。"""
+        lang = "zh" if locale.startswith("zh") else "en"
+        config = self._load_config("images")
+        return (
+            config.get("content_style_names", {})
+            .get(lang, {})
+            .get(content_style, content_style)
+        )
+
     def clear_cache(self) -> None:
         """清除所有缓存"""
         self._config_cache.clear()
@@ -158,9 +175,16 @@ class PromptManager:
 
     def get_image_config(self, content_style: str) -> dict[str, Any]:
         """获取内容风格对应的图片配置（从本地 config.json 读取）"""
+        content_style = normalize_content_style(content_style)
         config = self._load_config("images")
         mapping = config.get("content_style_mapping", {})
-        return mapping.get(content_style, mapping.get("general", {}))
+        if content_style not in mapping:
+            log.warning(
+                "Unknown content_style %r has no image style mapping; falling back to 'general'",
+                content_style,
+            )
+            return mapping.get("general", {})
+        return mapping[content_style]
 
     def get_image_prompt(
         self,
@@ -177,6 +201,7 @@ class PromptManager:
                 reason="PromptHub not configured",
             )
 
+        content_style = normalize_content_style(content_style)
         config = self._load_config("images")
         lang = "zh" if locale.startswith("zh") else "en"
 
@@ -213,19 +238,26 @@ class PromptManager:
     def _build_prompt_slug_candidates(
         self, category: str, prompt_type: str, locale: str, content_style: str
     ) -> list[str]:
-        """Build PromptHub slug candidates ordered from most specific to fallback."""
+        """Build PromptHub slug candidates ordered from most specific to fallback.
+
+        - action_items: generic-only unless the style is in
+          ``style_specific_prompt_types`` (e.g. review) -> [styled, generic].
+        - all other types (overview/key_points/segment/...): always
+          [styled, generic] so a missing styled slug falls back to generic
+          instead of 404-ing.
+        """
         loc_short = locale.split("-")[0]
         type_slug = prompt_type.replace("_", "")  # key_points -> keypoints
 
-        if self._uses_style_specific_prompt(category, prompt_type, content_style):
-            styled_slug = f"{category}-{type_slug}-{content_style}-{loc_short}"
-            generic_slug = f"{category}-{type_slug}-{loc_short}"
-            return [styled_slug, generic_slug]
+        styled = f"{category}-{type_slug}-{content_style}-{loc_short}"
+        generic = f"{category}-{type_slug}-{loc_short}"
 
-        if prompt_type == "action_items":
-            return [f"{category}-{type_slug}-{loc_short}"]
+        if prompt_type == "action_items" and not self._uses_style_specific_prompt(
+            category, prompt_type, content_style
+        ):
+            return [generic]
 
-        return [f"{category}-{type_slug}-{content_style}-{loc_short}"]
+        return [styled, generic]
 
     def _uses_style_specific_prompt(self, category: str, prompt_type: str, content_style: str) -> bool:
         """Return whether a prompt type has style-specific PromptHub variants."""
@@ -285,21 +317,39 @@ class PromptManager:
         visual_style_key = style_config.get("visual_style", "flat_vector")
         visual_styles = config.get("visual_styles", {})
         lang_key = f"prompt_{lang}"
-        visual_style_prompt = visual_styles.get(visual_style_key, {}).get(
+        style_entry = visual_styles.get(visual_style_key, {})
+        visual_style_prompt = style_entry.get(
             lang_key, visual_styles.get("flat_vector", {}).get(lang_key, "")
         )
+
+        # Overall-mood closing line, per visual style; fallback to a generic line.
+        mood_fallback = (
+            "整体观感：清晰、专业。" if lang == "zh" else "Overall mood: clear and professional."
+        )
+        style_mood = style_entry.get(f"mood_{lang}", mood_fallback)
 
         layout_key = style_config.get("layout", "flexible")
         layout_templates = config.get("layout_templates", {}).get(lang, {})
         layout_instructions = layout_templates.get(layout_key, layout_templates.get("flexible", ""))
 
         colors = style_config.get("color_scheme", {})
+        # Natural-language color names for the artwork (never rendered as text);
+        # fall back to the hex value when a name is not configured.
+        name_suffix = "_name" if lang == "zh" else "_name_en"
+        primary_color = colors.get("primary", "#3B82F6")
+        secondary_color = colors.get("secondary", "#10B981")
+        background_color = colors.get("background", "#FFFFFF")
+        primary_color_name = colors.get(f"primary{name_suffix}", primary_color)
+        secondary_color_name = colors.get(f"secondary{name_suffix}", secondary_color)
+        background_color_name = colors.get(f"background{name_suffix}", background_color)
 
         image_type_name = config.get("image_type_names", {}).get(lang, {}).get(image_type, image_type)
         content_style_name = config.get("content_style_names", {}).get(lang, {}).get(content_style, content_style)
 
         if key_texts:
-            key_texts_formatted = "\n".join([f"- {text}" for text in key_texts])
+            # Verbatim contract: each label wrapped in quotes so the image model
+            # renders it exactly, character for character.
+            key_texts_formatted = "\n".join([f'- "{text}"' for text in key_texts])
         else:
             if lang == "zh":
                 key_texts_formatted = "- (根据主题自动生成合适的标签)"
@@ -310,9 +360,13 @@ class PromptManager:
             "image_type": image_type_name,
             "content_style_name": content_style_name,
             "visual_style_prompt": visual_style_prompt,
-            "primary_color": colors.get("primary", "#3B82F6"),
-            "secondary_color": colors.get("secondary", "#10B981"),
-            "background_color": colors.get("background", "#FFFFFF"),
+            "primary_color": primary_color,
+            "secondary_color": secondary_color,
+            "background_color": background_color,
+            "primary_color_name": primary_color_name,
+            "secondary_color_name": secondary_color_name,
+            "background_color_name": background_color_name,
+            "style_mood": style_mood,
             "description": description,
             "key_texts_formatted": key_texts_formatted,
             "layout_instructions": layout_instructions,

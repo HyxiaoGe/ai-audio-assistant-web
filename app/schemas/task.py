@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 class TaskOptions(BaseModel):
     language: str = Field(default="auto")
     enable_speaker_diarization: bool = Field(default=True)
-    summary_style: str = Field(default="meeting")
+    summary_style: str = Field(default="auto")
     provider: str | None = Field(default=None)
     model_id: str | None = Field(default=None)
     asr_provider: str | None = Field(default=None)
@@ -88,6 +88,18 @@ class TaskDetailResponse(BaseModel):
     error_message: str | None
     stages: list[TaskStageResponse] = Field(default_factory=list)  # 阶段信息
     youtube_info: YouTubeVideoInfo | None = None  # YouTube 视频元数据
+    # 仅当本次摘要风格由后台自动识别得到时(options.summary_style_auto_detected=True)，
+    # 暴露识别出的具体风格供前端展示「AI 识别为：X」；用户显式选风格时为 None。
+    detected_summary_style: str | None = None
+
+    @staticmethod
+    def detected_summary_style_from_options(options: dict | None) -> str | None:
+        """从 task.options 推导只读的 detected_summary_style（None 表示非自动识别）。"""
+        opts = options or {}
+        if opts.get("summary_style_auto_detected") is True:
+            value = opts.get("summary_style")
+            return value if isinstance(value, str) else None
+        return None
 
 
 class TaskBatchDeleteRequest(BaseModel):

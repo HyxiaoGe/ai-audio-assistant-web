@@ -567,6 +567,7 @@ class TaskService:
             error_message=task.error_message,
             stages=stages,
             youtube_info=youtube_info,
+            detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(task.options),
         )
 
     @staticmethod

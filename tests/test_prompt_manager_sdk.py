@@ -222,6 +222,8 @@ class TestGetPrompt:
                 "format_rules": "format rules text",
                 "image_requirements": "image req text",
                 "transcript": "hello",
+                "content_style": "meeting",
+                "content_style_name": manager._resolve_content_style_name("meeting", "zh-CN"),
             },
         )
 

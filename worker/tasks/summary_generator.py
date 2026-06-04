@@ -38,7 +38,7 @@ async def generate_summaries_with_quality_awareness(
     Args:
         task_id: 任务ID
         segments: 转写片段列表
-        content_style: 内容风格 (meeting/lecture/podcast/video/general)
+        content_style: 内容风格 (meeting/conversation/lecture/tutorial/review/news/general)
         session: 数据库会话
         user_id: 用户ID
         provider: LLM provider（可选）

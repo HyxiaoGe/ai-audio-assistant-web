@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -20,59 +19,14 @@ from app.models.youtube_subscription import YouTubeSubscription
 from app.models.youtube_summary_style_recommendation import YouTubeSummaryStyleRecommendation
 from app.models.youtube_video import YouTubeVideo
 from app.services.llm.base import LLMService
+from app.services.summary.style_catalog import CANONICAL_STYLES, STYLE_CATALOG
+from app.services.summary.style_parsing import parse_style_payload
 
 logger = logging.getLogger(__name__)
 
 ALGORITHM_VERSION = "summary-style-llm-v1"
 
-STYLE_CATALOG: dict[str, dict[str, str]] = {
-    "meeting": {
-        "zh": "会议、讨论、头脑风暴；关注议题、决议、行动项、参会者观点。",
-        "en": "Meetings, discussions, brainstorming; focus on agenda, decisions, action items, viewpoints.",
-    },
-    "lecture": {
-        "zh": "讲座、课程、培训内容；关注知识点、核心概念、学习要点。",
-        "en": "Lectures, courses, training; focus on knowledge, concepts, learning points.",
-    },
-    "podcast": {
-        "zh": "播客节目、圆桌、长对话；关注核心观点、精彩片段、讨论亮点。",
-        "en": "Podcasts, roundtables, long conversations; focus on opinions, highlights, discussion points.",
-    },
-    "interview": {
-        "zh": "采访、访谈、对话节目；关注嘉宾观点、问答精华、关键洞见。",
-        "en": "Interviews and Q&A conversations; focus on guest insights and key answers.",
-    },
-    "tutorial": {
-        "zh": "操作教程、使用指南、How-to 视频；关注操作步骤、注意事项、技巧要点。",
-        "en": "How-to guides and tutorials; focus on steps, caveats, practical techniques.",
-    },
-    "review": {
-        "zh": "产品评测、体验分享、对比测评；关注优缺点、性能数据、推荐结论。",
-        "en": "Reviews and comparisons; focus on pros, cons, metrics, final recommendation.",
-    },
-    "news": {
-        "zh": "新闻报道、时事评论、资讯播报；关注核心事件、关键数据、各方观点。",
-        "en": "News, current affairs, updates; focus on events, data, and perspectives.",
-    },
-    "explainer": {
-        "zh": "科普视频、知识解读、概念讲解；关注核心概念、原理说明、实际应用。",
-        "en": "Explainers and educational analysis; focus on concepts, principles, applications.",
-    },
-    "documentary": {
-        "zh": "纪录片、专题片、深度报道；关注主题背景、关键事件、人物故事。",
-        "en": "Documentaries and feature reports; focus on context, events, and human stories.",
-    },
-    "video": {
-        "zh": "视频教程、解说视频或难以归入特定垂类的视频内容；关注主题亮点、关键信息。",
-        "en": "General video commentary or videos that do not fit a narrower style; focus on highlights.",
-    },
-    "general": {
-        "zh": "通用内容、其他类型；关注核心信息、关键要点。",
-        "en": "General or miscellaneous content; focus on core information and key points.",
-    },
-}
-
-ALLOWED_STYLES = tuple(STYLE_CATALOG)
+ALLOWED_STYLES = CANONICAL_STYLES
 
 
 @dataclass(frozen=True)
@@ -164,54 +118,8 @@ def _build_llm_messages(
     ]
 
 
-def _extract_json_object(raw: str) -> dict[str, Any]:
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start < 0 or end <= start:
-        raise BusinessError(
-            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-            reason="LLM recommendation response did not contain a JSON object",
-        )
-    try:
-        parsed = json.loads(raw[start : end + 1])
-    except json.JSONDecodeError as exc:
-        raise BusinessError(
-            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-            reason="LLM recommendation response was not valid JSON",
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise BusinessError(
-            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-            reason="LLM recommendation response JSON was not an object",
-        )
-    return parsed
-
-
-def _parse_confidence(value: Any) -> float:
-    try:
-        confidence = float(value)
-    except (TypeError, ValueError) as exc:
-        raise BusinessError(
-            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-            reason="LLM recommendation confidence was not numeric",
-        ) from exc
-    if confidence > 1 and confidence <= 100:
-        confidence = confidence / 100
-    return round(min(1.0, max(0.0, confidence)), 2)
-
-
 def _parse_llm_recommendation(raw: str, locale: str) -> SummaryStyleRecommendationResult:
-    payload = _extract_json_object(raw.strip())
-    style = str(payload.get("style") or "").strip().lower()
-    if style not in ALLOWED_STYLES:
-        raise BusinessError(
-            ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-            reason=f"LLM recommendation style is not supported: {style or '<empty>'}",
-        )
-    confidence = _parse_confidence(payload.get("confidence"))
-    reason = str(payload.get("reason") or "").strip()
-    if not reason:
-        reason = "AI 推荐该摘要风格。" if locale.startswith("zh") else "AI recommended this summary style."
+    style, confidence, reason = parse_style_payload(raw, locale)
     return SummaryStyleRecommendationResult(
         style=style,
         confidence=confidence,

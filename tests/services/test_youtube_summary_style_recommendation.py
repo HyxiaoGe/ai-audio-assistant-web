@@ -188,27 +188,6 @@ async def test_recommend_summary_style_for_video_uses_llm_and_creates_cache_reco
 
 
 @pytest.mark.asyncio
-async def test_recommend_summary_style_for_video_rejects_invalid_llm_style() -> None:
-    video = _video()
-    subscription = _subscription()
-    session = _FakeSession(video, subscription, None)
-    llm = _FakeLLM('{"style":"invalid-style","confidence":0.7,"reason":"Nope"}')
-
-    with pytest.raises(BusinessError) as exc_info:
-        await recommend_summary_style_for_video(
-            session,
-            video.user_id,
-            video.video_id,
-            locale="en",
-            llm_service=llm,
-        )
-
-    assert exc_info.value.code == ErrorCode.AI_SUMMARY_GENERATION_FAILED
-    assert session.added == []
-    assert session.committed is False
-
-
-@pytest.mark.asyncio
 async def test_recommend_summary_style_for_video_returns_concurrent_cached_result() -> None:
     video = _video()
     subscription = _subscription()
@@ -294,3 +273,55 @@ async def test_recommend_summary_style_for_video_raises_when_video_not_found() -
         )
 
     assert exc_info.value.code == ErrorCode.YOUTUBE_VIDEO_NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_recommend_summary_style_normalizes_deprecated_podcast_to_conversation() -> None:
+    video = _video()
+    subscription = _subscription()
+    session = _FakeSession(video, subscription, None)
+    llm = _FakeLLM('{"style":"podcast","confidence":0.8,"reason":"长对话节目"}')
+
+    result = await recommend_summary_style_for_video(
+        session,
+        video.user_id,
+        video.video_id,
+        locale="zh",
+        llm_service=llm,
+    )
+
+    assert result.style == "conversation"
+    assert session.committed is True
+    assert session.added[0].style == "conversation"
+
+
+@pytest.mark.asyncio
+async def test_recommend_summary_style_unknown_falls_back_to_general() -> None:
+    video = _video()
+    subscription = _subscription()
+    session = _FakeSession(video, subscription, None)
+    llm = _FakeLLM('{"style":"totally-made-up","confidence":0.3,"reason":"x"}')
+
+    result = await recommend_summary_style_for_video(
+        session,
+        video.user_id,
+        video.video_id,
+        locale="en",
+        llm_service=llm,
+    )
+
+    assert result.style == "general"
+
+
+def test_allowed_styles_is_seven_canonical() -> None:
+    from app.services.youtube.summary_style_recommendation import ALLOWED_STYLES
+
+    assert set(ALLOWED_STYLES) == {
+        "meeting",
+        "conversation",
+        "lecture",
+        "tutorial",
+        "review",
+        "news",
+        "general",
+    }

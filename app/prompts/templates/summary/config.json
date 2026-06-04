@@ -1,9 +1,9 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "features": {
     "auto_images": {
       "enabled": true,
-      "max_images": 3,
+      "max_images": 6,
       "timeout_seconds": 300,
       "supported_summary_types": ["overview"],
       "image_model": {
@@ -14,31 +14,23 @@
   },
   "supported_content_styles": [
     "meeting",
+    "conversation",
     "lecture",
-    "podcast",
-    "interview",
     "tutorial",
     "review",
     "news",
-    "explainer",
-    "documentary",
-    "video",
     "general"
   ],
   "style_specific_prompt_types": {
     "action_items": ["review"]
   },
   "content_style_descriptions": {
-    "meeting": "会议、讨论、头脑风暴 / Meetings, discussions, brainstorming",
-    "lecture": "讲座、课程、培训 / Lectures, courses, training",
-    "podcast": "播客、对话节目 / Podcasts, talk shows",
-    "interview": "采访、访谈、对话 / Interviews, conversations",
-    "tutorial": "教程、指南、How-to / Tutorials, guides, how-to",
+    "meeting": "会议、讨论、决策 / Meetings, discussions, decisions",
+    "conversation": "对话、播客、访谈 / Conversations, podcasts, interviews",
+    "lecture": "讲解、课程、科普 / Lectures, courses, explainers",
+    "tutorial": "教程、操作指南 / Tutorials, how-to guides",
     "review": "评测、体验、对比 / Reviews, experiences, comparisons",
-    "news": "新闻、时事、资讯 / News, current affairs",
-    "explainer": "科普、知识解读 / Explainers, educational content",
-    "documentary": "纪录片、专题 / Documentaries, features",
-    "video": "视频教程、解说视频 / Video tutorials, commentary videos",
+    "news": "资讯、时事、纪实 / News, current affairs, documentary",
     "general": "通用内容 / General content"
   },
   "model_params": {
@@ -67,6 +59,16 @@
   "default_locale": "zh-CN",
   "supported_locales": ["zh-CN", "en-US"],
   "changelog": {
+    "1.5.0": {
+      "date": "2026-06-04",
+      "changes": [
+        "风格体系由 11 收敛为 7（meeting/conversation/lecture/tutorial/review/news/general），互不重叠",
+        "弃用 podcast/interview/explainer/documentary/video，经 normalize_content_style 边界归一",
+        "全程自动识别：默认 summary_style 改为 auto，未选时后端识别为 7 规范风格之一",
+        "配图自适应多图、类型多样：max_images 3→6，overview-only 门控不变",
+        "提示词重构：通用模板 + jinja 按风格注入内核，去模板腔、提炼洞见"
+      ]
+    },
     "1.4.0": {
       "date": "2025-01-28",
       "changes": [
