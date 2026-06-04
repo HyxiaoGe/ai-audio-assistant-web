@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "images",
   "supported_locales": ["zh-CN", "en-US"],
   "image_types": {
@@ -7,63 +7,73 @@
       "name_zh": "信息图",
       "name_en": "Infographic",
       "description": "带文字标注的结构化信息图",
-      "recommended_for": ["lecture", "explainer", "tutorial", "video"]
+      "recommended_for": ["tutorial", "general"]
     },
     "mindmap": {
       "name_zh": "思维导图",
       "name_en": "Mind Map",
       "description": "中心辐射的概念关系图",
-      "recommended_for": ["podcast", "interview", "review"]
+      "recommended_for": ["conversation"]
     },
     "timeline": {
       "name_zh": "时间轴",
       "name_en": "Timeline",
       "description": "时间或流程序列图",
-      "recommended_for": ["documentary", "news", "meeting"]
+      "recommended_for": ["meeting", "news"]
     },
     "comparison": {
       "name_zh": "对比图",
       "name_en": "Comparison Chart",
       "description": "并列对比的可视化",
-      "recommended_for": ["review", "explainer"]
+      "recommended_for": ["review"]
     },
     "concept": {
       "name_zh": "概念图",
       "name_en": "Concept Diagram",
       "description": "抽象概念的可视化解释",
-      "recommended_for": ["lecture", "explainer"]
+      "recommended_for": ["lecture"]
     }
   },
   "visual_styles": {
     "flat_vector": {
       "name_zh": "扁平插画",
       "name_en": "Flat Vector",
-      "prompt_zh": "扁平向量插画风格，清晰的轮廓线，明亮的纯色块，现代简约，无渐变",
-      "prompt_en": "Flat vector illustration style with clean outlines, bright solid colors, modern and minimal, no gradients"
+      "prompt_zh": "扁平矢量插画风格（flat vector illustration）。造型几何化、简洁圆润，统一粗细的清晰轮廓线勾边；大面积明亮纯色块平涂填充，绝无渐变、投影或立体厚度。表面哑光纯色、无高光无纹理。光照均匀无方向性，不产生写实阴影。色彩明快现代、克制留白，图标与图形高度符号化。这是矢量插画而非照片或 3D 渲染，避免任何写实细节与摄影质感。最适合：科普、教程、产品讲解类的清晰图解。",
+      "prompt_en": "Flat vector illustration style. Geometric, clean, rounded shapes with uniform-weight crisp outlines; large areas of bright solid color, absolutely no gradients, drop shadows, or 3D thickness. Matte solid surfaces, no highlights or texture. Even, directionless lighting with no realistic shadows. Bright, modern colors, restrained white space, highly symbolic icons. This is vector art, not a photo or 3D render — avoid any photorealistic detail. Best for: explainer, tutorial, and product-walkthrough diagrams.",
+      "mood_zh": "整体观感：干净、亲和、现代。",
+      "mood_en": "Overall mood: clean, approachable, modern."
     },
     "isometric_3d": {
       "name_zh": "等距3D",
       "name_en": "Isometric 3D",
-      "prompt_zh": "等距3D风格，轻微立体感，现代科技感，几何图形，柔和阴影",
-      "prompt_en": "Isometric 3D style with subtle depth, modern tech aesthetic, geometric shapes, soft shadows"
+      "prompt_zh": "等距 2.5D 风格（isometric illustration）。物体以等角投影、约 30° 等距视角呈现，有轻微立体厚度但不写实；几何化的方块、卡片与图标整齐排布，边缘干净利落。表面为现代科技感的纯色，配柔和的方向性阴影增强层次，无强反光、无照片纹理。色彩明快、对比清晰。这是等距矢量图解而非真实 3D 渲染或照片。最适合：流程、系统结构、产品功能的立体化展示。",
+      "prompt_en": "Isometric 2.5D illustration style. Objects in axonometric projection at a ~30° isometric angle with slight depth but not realistic; geometric blocks, cards, and icons arranged neatly with clean edges. Modern-tech solid-color surfaces with soft directional shadows for depth, no strong reflections or photo texture. Bright colors, clear contrast. This is isometric vector art, not a true 3D render or photo. Best for: processes, system structures, and product-feature showcases.",
+      "mood_zh": "整体观感：现代、科技、有秩序的立体感。",
+      "mood_en": "Overall mood: modern, tech-forward, orderly depth."
     },
     "hand_drawn": {
       "name_zh": "手绘风格",
       "name_en": "Hand Drawn",
-      "prompt_zh": "手绘插画风格，温暖亲切，略带手工质感，有机线条，自然配色",
-      "prompt_en": "Hand-drawn illustration style, warm and approachable, organic lines with handcrafted feel, natural colors"
+      "prompt_zh": "手绘插画风格（hand-drawn illustration）。线条为略不规整、有机的手绘笔触，带轻微抖动与呼吸感，温暖亲切；造型随性但清晰可辨。填色为柔和自然的色块，可带淡淡纸张或马克笔质感，无锐利矢量边缘、无渐变光泽。光照柔和均匀，不产生写实阴影。整体亲和、有人情味。这是手绘图解而非照片或精确矢量图。最适合：故事性、叙事类、轻松科普内容。",
+      "prompt_en": "Hand-drawn illustration style. Slightly irregular, organic hand-drawn strokes with subtle wobble and breathing room, warm and friendly; loose but clearly legible shapes. Soft, natural color fills with a faint paper or marker texture, no sharp vector edges or glossy gradients. Soft, even lighting with no realistic shadows. Warm and human overall. This is a hand-drawn diagram, not a photo or precise vector art. Best for: storytelling, narrative, and light explainer content.",
+      "mood_zh": "整体观感：温暖、亲切、有人情味。",
+      "mood_en": "Overall mood: warm, friendly, human."
     },
     "infographic_modern": {
       "name_zh": "现代信息图",
       "name_en": "Modern Infographic",
-      "prompt_zh": "现代信息图风格，数据可视化，图标化表达，清晰的视觉层级，专业商务感",
-      "prompt_en": "Modern infographic style, data visualization focus, iconographic elements, clear visual hierarchy, professional business feel"
+      "prompt_zh": "现代信息图风格（modern infographic）。以数据可视化为核心：图标化表达、清晰的卡片/分区、明确的视觉层级与对齐网格，专业商务感。造型简洁规整，可含简化的图表元素（条形、占比、箭头），线条利落。表面纯色平涂，配少量细微分隔或投影增强分区，无写实纹理。色彩克制专业、强调色突出关键数据。这是信息图解而非照片或装饰插画。最适合：会议、评测、新闻、数据要点。",
+      "prompt_en": "Modern infographic style. Data-visualization first: iconographic expression, clear cards/sections, explicit visual hierarchy on an alignment grid, professional and business-like. Clean, regular shapes that may include simplified chart elements (bars, ratios, arrows), crisp lines. Flat solid fills with subtle dividers or shadows to define sections, no photorealistic texture. Restrained professional colors with the accent highlighting key data. This is an infographic, not a photo or decorative illustration. Best for: meetings, reviews, news, and data takeaways.",
+      "mood_zh": "整体观感：专业、商务、数据清晰。",
+      "mood_en": "Overall mood: professional, business-like, data-clear."
     },
     "chalkboard": {
       "name_zh": "黑板风格",
       "name_en": "Chalkboard",
-      "prompt_zh": "黑板风格，白色或彩色粉笔线条在深色背景，教育感，学术氛围，略带粉笔质感",
-      "prompt_en": "Chalkboard style, white or colored chalk lines on dark background, educational academic atmosphere, subtle chalk texture"
+      "prompt_zh": "黑板手写风格（chalkboard sketch）。深墨绿或近黑色板面背景，白色与少量彩色粉笔质感的线条与文字，边缘略带粉笔颗粒与轻微擦痕。造型为随手板书式的简笔图标、箭头与方框，线条略不规整、有手绘呼吸感。光照柔和均匀，无写实反光。整体营造课堂教学、学术讲解的氛围。文字应像粉笔书写但保持清晰可读。这是板书图解而非照片，避免任何光泽、渐变与三维质感。最适合：讲座、知识科普、概念讲解。",
+      "prompt_en": "Chalkboard sketch style. Dark teal or near-black board background, white with a few colored chalk-textured lines and text, edges with slight chalk grain and faint smudges. Casual board-writing-style simple icons, arrows, and boxes; slightly irregular lines with a hand-drawn feel. Soft, even lighting with no realistic glare. Creates a classroom/academic atmosphere. Text should look chalk-written but stay clearly legible. This is a board diagram, not a photo — avoid any gloss, gradient, or 3D feel. Best for: lectures, explainers, and concept walkthroughs.",
+      "mood_zh": "整体观感：课堂教学、学术、手写质感。",
+      "mood_en": "Overall mood: classroom, academic, hand-written."
     }
   },
   "layout_templates": {
@@ -94,16 +104,22 @@
   },
   "content_style_names": {
     "zh": {
-      "lecture": "讲座/课程", "podcast": "播客/对话", "interview": "访谈",
-      "meeting": "会议", "documentary": "纪录片/专题", "explainer": "知识科普",
-      "video": "视频内容", "tutorial": "操作教程", "review": "产品评测",
-      "news": "新闻资讯", "general": "通用内容"
+      "meeting": "会议",
+      "conversation": "对话/访谈",
+      "lecture": "讲解/课程",
+      "tutorial": "操作教程",
+      "review": "产品评测",
+      "news": "资讯/纪实",
+      "general": "通用内容"
     },
     "en": {
-      "lecture": "Lecture/Course", "podcast": "Podcast/Talk", "interview": "Interview",
-      "meeting": "Meeting", "documentary": "Documentary", "explainer": "Explainer",
-      "video": "Video Content", "tutorial": "Tutorial", "review": "Review",
-      "news": "News", "general": "General Content"
+      "meeting": "Meeting",
+      "conversation": "Conversation/Interview",
+      "lecture": "Lecture/Course",
+      "tutorial": "Tutorial",
+      "review": "Review",
+      "news": "News/Documentary",
+      "general": "General Content"
     }
   },
   "image_type_names": {
@@ -117,81 +133,37 @@
     }
   },
   "content_style_mapping": {
-    "lecture": {
-      "default_type": "infographic",
-      "visual_style": "flat_vector",
-      "aspect_ratio": "3:4",
-      "layout": "hierarchical",
+    "meeting": {
+      "default_type": "timeline",
+      "visual_style": "infographic_modern",
+      "aspect_ratio": "16:9",
+      "layout": "timeline_flow",
       "color_scheme": {
-        "primary": "#3B82F6",
-        "secondary": "#10B981",
-        "background": "#F8FAFC"
+        "primary": "#0EA5E9", "primary_name": "清爽湖蓝", "primary_name_en": "clear lake blue",
+        "secondary": "#14B8A6", "secondary_name": "青绿", "secondary_name_en": "teal",
+        "background": "#F0F9FF", "background_name": "极浅天蓝白", "background_name_en": "pale sky white"
       }
     },
-    "podcast": {
+    "conversation": {
       "default_type": "mindmap",
       "visual_style": "hand_drawn",
       "aspect_ratio": "16:9",
       "layout": "radial",
       "color_scheme": {
-        "primary": "#F59E0B",
-        "secondary": "#8B5CF6",
-        "background": "#FFFBEB"
+        "primary": "#F59E0B", "primary_name": "暖琥珀橙", "primary_name_en": "warm amber",
+        "secondary": "#8B5CF6", "secondary_name": "柔和紫", "secondary_name_en": "soft violet",
+        "background": "#FFFBEB", "background_name": "极浅暖米白", "background_name_en": "pale warm cream"
       }
     },
-    "interview": {
-      "default_type": "mindmap",
-      "visual_style": "flat_vector",
-      "aspect_ratio": "16:9",
-      "layout": "conversation",
-      "color_scheme": {
-        "primary": "#6366F1",
-        "secondary": "#EC4899",
-        "background": "#F5F3FF"
-      }
-    },
-    "meeting": {
-      "default_type": "timeline",
-      "visual_style": "infographic_modern",
-      "aspect_ratio": "16:9",
-      "layout": "horizontal_flow",
-      "color_scheme": {
-        "primary": "#0EA5E9",
-        "secondary": "#14B8A6",
-        "background": "#F0F9FF"
-      }
-    },
-    "documentary": {
-      "default_type": "timeline",
-      "visual_style": "hand_drawn",
-      "aspect_ratio": "16:9",
-      "layout": "narrative_flow",
-      "color_scheme": {
-        "primary": "#78716C",
-        "secondary": "#D97706",
-        "background": "#FAF5F0"
-      }
-    },
-    "explainer": {
+    "lecture": {
       "default_type": "concept",
-      "visual_style": "flat_vector",
+      "visual_style": "chalkboard",
       "aspect_ratio": "3:4",
-      "layout": "step_by_step",
+      "layout": "hierarchical",
       "color_scheme": {
-        "primary": "#22C55E",
-        "secondary": "#3B82F6",
-        "background": "#F0FDF4"
-      }
-    },
-    "video": {
-      "default_type": "infographic",
-      "visual_style": "isometric_3d",
-      "aspect_ratio": "16:9",
-      "layout": "highlights",
-      "color_scheme": {
-        "primary": "#EF4444",
-        "secondary": "#F59E0B",
-        "background": "#FFFFFF"
+        "primary": "#3B82F6", "primary_name": "明亮天蓝", "primary_name_en": "bright sky blue",
+        "secondary": "#10B981", "secondary_name": "翠绿", "secondary_name_en": "emerald green",
+        "background": "#F8FAFC", "background_name": "近白浅灰", "background_name_en": "near-white light gray"
       }
     },
     "tutorial": {
@@ -200,9 +172,9 @@
       "aspect_ratio": "3:4",
       "layout": "step_by_step",
       "color_scheme": {
-        "primary": "#8B5CF6",
-        "secondary": "#06B6D4",
-        "background": "#FAF5FF"
+        "primary": "#8B5CF6", "primary_name": "柔和紫", "primary_name_en": "soft violet",
+        "secondary": "#06B6D4", "secondary_name": "青蓝", "secondary_name_en": "cyan blue",
+        "background": "#FAF5FF", "background_name": "极浅紫白", "background_name_en": "pale violet white"
       }
     },
     "review": {
@@ -211,9 +183,9 @@
       "aspect_ratio": "16:9",
       "layout": "split_comparison",
       "color_scheme": {
-        "primary": "#10B981",
-        "secondary": "#EF4444",
-        "background": "#ECFDF5"
+        "primary": "#10B981", "primary_name": "翠绿", "primary_name_en": "emerald green",
+        "secondary": "#EF4444", "secondary_name": "明亮红", "secondary_name_en": "bright red",
+        "background": "#ECFDF5", "background_name": "极浅薄荷白", "background_name_en": "pale mint white"
       }
     },
     "news": {
@@ -222,9 +194,9 @@
       "aspect_ratio": "16:9",
       "layout": "timeline_flow",
       "color_scheme": {
-        "primary": "#1E40AF",
-        "secondary": "#DC2626",
-        "background": "#EFF6FF"
+        "primary": "#1E40AF", "primary_name": "深宝蓝", "primary_name_en": "deep royal blue",
+        "secondary": "#DC2626", "secondary_name": "正红", "secondary_name_en": "true red",
+        "background": "#EFF6FF", "background_name": "极浅蓝白", "background_name_en": "pale blue white"
       }
     },
     "general": {
@@ -233,9 +205,9 @@
       "aspect_ratio": "16:9",
       "layout": "flexible",
       "color_scheme": {
-        "primary": "#6366F1",
-        "secondary": "#10B981",
-        "background": "#FFFFFF"
+        "primary": "#6366F1", "primary_name": "靛蓝紫", "primary_name_en": "indigo",
+        "secondary": "#10B981", "secondary_name": "翠绿", "secondary_name_en": "emerald green",
+        "background": "#FFFFFF", "background_name": "纯白", "background_name_en": "pure white"
       }
     }
   }
