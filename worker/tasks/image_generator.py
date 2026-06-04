@@ -153,10 +153,9 @@ def get_auto_images_config() -> dict:
         logger.warning(f"Failed to load auto_images config: {e}")
         return {
             "enabled": False,
-            "max_images": 3,
+            "max_images": 6,
             "timeout_seconds": 60,
             "supported_summary_types": ["overview"],
-            "supported_content_styles": ["lecture", "podcast", "video", "documentary", "explainer"],
         }
 
 
