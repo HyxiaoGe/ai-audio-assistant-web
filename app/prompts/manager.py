@@ -11,6 +11,7 @@ from prompthub import NotFoundError, PromptHubClient, PromptHubError
 
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
+from app.services.summary.style_catalog import normalize_content_style
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ class PromptManager:
             prompt_type: 提示词类型（如 overview, key_points, action_items, segment）
             locale: 语言（如 zh-CN, en-US）
             variables: 模板变量（如 {transcript}, {quality_notice}）
-            content_style: 内容风格（如 meeting, lecture, podcast）
+            content_style: 内容风格（如 meeting, conversation, lecture, tutorial, review, news, general）
 
         Returns:
             包含 system, user_prompt, model_params 的字典
@@ -90,6 +91,7 @@ class PromptManager:
 
         if content_style is None:
             content_style = (variables or {}).get("content_style", "meeting")
+        content_style = normalize_content_style(content_style)
 
         slugs = self._build_prompt_slug_candidates(category, prompt_type, locale, content_style)
         selected_slug: str | None = None
@@ -110,7 +112,12 @@ class PromptManager:
 
             # Merge shared vars + caller vars, then render server-side
             shared_vars = self._resolve_shared_vars(locale)
-            all_vars = {**shared_vars, **(variables or {})}
+            all_vars = {
+                **shared_vars,
+                **(variables or {}),
+                "content_style": content_style,
+                "content_style_name": self._resolve_content_style_name(content_style, locale),
+            }
 
             rendered = self._client.prompts.render(prompt.id, variables=all_vars)
             user_prompt = rendered.rendered_content
@@ -151,6 +158,16 @@ class PromptManager:
             },
         }
 
+    def _resolve_content_style_name(self, content_style: str, locale: str) -> str:
+        """从 images/config 的 content_style_names 取本地化风格名,fallback 用 key 本身。"""
+        lang = "zh" if locale.startswith("zh") else "en"
+        config = self._load_config("images")
+        return (
+            config.get("content_style_names", {})
+            .get(lang, {})
+            .get(content_style, content_style)
+        )
+
     def clear_cache(self) -> None:
         """清除所有缓存"""
         self._config_cache.clear()
@@ -158,6 +175,7 @@ class PromptManager:
 
     def get_image_config(self, content_style: str) -> dict[str, Any]:
         """获取内容风格对应的图片配置（从本地 config.json 读取）"""
+        content_style = normalize_content_style(content_style)
         config = self._load_config("images")
         mapping = config.get("content_style_mapping", {})
         if content_style not in mapping:
@@ -183,6 +201,7 @@ class PromptManager:
                 reason="PromptHub not configured",
             )
 
+        content_style = normalize_content_style(content_style)
         config = self._load_config("images")
         lang = "zh" if locale.startswith("zh") else "en"
 
