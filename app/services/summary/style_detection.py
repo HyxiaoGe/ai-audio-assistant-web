@@ -95,9 +95,9 @@ async def detect_summary_style(
     if not excerpt:
         return StyleDetectionResult(style="general", confidence=0.0, reason="")
 
-    llm = llm_service or await _get_detection_llm_service(user_id)
-    messages = _build_messages(transcript_excerpt=excerpt, title=title, locale=locale)
     try:
+        llm = llm_service or await _get_detection_llm_service(user_id)
+        messages = _build_messages(transcript_excerpt=excerpt, title=title, locale=locale)
         raw = await llm.chat(messages, max_tokens=300, temperature=0.2)
         style, confidence, reason = parse_style_payload(raw, locale)
         return StyleDetectionResult(style=style, confidence=confidence, reason=reason)
@@ -105,5 +105,5 @@ async def detect_summary_style(
         logger.warning("Summary style detection failed to parse LLM output, defaulting to general: %s", exc.code)
         return StyleDetectionResult(style="general", confidence=0.0, reason="")
     except Exception:
-        logger.exception("Summary style detection LLM call failed, defaulting to general")
+        logger.exception("Summary style detection failed, defaulting to general")
         return StyleDetectionResult(style="general", confidence=0.0, reason="")

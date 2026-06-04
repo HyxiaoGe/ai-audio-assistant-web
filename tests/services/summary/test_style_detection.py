@@ -86,3 +86,26 @@ async def test_detect_summary_style_empty_transcript_returns_general_without_llm
     )
     assert result.style == "general"
     assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_detect_summary_style_service_acquisition_failure_falls_back_to_general(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LLM 服务**构造**失败(如缺 API key)也须降级 general,绝不打断摘要管线。"""
+
+    async def _boom(user_id: str):
+        raise RuntimeError("LITELLM_API_KEY is not set")
+
+    monkeypatch.setattr(
+        "app.services.summary.style_detection._get_detection_llm_service", _boom
+    )
+    result = await detect_summary_style(
+        transcript="some transcript text",
+        title=None,
+        locale="zh",
+        user_id="u-1",
+        llm_service=None,
+    )
+    assert result.style == "general"
+    assert result.confidence == 0.0
