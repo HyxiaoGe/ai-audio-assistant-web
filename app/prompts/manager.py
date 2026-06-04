@@ -156,14 +156,6 @@ class PromptManager:
         self._config_cache.clear()
         # SDK cache is managed internally by TTLCache
 
-    def get_visual_config(self, visual_type: str) -> dict[str, Any]:
-        """获取可视化类型的配置（从本地 config.json 读取）"""
-        config = self._load_config("visual")
-        prompt_types = config.get("prompt_types", {})
-        if visual_type not in prompt_types:
-            return {}
-        return prompt_types[visual_type]
-
     def get_image_config(self, content_style: str) -> dict[str, Any]:
         """获取内容风格对应的图片配置（从本地 config.json 读取）"""
         config = self._load_config("images")

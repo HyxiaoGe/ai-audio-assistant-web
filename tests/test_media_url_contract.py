@@ -101,19 +101,3 @@ async def test_summary_list_returns_relative_image_url() -> None:
     # 不应该再泄漏云存储域名给浏览器
     assert b"tos-" not in response.body
     assert b"myqcloud.com" not in response.body
-
-
-@pytest.mark.asyncio
-async def test_visual_summary_returns_relative_image_url() -> None:
-    user = CurrentUser(id="22222222-2222-2222-2222-222222222222", email="user@example.com")
-    response = await summaries_api.get_visual_summary(
-        "11111111-1111-1111-1111-111111111111",
-        "mindmap",
-        _SequenceSession(_task(), _summary()),
-        user,
-    )
-
-    assert response.body
-    assert b"/api/v1/media/visuals/user/task/mindmap.png" in response.body
-    assert b"tos-" not in response.body
-    assert b"myqcloud.com" not in response.body
