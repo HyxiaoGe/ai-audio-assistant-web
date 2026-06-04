@@ -317,21 +317,39 @@ class PromptManager:
         visual_style_key = style_config.get("visual_style", "flat_vector")
         visual_styles = config.get("visual_styles", {})
         lang_key = f"prompt_{lang}"
-        visual_style_prompt = visual_styles.get(visual_style_key, {}).get(
+        style_entry = visual_styles.get(visual_style_key, {})
+        visual_style_prompt = style_entry.get(
             lang_key, visual_styles.get("flat_vector", {}).get(lang_key, "")
         )
+
+        # Overall-mood closing line, per visual style; fallback to a generic line.
+        mood_fallback = (
+            "整体观感：清晰、专业。" if lang == "zh" else "Overall mood: clear and professional."
+        )
+        style_mood = style_entry.get(f"mood_{lang}", mood_fallback)
 
         layout_key = style_config.get("layout", "flexible")
         layout_templates = config.get("layout_templates", {}).get(lang, {})
         layout_instructions = layout_templates.get(layout_key, layout_templates.get("flexible", ""))
 
         colors = style_config.get("color_scheme", {})
+        # Natural-language color names for the artwork (never rendered as text);
+        # fall back to the hex value when a name is not configured.
+        name_suffix = "_name" if lang == "zh" else "_name_en"
+        primary_color = colors.get("primary", "#3B82F6")
+        secondary_color = colors.get("secondary", "#10B981")
+        background_color = colors.get("background", "#FFFFFF")
+        primary_color_name = colors.get(f"primary{name_suffix}", primary_color)
+        secondary_color_name = colors.get(f"secondary{name_suffix}", secondary_color)
+        background_color_name = colors.get(f"background{name_suffix}", background_color)
 
         image_type_name = config.get("image_type_names", {}).get(lang, {}).get(image_type, image_type)
         content_style_name = config.get("content_style_names", {}).get(lang, {}).get(content_style, content_style)
 
         if key_texts:
-            key_texts_formatted = "\n".join([f"- {text}" for text in key_texts])
+            # Verbatim contract: each label wrapped in quotes so the image model
+            # renders it exactly, character for character.
+            key_texts_formatted = "\n".join([f'- "{text}"' for text in key_texts])
         else:
             if lang == "zh":
                 key_texts_formatted = "- (根据主题自动生成合适的标签)"
@@ -342,9 +360,13 @@ class PromptManager:
             "image_type": image_type_name,
             "content_style_name": content_style_name,
             "visual_style_prompt": visual_style_prompt,
-            "primary_color": colors.get("primary", "#3B82F6"),
-            "secondary_color": colors.get("secondary", "#10B981"),
-            "background_color": colors.get("background", "#FFFFFF"),
+            "primary_color": primary_color,
+            "secondary_color": secondary_color,
+            "background_color": background_color,
+            "primary_color_name": primary_color_name,
+            "secondary_color_name": secondary_color_name,
+            "background_color_name": background_color_name,
+            "style_mood": style_mood,
             "description": description,
             "key_texts_formatted": key_texts_formatted,
             "layout_instructions": layout_instructions,
