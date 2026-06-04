@@ -1,5 +1,5 @@
 {
-  "version": "1.5.0",
+  "version": "1.6.0",
   "features": {
     "auto_images": {
       "enabled": true,
@@ -36,21 +36,21 @@
   "model_params": {
     "overview": {
       "temperature": 0.6,
-      "max_tokens": 1500,
+      "max_tokens": 4096,
       "top_p": 0.9,
       "frequency_penalty": 0.0,
       "presence_penalty": 0.0
     },
     "key_points": {
       "temperature": 0.5,
-      "max_tokens": 1200,
+      "max_tokens": 2048,
       "top_p": 0.9,
       "frequency_penalty": 0.3,
       "presence_penalty": 0.0
     },
     "action_items": {
       "temperature": 0.3,
-      "max_tokens": 1000,
+      "max_tokens": 2048,
       "top_p": 0.9,
       "frequency_penalty": 0.0,
       "presence_penalty": 0.0
@@ -59,6 +59,13 @@
   "default_locale": "zh-CN",
   "supported_locales": ["zh-CN", "en-US"],
   "changelog": {
+    "1.6.0": {
+      "date": "2026-06-05",
+      "changes": [
+        "放大 model_params.max_tokens：overview 1500→4096、key_points 1200→2048、action_items 1000→2048",
+        "修复 overview 长摘要被截断（叙事中途断句）及自适应多图被抑制（后段 {{IMAGE:}} 锚点无法生成）的问题"
+      ]
+    },
     "1.5.0": {
       "date": "2026-06-04",
       "changes": [

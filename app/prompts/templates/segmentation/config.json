@@ -1,18 +1,20 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "章节划分提示词配置",
   "supported_content_styles": [
     "meeting",
+    "conversation",
     "lecture",
-    "podcast",
-    "video",
+    "tutorial",
+    "review",
+    "news",
     "general"
   ],
   "supported_locales": ["zh-CN", "en-US"],
   "model_params": {
     "segment": {
       "temperature": 0.3,
-      "max_tokens": 1500,
+      "max_tokens": 4096,
       "top_p": 0.9,
       "frequency_penalty": 0.0,
       "presence_penalty": 0.0
@@ -20,6 +22,13 @@
   },
   "default_locale": "zh-CN",
   "changelog": {
+    "1.1.0": {
+      "date": "2026-06-05",
+      "changes": [
+        "放大 segment max_tokens 1500→4096：deepseek-chat 经代理会产出 reasoning_content，1500 预算被推理链挤占导致正文为空(51102)或 JSON 截断解析失败，长/复杂转写尤甚",
+        "supported_content_styles 由旧 5 风格(含已弃用 podcast/video)对齐为 7 规范风格(meeting/conversation/lecture/tutorial/review/news/general)"
+      ]
+    },
     "1.0.0": {
       "date": "2025-01-15",
       "changes": [
