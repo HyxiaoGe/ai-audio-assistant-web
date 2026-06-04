@@ -36,6 +36,12 @@ from app.services.asr_quota_service import record_usage_sync
 from app.services.notifications.service import NotificationService
 from app.services.notifications.types import NotificationType
 from app.services.rag import ingest_task_chunks_sync
+from app.services.summary.style_catalog import normalize_content_style
+from app.services.summary.style_resolution import (
+    is_auto_style,
+    persist_detected_style,
+    resolve_content_style,
+)
 from app.services.task_service import TaskService
 from app.services.transcript_polish import polish_transcripts
 from worker.celery_app import celery_app
@@ -1402,11 +1408,33 @@ def _process_youtube(
                 )
                 full_text = "\n".join([t.content for t in latest_transcripts])
 
-                # 提取 content_style
+                # 提取请求风格并解析为 7 规范风格之一（auto/空→识别，显式→归一）
                 options = task.options or {}
-                content_style = options.get("summary_style") or "meeting"
-                if not isinstance(content_style, str):
-                    content_style = "meeting"
+                requested_style = options.get("summary_style")
+                if not isinstance(requested_style, str):
+                    requested_style = ""
+                content_style = asyncio.run(
+                    resolve_content_style(
+                        requested_style=requested_style,
+                        transcript=full_text,
+                        title=task.title,
+                        locale="zh-CN",
+                        user_id=str(task.user_id),
+                    )
+                )
+                # 写回 task.options.summary_style + auto_detected 来源标记，供配图/regenerate
+                # 复用并供前端仅对 auto 识别结果展示「AI 识别为：X」
+                if is_auto_style(requested_style) and content_style != requested_style:
+                    task.options = persist_detected_style(
+                        task.options, content_style, auto_detected=True
+                    )
+                    session.commit()
+                logger.info(
+                    "Task %s: resolved content_style=%s (requested=%r)",
+                    task_id,
+                    content_style,
+                    requested_style or "auto",
+                )
 
                 logger.info(
                     "Task %s: Starting LLM summarization with %d characters (style: %s)",
@@ -1565,7 +1593,7 @@ def _process_youtube(
             )
             .all()
         )
-        content_style_for_images = (task.options or {}).get("summary_style") or "meeting"
+        content_style_for_images = normalize_content_style((task.options or {}).get("summary_style"))
         _enqueue_summary_images(
             task_id=task_id,
             user_id=str(task.user_id),
