@@ -160,7 +160,13 @@ class PromptManager:
         """获取内容风格对应的图片配置（从本地 config.json 读取）"""
         config = self._load_config("images")
         mapping = config.get("content_style_mapping", {})
-        return mapping.get(content_style, mapping.get("general", {}))
+        if content_style not in mapping:
+            log.warning(
+                "Unknown content_style %r has no image style mapping; falling back to 'general'",
+                content_style,
+            )
+            return mapping.get("general", {})
+        return mapping[content_style]
 
     def get_image_prompt(
         self,
