@@ -238,19 +238,26 @@ class PromptManager:
     def _build_prompt_slug_candidates(
         self, category: str, prompt_type: str, locale: str, content_style: str
     ) -> list[str]:
-        """Build PromptHub slug candidates ordered from most specific to fallback."""
+        """Build PromptHub slug candidates ordered from most specific to fallback.
+
+        - action_items: generic-only unless the style is in
+          ``style_specific_prompt_types`` (e.g. review) -> [styled, generic].
+        - all other types (overview/key_points/segment/...): always
+          [styled, generic] so a missing styled slug falls back to generic
+          instead of 404-ing.
+        """
         loc_short = locale.split("-")[0]
         type_slug = prompt_type.replace("_", "")  # key_points -> keypoints
 
-        if self._uses_style_specific_prompt(category, prompt_type, content_style):
-            styled_slug = f"{category}-{type_slug}-{content_style}-{loc_short}"
-            generic_slug = f"{category}-{type_slug}-{loc_short}"
-            return [styled_slug, generic_slug]
+        styled = f"{category}-{type_slug}-{content_style}-{loc_short}"
+        generic = f"{category}-{type_slug}-{loc_short}"
 
-        if prompt_type == "action_items":
-            return [f"{category}-{type_slug}-{loc_short}"]
+        if prompt_type == "action_items" and not self._uses_style_specific_prompt(
+            category, prompt_type, content_style
+        ):
+            return [generic]
 
-        return [f"{category}-{type_slug}-{content_style}-{loc_short}"]
+        return [styled, generic]
 
     def _uses_style_specific_prompt(self, category: str, prompt_type: str, content_style: str) -> bool:
         """Return whether a prompt type has style-specific PromptHub variants."""
