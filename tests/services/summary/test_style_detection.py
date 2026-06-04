@@ -54,7 +54,9 @@ async def test_detect_summary_style_uses_expected_llm_params_and_truncates_trans
     )
     assert result.style == "lecture"
     messages, kwargs = llm.calls[0]
-    assert kwargs == {"max_tokens": 300, "temperature": 0.2}
+    # max_tokens 放大到 2048：给 deepseek-chat 经代理产出的 reasoning_content 留余量，
+    # 避免推理链挤掉分类正文导致空返回(51102)误兜底成 general（详见 style_detection 注释）。
+    assert kwargs == {"max_tokens": 2048, "temperature": 0.2}
     user_content = messages[-1]["content"]
     assert len(user_content) < len(long_transcript)
     assert "不要总结" in messages[0]["content"] or "do not summarize" in messages[0]["content"].lower()

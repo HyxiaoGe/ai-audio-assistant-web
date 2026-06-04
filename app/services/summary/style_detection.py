@@ -98,7 +98,11 @@ async def detect_summary_style(
     try:
         llm = llm_service or await _get_detection_llm_service(user_id)
         messages = _build_messages(transcript_excerpt=excerpt, title=title, locale=locale)
-        raw = await llm.chat(messages, max_tokens=300, temperature=0.2)
+        # max_tokens 给得偏大并非因为输出长（分类结果只是 {style,confidence,reason} 的小 JSON），
+        # 而是 deepseek-chat 经 LiteLLM 代理会先吐 reasoning_content，与正文共享同一预算；
+        # 300 太薄时推理链会偶发吃满额度、挤掉正文 → 返回空(51102) → 误兜底成 general。
+        # 2048 给推理链留足余量，彻底消除这种偶发误判（max_tokens 是上限非预付，按实际生成计费）。
+        raw = await llm.chat(messages, max_tokens=2048, temperature=0.2)
         style, confidence, reason = parse_style_payload(raw, locale)
         return StyleDetectionResult(style=style, confidence=confidence, reason=reason)
     except BusinessError as exc:
