@@ -1,179 +1,115 @@
 {
-  "version": "1.0.0",
+  "version": "2.0.0",
   "styles": {
     "meeting": {
       "icon": "users",
-      "recommended_visual_types": ["timeline", "flowchart"],
+      "recommended_visual_types": ["timeline", "infographic"],
       "i18n": {
         "zh": {
           "name": "会议",
-          "description": "会议、讨论、头脑风暴",
-          "focus": "议题、决议、行动项、参会者观点"
+          "description": "多人讨论、决策导向的会议",
+          "focus": "结论、关键决策、未决分歧、行动项（事/人/期限）"
         },
         "en": {
           "name": "Meeting",
-          "description": "Meetings, discussions, brainstorming",
-          "focus": "Agenda, decisions, action items, participant viewpoints"
+          "description": "Multi-party, decision-oriented meetings",
+          "focus": "Conclusions, key decisions, open disagreements, action items (what/who/when)"
+        }
+      }
+    },
+    "conversation": {
+      "icon": "mic",
+      "recommended_visual_types": ["mindmap", "concept"],
+      "i18n": {
+        "zh": {
+          "name": "对话/访谈",
+          "description": "对话、播客、访谈等观点导向内容",
+          "focus": "争论焦点、各方观点与分歧、最有价值的洞见、可带走的启示"
+        },
+        "en": {
+          "name": "Conversation/Interview",
+          "description": "Conversations, podcasts, and interviews (viewpoint-oriented)",
+          "focus": "What's debated, viewpoints and disagreements, key insights, takeaways"
         }
       }
     },
     "lecture": {
       "icon": "book-open",
-      "recommended_visual_types": ["mindmap", "timeline"],
+      "recommended_visual_types": ["concept", "mindmap"],
       "i18n": {
         "zh": {
-          "name": "讲座/课程",
-          "description": "讲座、课程、培训内容",
-          "focus": "知识点、核心概念、学习要点"
+          "name": "讲解/课程",
+          "description": "知识传递、概念讲解、科普",
+          "focus": "核心概念及关系、关键原理、实例应用、易混点"
         },
         "en": {
-          "name": "Lecture",
-          "description": "Lectures, courses, training sessions",
-          "focus": "Key knowledge, core concepts, learning points"
-        }
-      }
-    },
-    "podcast": {
-      "icon": "mic",
-      "recommended_visual_types": ["mindmap"],
-      "i18n": {
-        "zh": {
-          "name": "播客",
-          "description": "播客节目、对话内容",
-          "focus": "核心观点、精彩片段、讨论亮点"
-        },
-        "en": {
-          "name": "Podcast",
-          "description": "Podcast episodes, conversations",
-          "focus": "Core opinions, highlights, discussion points"
-        }
-      }
-    },
-    "interview": {
-      "icon": "message-circle",
-      "recommended_visual_types": ["mindmap", "timeline"],
-      "i18n": {
-        "zh": {
-          "name": "访谈",
-          "description": "采访、访谈、对话节目",
-          "focus": "嘉宾观点、问答精华、关键洞见"
-        },
-        "en": {
-          "name": "Interview",
-          "description": "Interviews, conversations, talk shows",
-          "focus": "Guest insights, Q&A highlights, key takeaways"
+          "name": "Lecture/Course",
+          "description": "Knowledge delivery, concept explanation, explainers",
+          "focus": "Core concepts and relations, key principles, examples, common pitfalls"
         }
       }
     },
     "tutorial": {
       "icon": "play-circle",
-      "recommended_visual_types": ["flowchart", "timeline"],
+      "recommended_visual_types": ["infographic", "timeline"],
       "i18n": {
         "zh": {
           "name": "教程",
-          "description": "操作教程、使用指南、How-to视频",
-          "focus": "操作步骤、注意事项、技巧要点"
+          "description": "操作指导、How-to",
+          "focus": "目标与前置、有序步骤、关键技巧、常见坑"
         },
         "en": {
           "name": "Tutorial",
-          "description": "How-to guides, tutorials, instructional videos",
-          "focus": "Step-by-step instructions, tips, key techniques"
+          "description": "How-to guides and step-by-step instructions",
+          "focus": "Goal and prerequisites, ordered steps, key tips, common pitfalls"
         }
       }
     },
     "review": {
       "icon": "star",
-      "recommended_visual_types": ["mindmap"],
+      "recommended_visual_types": ["comparison", "infographic"],
       "i18n": {
         "zh": {
           "name": "评测",
-          "description": "产品评测、体验分享、对比测评",
-          "focus": "优缺点、性能数据、推荐结论"
+          "description": "评价、体验、对比",
+          "focus": "各维度表现（含数据）、优点、短板、适合谁与结论"
         },
         "en": {
           "name": "Review",
-          "description": "Product reviews, comparisons, experiences",
-          "focus": "Pros & cons, performance metrics, recommendations"
+          "description": "Evaluations, experiences, comparisons",
+          "focus": "Dimension-by-dimension performance with data, pros, cons, who it's for"
         }
       }
     },
     "news": {
       "icon": "newspaper",
-      "recommended_visual_types": ["timeline"],
+      "recommended_visual_types": ["timeline", "infographic"],
       "i18n": {
         "zh": {
-          "name": "新闻/时事",
-          "description": "新闻报道、时事评论、资讯播报",
-          "focus": "核心事件、关键数据、各方观点"
+          "name": "资讯/纪实",
+          "description": "新闻、时事、纪实报道",
+          "focus": "事件全貌、时间线、关键事实与数据、各方立场、影响与走向"
         },
         "en": {
-          "name": "News",
-          "description": "News reports, current affairs, commentary",
-          "focus": "Key events, critical data, multiple perspectives"
-        }
-      }
-    },
-    "explainer": {
-      "icon": "lightbulb",
-      "recommended_visual_types": ["mindmap", "flowchart"],
-      "i18n": {
-        "zh": {
-          "name": "知识科普",
-          "description": "科普视频、知识解读、概念讲解",
-          "focus": "核心概念、原理说明、实际应用"
-        },
-        "en": {
-          "name": "Explainer",
-          "description": "Educational videos, knowledge explanations",
-          "focus": "Core concepts, principles, real-world applications"
-        }
-      }
-    },
-    "documentary": {
-      "icon": "film",
-      "recommended_visual_types": ["timeline", "mindmap"],
-      "i18n": {
-        "zh": {
-          "name": "纪录片",
-          "description": "纪录片、专题片、深度报道",
-          "focus": "主题背景、关键事件、人物故事"
-        },
-        "en": {
-          "name": "Documentary",
-          "description": "Documentaries, feature films, in-depth reports",
-          "focus": "Context, key events, character stories"
-        }
-      }
-    },
-    "video": {
-      "icon": "video",
-      "recommended_visual_types": ["mindmap", "timeline"],
-      "i18n": {
-        "zh": {
-          "name": "视频",
-          "description": "视频教程、解说视频",
-          "focus": "主题亮点、关键信息"
-        },
-        "en": {
-          "name": "Video",
-          "description": "Video tutorials, commentary videos",
-          "focus": "Key highlights, main information"
+          "name": "News/Documentary",
+          "description": "News, current affairs, and documentary reporting",
+          "focus": "What happened, timeline, key facts and data, perspectives, impact"
         }
       }
     },
     "general": {
       "icon": "file-text",
-      "recommended_visual_types": ["mindmap"],
+      "recommended_visual_types": ["infographic", "mindmap"],
       "i18n": {
         "zh": {
           "name": "通用",
-          "description": "通用内容、其他类型",
-          "focus": "核心信息、关键要点"
+          "description": "自动识别为以上都不是时的兜底",
+          "focus": "主题、核心要点、重要信息与数据、结论与启示"
         },
         "en": {
           "name": "General",
-          "description": "General content, other types",
-          "focus": "Core information, key points"
+          "description": "Fallback when content matches none of the above",
+          "focus": "Topic, core points, key information and data, conclusions"
         }
       }
     }
