@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import re
 import sys
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock
@@ -148,3 +150,110 @@ async def test_polish_transcripts_llm_failure_graceful():
     assert len(results) == 1
     assert results[0].polished_content == "hello"
     assert results[0].changed is False
+
+
+# ============================================================
+# 并发润色（有界并发 + gather）相关
+# ============================================================
+
+
+def _seqs_in_prompt(messages: list[dict]) -> list[int]:
+    """从 user prompt 里抽出本组涉及的段序号（构造的响应据此逐段回填）。"""
+    user = messages[-1]["content"]
+    return [int(m) for m in re.findall(r"\[(\d+)\]", user)]
+
+
+def _five_groups_one_seg_each() -> list[dict]:
+    """start_time 间隔 200s、默认窗口 180s → 切成 5 组、每组 1 段（seq 1..5）。"""
+    return [_seg(i, f"seg{i}", (i - 1) * 200.0, (i - 1) * 200.0 + 5) for i in range(1, 6)]
+
+
+@pytest.mark.asyncio
+async def test_polish_transcripts_preserves_order_despite_completion_order():
+    """并发完成顺序与组顺序相反，最终结果仍须严格按输入顺序（gather 保序）。"""
+
+    class _ReorderingLLM:
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            seqs = _seqs_in_prompt(messages)
+            # 越靠前（seq 越小）睡越久 → 越晚完成，制造与组序相反的完成顺序。
+            await asyncio.sleep(0.02 * (6 - seqs[0]))
+            return "\n".join(f"[{s}] polished{s}" for s in seqs)
+
+    segs = _five_groups_one_seg_each()
+    results = await polish_transcripts(_ReorderingLLM(), segs, max_concurrency=3)
+
+    assert [r.sequence for r in results] == [1, 2, 3, 4, 5]
+    assert [r.polished_content for r in results] == [f"polished{i}" for i in range(1, 6)]
+    assert all(r.changed for r in results)
+
+
+@pytest.mark.asyncio
+async def test_polish_transcripts_one_group_failure_does_not_affect_others():
+    """单组失败（模拟 51102 空返回抛错）只回退该组原文，不连累其它组、不抛出。"""
+
+    class _OneGroupFailsLLM:
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            seqs = _seqs_in_prompt(messages)
+            if 2 in seqs:
+                raise RuntimeError("simulated empty return (51102)")
+            return "\n".join(f"[{s}] polished{s}" for s in seqs)
+
+    segs = [_seg(1, "a", 0, 5), _seg(2, "b", 200, 205), _seg(3, "c", 400, 405)]
+    results = await polish_transcripts(_OneGroupFailsLLM(), segs, max_concurrency=3)
+
+    by_seq = {r.sequence: r for r in results}
+    assert len(results) == 3
+    # 失败组回退原文
+    assert by_seq[2].polished_content == "b"
+    assert by_seq[2].changed is False
+    # 其它组正常润色
+    assert by_seq[1].polished_content == "polished1"
+    assert by_seq[1].changed is True
+    assert by_seq[3].polished_content == "polished3"
+    assert by_seq[3].changed is True
+    # 顺序仍严格按输入
+    assert [r.sequence for r in results] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_polish_transcripts_respects_concurrency_limit():
+    """在途并发的 chat 调用数峰值不得超过 max_concurrency（证明 Semaphore 真生效）。"""
+
+    class _ConcurrencyTrackingLLM:
+        def __init__(self) -> None:
+            self.current = 0
+            self.peak = 0
+
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            self.current += 1
+            self.peak = max(self.peak, self.current)
+            try:
+                # 持槽一会儿，让多组有机会重叠，从而暴露真实峰值。
+                await asyncio.sleep(0.02)
+            finally:
+                self.current -= 1
+            seqs = _seqs_in_prompt(messages)
+            return "\n".join(f"[{s}] polished{s}" for s in seqs)
+
+    llm = _ConcurrencyTrackingLLM()
+    segs = _five_groups_one_seg_each()  # 5 组
+    results = await polish_transcripts(llm, segs, max_concurrency=2)
+
+    assert len(results) == 5
+    assert llm.peak <= 2  # 5 组但峰值被信号量压在 2
+    assert llm.peak >= 2  # 且确实并发起来了（非退化为串行）
+
+
+@pytest.mark.asyncio
+async def test_polish_transcripts_all_groups_fail_all_fallback():
+    """所有组都失败时，全量回退原文、段数不变、不向上抛异常（整段 polish 不挂）。"""
+    mock_llm = AsyncMock()
+    mock_llm.chat = AsyncMock(side_effect=RuntimeError("LLM down"))
+
+    segs = [_seg(1, "a", 0, 5), _seg(2, "b", 200, 205), _seg(3, "c", 400, 405)]
+    results = await polish_transcripts(mock_llm, segs, max_concurrency=3)
+
+    assert len(results) == 3
+    assert [r.sequence for r in results] == [1, 2, 3]
+    assert [r.polished_content for r in results] == ["a", "b", "c"]
+    assert all(r.changed is False for r in results)

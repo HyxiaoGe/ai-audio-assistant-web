@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     LITELLM_MODEL: str = Field(default="chat-default")
     LITELLM_MAX_TOKENS: int = Field(default=4096)
 
+    # 转写润色的并发 LLM 调用上限。润色把长转写按时间窗切成多组、各组独立调一次
+    # deepseek-chat，原为串行（长任务 ~8min）。有界并发将其压到 ~1-2min；上限必须
+    # 低于 proxy_llm 熔断阈值（failure_threshold=5），避免偶发空返回（51102）在同一
+    # 窗口扎堆把熔断打 OPEN、连累随后同走 proxy_llm 的摘要生成。默认 3，建议 ≤4。
+    POLISH_CONCURRENCY: int = Field(default=3)
+
     # 远程 image-service（独立部署的 Gemini 生图服务）
     IMAGE_SERVICE_BASE_URL: str | None = Field(default=None)
     IMAGE_SERVICE_API_KEY: str | None = Field(default=None)
