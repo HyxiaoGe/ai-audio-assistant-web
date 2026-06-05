@@ -112,6 +112,32 @@ async def test_polish_transcripts_success():
 
 
 @pytest.mark.asyncio
+async def test_polish_transcripts_max_tokens_reserves_reasoning_headroom():
+    """max_tokens 必须给 reasoning_content 留足余量。
+
+    deepseek-chat 经代理会先产出 reasoning_content（推理链），与正文共享同一
+    max_tokens 预算。原先用 len(user_prompt)*2，小分组会贴边给值 → 推理吃满 →
+    返回空 → 整组回退原文丢润色。现固定为「内容预算(下限 2048) + 2000 推理余量，
+    上限 12000」：小分组应得 2048 + 2000 = 4048。
+    """
+
+    class _CaptureLLM:
+        def __init__(self) -> None:
+            self.kwargs: dict = {}
+
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            self.kwargs = kwargs
+            return "[1] 短\n[2] 文\n[3] 本"
+
+    llm = _CaptureLLM()
+    segs = [_seg(1, "短", 0, 5), _seg(2, "文", 5, 10), _seg(3, "本", 10, 15)]
+    await polish_transcripts(llm, segs)
+
+    assert llm.kwargs["max_tokens"] == 4048
+    assert llm.kwargs["temperature"] == 0.3
+
+
+@pytest.mark.asyncio
 async def test_polish_transcripts_llm_failure_graceful():
     mock_llm = AsyncMock()
     mock_llm.chat = AsyncMock(side_effect=RuntimeError("LLM down"))

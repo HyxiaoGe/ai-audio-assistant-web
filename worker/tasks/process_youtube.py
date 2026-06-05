@@ -841,8 +841,16 @@ def _process_youtube(
                     task = _get_task(session, task_id)
                     if task is None:
                         return
+                    stage_manager.fail_stage(session, StageType.DOWNLOAD, error.code, str(error))
                     _mark_failed(session, task, error, request_id)
                 return
+            # 下载失败但有直链：跳过下载/转码/上传，直接用直链转写（任务仍会成功）。
+            # 标记为 skipped 而非 failed，避免详情页出现误导性的「失败阶段」。
+            with get_sync_db_session() as session:
+                stage_manager.skip_stage(session, StageType.DOWNLOAD, "下载失败，回退到直链流")
+                for fallback_stage in (StageType.TRANSCODE, StageType.UPLOAD_STORAGE):
+                    stage_manager.start_stage(session, fallback_stage)
+                    stage_manager.skip_stage(session, fallback_stage, "回退到直链流")
 
         # 只有成功下载文件时才继续转码和上传
         if original_filename:
@@ -851,6 +859,7 @@ def _process_youtube(
                 if task is None:
                     return
                 _update_task(session, task, "downloaded", 25, "downloaded", request_id)
+                stage_manager.complete_stage(session, StageType.DOWNLOAD)
 
         # ========== 阶段 3: 转码音频 ==========
         try:
@@ -860,9 +869,12 @@ def _process_youtube(
                     if task is None:
                         return
                     _update_task(session, task, "transcoding", 27, "transcoding", request_id)
+                    stage_manager.start_stage(session, StageType.TRANSCODE)
                 filename = _transcode_to_wav_16k(original_filename)
+                with get_sync_db_session() as session:
+                    stage_manager.complete_stage(session, StageType.TRANSCODE)
             else:
-                # 下载失败，但有 direct_url，跳过转码和上传
+                # 下载失败，但有 direct_url，跳过转码和上传（阶段已在 download 回退分支标记 skipped）
                 filename = None
         except Exception as exc:
             logger.exception("youtube transcode failed: %s", exc)
@@ -874,6 +886,7 @@ def _process_youtube(
                     error = exc
                 else:
                     error = BusinessError(ErrorCode.FILE_PROCESSING_ERROR, reason=str(exc))
+                stage_manager.fail_stage(session, StageType.TRANSCODE, error.code, str(error))
                 _mark_failed(session, task, error, request_id)
             return
 
@@ -905,6 +918,7 @@ def _process_youtube(
                     if task is None:
                         return
                     _update_task(session, task, "uploading", 30, "uploading", request_id)
+                    stage_manager.start_stage(session, StageType.UPLOAD_STORAGE)
 
                 # 双存储上传：同时上传到 COS 和 MinIO
                 # 使用 SmartFactory 获取 storage 服务
@@ -934,6 +948,8 @@ def _process_youtube(
                     task_id,
                     extra={"task_id": task_id},
                 )
+                with get_sync_db_session() as session:
+                    stage_manager.complete_stage(session, StageType.UPLOAD_STORAGE)
             except Exception as exc:
                 logger.exception("storage upload failed: %s", exc)
                 source_key = None
@@ -950,22 +966,22 @@ def _process_youtube(
                 _update_source_key(session, task, source_key, duration_seconds)
                 _update_task(session, task, "uploaded", 35, "uploaded", request_id)
         elif not direct_url:
+            upload_error = BusinessError(ErrorCode.FILE_UPLOAD_FAILED)
             with get_sync_db_session() as session:
                 task = _get_task(session, task_id)
                 if task is None:
                     return
-                _mark_failed(
-                    session,
-                    task,
-                    BusinessError(ErrorCode.FILE_UPLOAD_FAILED),
-                    request_id,
-                )
+                stage_manager.fail_stage(session, StageType.UPLOAD_STORAGE, upload_error.code, str(upload_error))
+                _mark_failed(session, task, upload_error, request_id)
             return
         else:
             with get_sync_db_session() as session:
                 task = _get_task(session, task_id)
                 if task is None:
                     return
+                if filename:
+                    # 转码成功但上传失败，且有直链：跳过上传，改用直链转写（任务仍会成功）
+                    stage_manager.skip_stage(session, StageType.UPLOAD_STORAGE, "上传失败，回退到直链流")
                 _update_task(session, task, "resolved", 35, "resolved", request_id)
 
     # ========== 检查是否可以跳过转写阶段 ==========
