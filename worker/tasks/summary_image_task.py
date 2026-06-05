@@ -75,14 +75,16 @@ async def _run_summary_images(
 
 
 # 有界并发（IMAGE_GEN_CONCURRENCY=2）下，6 张图最坏要排 3 批、每张单超时 300s → 最坏 ~900s，
-# 正好顶到原 soft_time_limit=900。上调到 1200/1300 给足余量，避免极端慢时被 SoftTimeLimitExceeded
+# 正好顶到原 soft_time_limit=900。上调 soft 到 1200 给足余量，避免极端慢时被 SoftTimeLimitExceeded
 # 误杀（典型场景每张 ~10-30s，远不及此；此处仅为最坏情况留安全边际）。
+# 注意：celery 的硬超时参数名是 time_limit（不是 hard_time_limit——后者会被当未知 kwarg 静默忽略，
+# 该任务此前因此长期无硬超时）。用 time_limit=1300 作硬 backstop（> soft 1200，soft 先抛异常）。
 @celery_app.task(
     name="worker.tasks.generate_summary_images_async",
     bind=True,
     max_retries=0,
     soft_time_limit=1200,
-    hard_time_limit=1300,
+    time_limit=1300,
 )
 def generate_summary_images_async(
     self,
