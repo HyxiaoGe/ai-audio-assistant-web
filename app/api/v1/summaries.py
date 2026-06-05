@@ -768,6 +768,13 @@ async def get_summary_image(
         elif path.endswith(".webp"):
             content_type = "image/webp"
 
-        return Response(content=image_data, media_type=content_type)
+        # 图片按随机 image_id 命名、内容不可变 → 可长缓存。带 media token 鉴权属私有内容，
+        # 用 private（仅浏览器缓存、不让 CF/共享代理缓存）+ immutable，让同一会话内反复进
+        # 详情页命中浏览器缓存、免去每次经慢隧道重下（实测端点无 Cache-Control → CF DYNAMIC 不缓存）。
+        return Response(
+            content=image_data,
+            media_type=content_type,
+            headers={"Cache-Control": "private, max-age=2592000, immutable"},
+        )
     except Exception as e:
         raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR, reason=f"Image not found: {e}")
