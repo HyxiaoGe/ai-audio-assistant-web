@@ -196,8 +196,9 @@ async def polish_transcripts(
     groups = group_segments_by_time(segments, window_seconds)
     all_results: list[PolishResult] = []
 
+    # loguru 用 {} 占位（非 %），此前写成 %d/%s → 参数被丢弃、异常根本没记进日志。
     logger.info(
-        "Polish: %d segments split into %d groups (window=%ds)",
+        "Polish: {} segments split into {} groups (window={}s)",
         len(segments),
         len(groups),
         int(window_seconds),
@@ -211,11 +212,18 @@ async def polish_transcripts(
             {"role": "user", "content": user_prompt},
         ]
 
+        # 润色输出长度≈输入，按 user_prompt 长度估内容预算，再叠加 ~2000 token 给
+        # deepseek-chat 经代理产出的 reasoning_content（推理链与正文共享同一 max_tokens
+        # 预算）。原先仅 len*2、小分组会贴边给值 → 推理把额度吃满 → 返回空 → 整组回退
+        # 原文丢润色。下限 2048 保底，上限 12000 锁在代理实测放行区间内。
+        content_budget = max(len(user_prompt) * 2, 2048)
+        max_tokens = min(content_budget + 2000, 12000)
+
         try:
             response: str = await llm_service.chat(
                 messages,
                 temperature=0.3,
-                max_tokens=len(user_prompt) * 2,
+                max_tokens=max_tokens,
             )
 
             group_results = parse_polish_response(response, group)
@@ -223,7 +231,7 @@ async def polish_transcripts(
 
             changed_in_group = sum(1 for r in group_results if r.changed)
             logger.info(
-                "Polish group %d/%d: %d/%d segments changed",
+                "Polish group {}/{}: {}/{} segments changed",
                 group_idx,
                 len(groups),
                 changed_in_group,
@@ -231,12 +239,12 @@ async def polish_transcripts(
             )
 
         except Exception as exc:
-            # 单组失败不影响其他组，该组全部回退到原文
-            logger.warning(
-                "Polish group %d/%d failed, falling back to original: %s",
+            # 单组失败不影响其他组，该组全部回退到原文。
+            # 用 opt(exception=exc) 把完整堆栈记进日志，便于定位是 51102 空返回 / 截断 / 超时。
+            logger.opt(exception=exc).warning(
+                "Polish group {}/{} failed, falling back to original",
                 group_idx,
                 len(groups),
-                exc,
             )
             for seg in group:
                 all_results.append(
