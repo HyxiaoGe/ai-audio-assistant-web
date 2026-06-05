@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     # Auth Service (统一认证)
     AUTH_SERVICE_URL: str = Field(default="http://localhost:8100")
     AUTH_SERVICE_JWKS_URL: str | None = Field(default=None)
+    # 服务间内部调用（/auth/userinfo、/auth/profile）的 auth-service 基址。生产/dev 应指向
+    # LAN（如 http://192.168.1.11:8100），避免绕公网 cloudflared 隧道——userinfo 经隧道
+    # p50 ~1.2s，走 LAN 仅 ~17ms。留空则回退 AUTH_SERVICE_URL，向后兼容。
+    # 注意：JWKS / 令牌身份校验仍走 AUTH_SERVICE_URL / AUTH_SERVICE_JWKS_URL（公网域名），
+    # 与本内部基址解耦——内部走 LAN 不影响 issuer/签名校验。
+    AUTH_SERVICE_INTERNAL_URL: str | None = Field(default=None)
 
     CONFIG_CENTER_DB_ENABLED: bool = Field(default=True)
     CONFIG_CENTER_CACHE_TTL: int = Field(default=60)
@@ -171,6 +177,15 @@ class Settings(BaseSettings):
     PROMPTHUB_API_KEY: str | None = Field(default=None)
     PROMPTHUB_CACHE_TTL: int = Field(default=300)  # seconds
     PROMPTHUB_IMAGE_GEN_PROJECT_ID: str | None = Field(default=None)
+
+    @property
+    def resolved_auth_service_internal_url(self) -> str:
+        """内部服务间调用应使用的 auth-service 基址（已剥尾部 /）。
+
+        优先 AUTH_SERVICE_INTERNAL_URL（生产/dev 指向 LAN）；未设则回退 AUTH_SERVICE_URL，
+        保持向后兼容。仅用于 userinfo/profile 等内部 HTTP 调用，不参与 JWKS/身份校验。
+        """
+        return (self.AUTH_SERVICE_INTERNAL_URL or self.AUTH_SERVICE_URL).rstrip("/")
 
     @model_validator(mode="after")
     def _require_prod_secrets(self) -> Settings:
