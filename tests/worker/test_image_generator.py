@@ -234,3 +234,31 @@ def test_generate_images_parallel_runs_under_asyncio_run_twice(
 
     assert [r["placeholder"] for r in first] == ["P0", "P1", "P2"]
     assert [r["placeholder"] for r in second] == ["P0", "P1", "P2"]
+
+
+# ============================================================
+# WebP 压缩（_encode_webp）相关
+# ============================================================
+
+
+def test_encode_webp_produces_valid_webp() -> None:
+    """png 字节经 _encode_webp 应得到合法 WebP（RIFF....WEBP 头）+ 格式后缀 webp。"""
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (64, 64), (120, 200, 64)).save(buf, format="PNG")
+
+    data, fmt = image_generator._encode_webp(buf.getvalue())
+
+    assert fmt == "webp"
+    assert data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+
+
+def test_encode_webp_falls_back_to_png_on_invalid_input() -> None:
+    """非图片字节无法解码时回退原始数据 + 格式 png（绝不丢图、不抛出）。"""
+    data, fmt = image_generator._encode_webp(b"not-an-image")
+
+    assert fmt == "png"
+    assert data == b"not-an-image"

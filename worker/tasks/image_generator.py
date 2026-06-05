@@ -378,6 +378,34 @@ def publish_image_ready_global(
         logger.warning("Task %s: publish image_ready to global WS failed, suppressed", task_id, exc_info=True)
 
 
+def _encode_webp(image_data: bytes, quality: int = 85) -> tuple[bytes, str]:
+    """把生成的 png 转成 WebP 以减小体积（保持原分辨率，仅换更高效编码）。
+
+    配图经公网 cloudflared 慢出口传输（实测 ~124KB/s），2K png 单张 ~0.8MB→~6.7s；
+    WebP（q85）通常压到原大小的 ~15-25%，肉眼几乎无差。转码失败则回退原始 png（绝不丢图）。
+    懒导入 PIL（同本文件 minio 的风格），避免模块加载即硬依赖 Pillow。
+
+    Returns: (字节, 格式后缀 "webp"|"png")
+    """
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        with Image.open(BytesIO(image_data)) as img:
+            # WebP 支持 RGB/RGBA；其它模式先转：带透明通道（LA/PA/P+transparency）转 RGBA 保留透明，
+            # 其余（L/CMYK 等）转 RGB
+            if img.mode not in ("RGB", "RGBA"):
+                has_alpha = img.mode in ("LA", "PA") or (img.mode == "P" and "transparency" in img.info)
+                img = img.convert("RGBA" if has_alpha else "RGB")
+            out = BytesIO()
+            img.save(out, format="WEBP", quality=quality, method=6)
+            return out.getvalue(), "webp"
+    except Exception as e:
+        logger.warning(f"WebP encode failed, falling back to original png: {e}")
+        return image_data, "png"
+
+
 async def upload_image(
     user_id: str,
     task_id: str,
@@ -514,8 +542,11 @@ async def generate_single_image(
             timeout=timeout,
         )
 
-        # 8. 上传到存储（MinIO + 云存储）
-        object_key = await upload_image(user_id, task_id, image_data)
+        # 8. 转 WebP 压缩（减小经公网慢隧道的传输量；转码失败回退原 png）
+        image_data, image_format = _encode_webp(image_data)
+
+        # 9. 上传到存储（MinIO + 云存储）
+        object_key = await upload_image(user_id, task_id, image_data, image_format=image_format)
 
         # 9. 返回相对路径（前端通过 same-origin nginx 代理访问）
         image_path = object_key.replace("summary_images/", "")
