@@ -113,6 +113,12 @@ class Settings(BaseSettings):
     # 窗口扎堆把熔断打 OPEN、连累随后同走 proxy_llm 的摘要生成。默认 3，建议 ≤4。
     POLISH_CONCURRENCY: int = Field(default=3)
 
+    # 摘要配图的并发生成上限。摘要按 {{IMAGE:}} 锚点最多生成 max_images=6 张，原为无界一次性
+    # 并发 6 张 → 首发即撞 image-service 429（429 不在客户端重试白名单，该张直接终态失败），
+    # 累计失败还会触发 image_service 熔断（阈值 5）。有界并发把在途数压到此值以下消除 burst。
+    # 比润色更保守（默认 2）：生图路径更脆（429 不重试、单张失败补不回）。上限须 < 熔断阈值 5。
+    IMAGE_GEN_CONCURRENCY: int = Field(default=2)
+
     # 远程 image-service（独立部署的 Gemini 生图服务）
     IMAGE_SERVICE_BASE_URL: str | None = Field(default=None)
     IMAGE_SERVICE_API_KEY: str | None = Field(default=None)

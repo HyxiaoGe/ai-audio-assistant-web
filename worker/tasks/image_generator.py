@@ -19,6 +19,7 @@ from typing import Any
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.config import settings
 from app.core.smart_factory import SmartFactory
 from app.models.summary import Summary
 from app.models.task import Task
@@ -558,8 +559,10 @@ async def generate_images_parallel(
     max_images: int = 3,
     timeout: int = 60,
     on_image_ready: Callable[[dict[str, Any], int, int], None] | None = None,
+    *,
+    max_concurrency: int | None = None,
 ) -> list[dict[str, Any]]:
-    """并行生成多张图片，每生成一张立即回调
+    """有界并发生成多张图片，每生成一张立即回调
 
     Args:
         placeholders: [{"placeholder": "...", "type": "...", "description": "...", "key_texts": [...]}, ...]
@@ -570,6 +573,7 @@ async def generate_images_parallel(
         max_images: 最大图片数量
         timeout: 单张图片超时（秒）
         on_image_ready: 单张图片完成时的回调函数，参数为 (result, current_index, total)
+        max_concurrency: 在途并发上限，None 时取 settings.IMAGE_GEN_CONCURRENCY
 
     Returns:
         [{"placeholder": "...", "url": "...", "status": "success|failed"}, ...]
@@ -581,11 +585,25 @@ async def generate_images_parallel(
         return []
 
     total = len(placeholders)
-    logger.info(f"Generating {total} styled images ({content_style}/{locale}) for task {task_id}")
+
+    # 有界并发：无界一次性 create_task N 张会在首发瞬间向 image-service 打 N 个并发请求，
+    # 撞 429（且 429 不在 image_service 客户端重试白名单 → 该张直接终态失败、补不回），
+    # 累计失败还会触发 image_service 熔断器（阈值 5）。用信号量把在途并发压到 IMAGE_GEN_CONCURRENCY
+    # 以下，消除 burst。Semaphore 必须在函数体内新建（绑定本次调用的 event loop）——两个生图入口
+    # （summary_image_task / regenerate_summary）都经 asyncio.run 每次起新 loop，模块级信号量会
+    # 绑死首个 loop，第二次调用报 "bound to a different event loop"。同款约束见 transcript_polish.py。
+    concurrency = max_concurrency if max_concurrency is not None else settings.IMAGE_GEN_CONCURRENCY
+    concurrency = max(1, min(concurrency, total))
+    logger.info(
+        f"Generating {total} styled images ({content_style}/{locale}) for task {task_id} (concurrency={concurrency})"
+    )
+    sem = asyncio.Semaphore(concurrency)
 
     # 创建任务，保留索引信息
     async def generate_with_index(index: int, item: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-        result = await generate_single_image(item, user_id, task_id, content_style, locale, timeout)
+        # 仅把生图 IO 放进信号量临界区；索引/回调/回写都在锁外，最大化并发吞吐。
+        async with sem:
+            result = await generate_single_image(item, user_id, task_id, content_style, locale, timeout)
         return index, result
 
     tasks = [asyncio.create_task(generate_with_index(i, p)) for i, p in enumerate(placeholders)]
