@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +13,29 @@ from app.models.user import UserProfile
 from app.schemas.user import NotificationPreferences, UserPreferencesUpdateRequest
 
 logger = logging.getLogger("app.user_preferences")
+
+# locale/timezone 几乎不变，而 /auth/userinfo 是重量级跨服务调用（auth-service 内部还要
+# SELECT users + user_preferences）。前端在 app 初始化 / 切页 / 主题语言加载时会高频读偏好，
+# 这里按 access token 做短 TTL 缓存，避免每次都回源 auth-service。key 用 token 的 SHA256
+# 前缀（绝不在内存里存原始 token）；偏好更新时主动失效（见 _update_auth_preferences）。
+# 仅缓存成功（200）结果——瞬时失败只回退默认值、绝不写进缓存，否则一次抖动会把默认值钉死 TTL。
+_auth_prefs_cache: dict[str, tuple[dict[str, object], float]] = {}
+_AUTH_PREFS_CACHE_TTL = 300.0  # 秒，与 JWKS 缓存 TTL 一致
+_AUTH_PREFS_CACHE_MAX = 1024  # 防无界增长：token 轮换会不断留下死 key
+
+
+def _now() -> float:
+    """单独包一层便于测试 monkeypatch TTL，不直接散用 time.time()。"""
+    return time.time()
+
+
+def _auth_prefs_cache_key(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()[:32]
+
+
+def _invalidate_auth_prefs_cache(token: str) -> None:
+    _auth_prefs_cache.pop(_auth_prefs_cache_key(token), None)
+
 
 DEFAULT_TASK_DEFAULTS: dict[str, object] = {
     "language": "auto",
@@ -39,21 +64,35 @@ def _normalize_settings(app_settings: object) -> dict[str, object]:
 
 
 async def _get_auth_preferences(token: str) -> dict[str, object]:
-    """Fetch UI preferences (locale, timezone) from auth-service."""
+    """Fetch UI preferences (locale, timezone) from auth-service, with a short-TTL cache.
+
+    走 LAN 内部基址（resolved_auth_service_internal_url）避免公网隧道。命中未过期缓存直接返回；
+    只缓存 200 成功结果，瞬时失败回退默认值但不污染缓存。
+    """
+    cache_key = _auth_prefs_cache_key(token)
+    now = _now()
+    cached = _auth_prefs_cache.get(cache_key)
+    if cached is not None and (now - cached[1]) < _AUTH_PREFS_CACHE_TTL:
+        return dict(cached[0])
+
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{settings.AUTH_SERVICE_URL}/auth/userinfo",
+                f"{settings.resolved_auth_service_internal_url}/auth/userinfo",
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=5.0,
             )
             if resp.status_code == 200:
                 data = resp.json()
                 prefs = data.get("preferences", {})
-                return {
+                result: dict[str, object] = {
                     "locale": prefs.get("locale", "zh"),
                     "timezone": prefs.get("timezone", "Asia/Shanghai"),
                 }
+                if len(_auth_prefs_cache) >= _AUTH_PREFS_CACHE_MAX:
+                    _auth_prefs_cache.clear()
+                _auth_prefs_cache[cache_key] = (dict(result), now)
+                return result
     except Exception as exc:
         logger.warning("Failed to fetch auth preferences: %s", exc)
     return {"locale": "zh", "timezone": "Asia/Shanghai"}
@@ -72,11 +111,14 @@ async def _update_auth_preferences(token: str, locale: str | None, timezone: str
     try:
         async with httpx.AsyncClient() as client:
             await client.patch(
-                f"{settings.AUTH_SERVICE_URL}/auth/profile",
+                f"{settings.resolved_auth_service_internal_url}/auth/profile",
                 headers={"Authorization": f"Bearer {token}"},
                 json=payload,
                 timeout=5.0,
             )
+        # 偏好已在 auth-service 落库：失效该 token 的缓存，后续读取（含本次 update 末尾的
+        # get_user_preferences 回读）会重新拉到最新 locale/timezone，而非返回缓存旧值。
+        _invalidate_auth_prefs_cache(token)
     except Exception as exc:
         logger.warning("Failed to update auth preferences: %s", exc)
 
