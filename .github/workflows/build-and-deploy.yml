@@ -6,11 +6,17 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: ai-audio-web-build-deploy-${{ github.ref }}
   cancel-in-progress: true
+
+# 镜像源:阿里云 ACR 个人版(深圳),替代原 ghcr.io。
+# 动机:Windows 构建机与 dev 部署机同处国内,镜像却经 ghcr(海外 Fastly)跨境往返一圈,
+# 1.49GB 大镜像在 GFW 链路上 pull 反复被 reset(部署反复栽在 Login/Pull GHCR)。改走境内 ACR 去掉跨境跳。
+env:
+  REGISTRY: crpi-77w10wlykpqilmmb.cn-shenzhen.personal.cr.aliyuncs.com
+  IMAGE_NAME: crpi-77w10wlykpqilmmb.cn-shenzhen.personal.cr.aliyuncs.com/seanfield/ai-audio-assistant-web
 
 jobs:
   build:
@@ -20,8 +26,6 @@ jobs:
     outputs:
       started_at: ${{ steps.pipeline_start.outputs.started_at }}
       runner_name: ${{ steps.pipeline_start.outputs.runner_name }}
-    env:
-      IMAGE_NAME: ghcr.io/hyxiaoge/ai-audio-assistant-web
     defaults:
       run:
         shell: cmd
@@ -72,10 +76,11 @@ jobs:
         run: |
           docker run --rm "%IMAGE_NAME%:%GITHUB_SHA%" sh -lc "pip install --no-cache-dir pytest pytest-asyncio pytest-mock pytest-cov aiosqlite && pytest tests/ -v"
 
-      - name: Login to GHCR
-        run: echo %GITHUB_TOKEN% | docker login ghcr.io -u %GITHUB_ACTOR% --password-stdin
+      - name: Login to ACR
+        run: echo %ACR_PASSWORD% | docker login %REGISTRY% -u %ACR_USERNAME% --password-stdin
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
 
       - name: Push Docker image
         run: docker push "%IMAGE_NAME%:%GITHUB_SHA%"
@@ -97,30 +102,31 @@ jobs:
       - name: Record deploy start time
         run: echo "DEPLOY_START=$(date +%s)" >> "$GITHUB_ENV"
 
-      - name: Login to GHCR
-        run: echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+      - name: Login to ACR
+        run: echo "${ACR_PASSWORD}" | docker login "${REGISTRY}" -u "${ACR_USERNAME}" --password-stdin
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
 
       - name: Apply alembic migrations
         run: |
           cd ~/project/ai-audio-assistant-web
-          docker pull ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}
+          docker pull ${{ env.IMAGE_NAME }}:${{ github.sha }}
           # 用 docker --env-file 让 docker 自己解析 .env，而不是 bash source。
           # bash source 会把 YOUTUBE_OUTPUT_TEMPLATE=%(id)s.%(ext)s 这类含 ( 的值当 subshell 启动失败。
           docker run --rm \
             --network ai-audio-network \
             --env-file .env \
-            ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }} \
+            ${{ env.IMAGE_NAME }}:${{ github.sha }} \
             alembic upgrade head
 
       - name: Pull and restart api/worker/beat
         run: |
           cd ~/project/ai-audio-assistant-web
-          docker pull ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}
+          docker pull ${{ env.IMAGE_NAME }}:${{ github.sha }}
           cat > docker-compose.ai-audio-web-ghcr.yml <<'EOF'
           x-common: &common
-            image: ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}
+            image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
             env_file: .env
             environment:
               TZ: UTC
@@ -175,8 +181,8 @@ jobs:
       - name: Cleanup old images
         if: always()
         run: |
-          current="ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}"
-          docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' ghcr.io/hyxiaoge/ai-audio-assistant-web \
+          current="${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' ${{ env.IMAGE_NAME }} \
             | awk -v current="$current" '$1 != current {print $2}' \
             | sort -u \
             | xargs -r docker rmi || true
@@ -190,7 +196,7 @@ jobs:
             dev \
             "${{ job.status }}" \
             "${{ needs.build.outputs.started_at }}" \
-            "ghcr.io/hyxiaoge/ai-audio-assistant-web:${{ github.sha }}" \
+            "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
             "${{ github.sha }}" \
             "${{ needs.build.outputs.runner_name }}" \
             ai-audio-assistant-web \
