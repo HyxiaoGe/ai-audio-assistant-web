@@ -274,7 +274,22 @@ def _alt_from_placeholder(placeholder: str) -> str:
     return cleaned.strip()
 
 
-def build_image_specs(content: str, content_style: str | None) -> tuple[str, list[dict[str, object]]]:
+def _strip_placeholder_anchors(content: str, anchors: list[str]) -> str:
+    """从 content 移除给定的 {{IMAGE:…}} 锚点，并清理因此产生的多余空行。
+
+    用于 build_image_specs 截断超限占位符后，把不会被生成的锚点从正文剥掉——否则正文里
+    残留的孤立锚点没有对应图槽，前端会渲染成无图的孤儿「等待生成」。
+    """
+    for anchor in anchors:
+        content = content.replace(anchor, "")
+    # 移除锚点后常留下空行，折叠 3+ 连续换行为 2，并去除首尾空白。
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    return content.strip()
+
+
+def build_image_specs(
+    content: str, content_style: str | None, max_images: int | None = None
+) -> tuple[str, list[dict[str, object]]]:
     """规划 overview 配图占位符并返回 pending 状态的图集（不生成图片）。
 
     复用 extract_image_placeholders / _build_default_article_image_placeholder 的规划逻辑：
@@ -292,6 +307,17 @@ def build_image_specs(content: str, content_style: str | None) -> tuple[str, lis
             return content, []
         content = _insert_article_image_placeholder(content, default_placeholder["placeholder"])
         placeholders = [default_placeholder]
+
+    # 对齐生成上限：占位符多于 max_images 时只保留前 max_images 个，并把多余锚点从 content 剥除。
+    # 否则建出的 pending 槽数会多于实际生成图数（generate_images_parallel 同样 placeholders[:max_images]），
+    # 多出的槽永远停在 pending、前端渲染成无图的孤儿「等待生成」（见 task 6fb1b394 / 3c641cf1：
+    # LLM 给 overview 写了 7 个 {{IMAGE}}，上限 6 张，第 7 个槽从未被生成）。
+    if max_images is None:
+        max_images = get_auto_images_config().get("max_images", 6)
+    if max_images is not None and len(placeholders) > max_images:
+        dropped = [p["placeholder"] for p in placeholders[max_images:]]
+        placeholders = placeholders[:max_images]
+        content = _strip_placeholder_anchors(content, dropped)
 
     specs: list[dict[str, object]] = []
     for p in placeholders:
