@@ -77,7 +77,10 @@ jobs:
           docker run --rm "%IMAGE_NAME%:%GITHUB_SHA%" sh -lc "pip install --no-cache-dir pytest pytest-asyncio pytest-mock pytest-cov aiosqlite && pytest tests/ -v"
 
       - name: Login to ACR
-        run: echo %ACR_PASSWORD% | docker login %REGISTRY% -u %ACR_USERNAME% --password-stdin
+        # cmd 的 `echo %VAR% | docker login --password-stdin` 在 Windows docker 上把口令传歪 → ACR 判 401
+        # (dev bash 同一凭据三元组可成功登录,已排除凭据错)。改 -p 直传参数,绕开 echo/stdin 管道。
+        # runner 为私有自托管机、secret 在 GitHub 日志中被掩码,-p 在此场景安全。
+        run: docker login %REGISTRY% -u %ACR_USERNAME% -p %ACR_PASSWORD%
         env:
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
           ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
