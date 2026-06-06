@@ -31,14 +31,20 @@ class Settings(BaseSettings):
     # 支持逗号分隔多把密钥以便轮换（第一把加密，全部用于解密）。生产环境必须设置。
     FIELD_ENCRYPTION_KEY: str | None = Field(default=None)
 
+    # SQLAlchemy async 连接池大小。默认 5+10 偏小，突发并发（开页齐射认证请求）下易排队；
+    # 单 API worker 共享此一池，适度调大以容纳一次页面的并发齐射。
+    DB_POOL_SIZE: int = Field(default=10)
+    DB_MAX_OVERFLOW: int = Field(default=20)
+
     # Auth Service (统一认证)
     AUTH_SERVICE_URL: str = Field(default="http://localhost:8100")
     AUTH_SERVICE_JWKS_URL: str | None = Field(default=None)
-    # 服务间内部调用（/auth/userinfo、/auth/profile）的 auth-service 基址。生产/dev 应指向
+    # 服务间内部调用（/auth/userinfo、/auth/profile、JWKS）的 auth-service 基址。生产/dev 应指向
     # LAN（如 http://192.168.1.11:8100），避免绕公网 cloudflared 隧道——userinfo 经隧道
     # p50 ~1.2s，走 LAN 仅 ~17ms。留空则回退 AUTH_SERVICE_URL，向后兼容。
-    # 注意：JWKS / 令牌身份校验仍走 AUTH_SERVICE_URL / AUTH_SERVICE_JWKS_URL（公网域名），
-    # 与本内部基址解耦——内部走 LAN 不影响 issuer/签名校验。
+    # JWKS 取用也优先此内部基址（见 resolved_auth_jwks_url）：经公网拉 JWKS 实测 ~1.5s/次，
+    # 300s 缓存一过期、并发认证请求各拉一遍即造成「开页齐卡」；走 LAN 仅 ~13ms（keys 一致，
+    # 不影响 issuer/RS256 签名校验）。
     AUTH_SERVICE_INTERNAL_URL: str | None = Field(default=None)
 
     CONFIG_CENTER_DB_ENABLED: bool = Field(default=True)
@@ -183,9 +189,28 @@ class Settings(BaseSettings):
         """内部服务间调用应使用的 auth-service 基址（已剥尾部 /）。
 
         优先 AUTH_SERVICE_INTERNAL_URL（生产/dev 指向 LAN）；未设则回退 AUTH_SERVICE_URL，
-        保持向后兼容。仅用于 userinfo/profile 等内部 HTTP 调用，不参与 JWKS/身份校验。
+        保持向后兼容。用于 userinfo/profile 等内部 HTTP 调用；JWKS 取用见
+        resolved_auth_jwks_url（同样优先内部基址）。
         """
         return (self.AUTH_SERVICE_INTERNAL_URL or self.AUTH_SERVICE_URL).rstrip("/")
+
+    @property
+    def resolved_auth_jwks_url(self) -> str:
+        """JWKS 公钥集的获取 URL（已含 /.well-known/jwks.json 路径）。
+
+        JWKS 校验是「后端↔auth-service」调用，与 userinfo/profile 同类，应优先走 LAN 内部基址：
+        经公网 cloudflared 隧道拉 JWKS 实测 ~1.5s/次，而 JWTValidator 缓存仅 300s，一过期、
+        并发认证请求各拉一遍（单 worker、库内无 singleflight）即造成「开页齐卡」的尾延迟；
+        走 LAN 仅 ~13ms，且两端 keys 一致、不影响 issuer/RS256 签名校验。
+
+        优先级：AUTH_SERVICE_INTERNAL_URL > AUTH_SERVICE_JWKS_URL > AUTH_SERVICE_URL。
+        显式 AUTH_SERVICE_JWKS_URL 仅在未配内部基址时作回退（如仅公网可达的环境）。
+        """
+        if self.AUTH_SERVICE_INTERNAL_URL:
+            return f"{self.AUTH_SERVICE_INTERNAL_URL.rstrip('/')}/.well-known/jwks.json"
+        if self.AUTH_SERVICE_JWKS_URL:
+            return self.AUTH_SERVICE_JWKS_URL
+        return f"{self.AUTH_SERVICE_URL.rstrip('/')}/.well-known/jwks.json"
 
     @model_validator(mode="after")
     def _require_prod_secrets(self) -> Settings:

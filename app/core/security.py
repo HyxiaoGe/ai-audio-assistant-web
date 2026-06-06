@@ -101,8 +101,9 @@ def verify_scoped_token(token: str) -> dict[str, Any]:
 def get_jwt_validator() -> JWTValidator:
     global _validator
     if _validator is None:
-        jwks_url = settings.AUTH_SERVICE_JWKS_URL or f"{settings.AUTH_SERVICE_URL}/.well-known/jwks.json"
-        _validator = JWTValidator(jwks_url=jwks_url, cache_ttl=300)
+        # JWKS 取用优先走 LAN 内部基址（见 settings.resolved_auth_jwks_url 的说明）：经公网拉
+        # JWKS ~1.5s/次，缓存 300s 一过期、并发认证请求各拉一遍即造成「开页齐卡」；LAN 仅 ~13ms。
+        _validator = JWTValidator(jwks_url=settings.resolved_auth_jwks_url, cache_ttl=300)
     return _validator
 
 

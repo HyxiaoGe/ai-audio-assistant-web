@@ -19,7 +19,12 @@ def _get_database_url() -> str:
     return database_url
 
 
-engine: AsyncEngine = create_async_engine(_get_database_url(), pool_pre_ping=True)
+engine: AsyncEngine = create_async_engine(
+    _get_database_url(),
+    pool_pre_ping=True,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
+)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 
