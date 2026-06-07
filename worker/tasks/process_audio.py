@@ -186,6 +186,11 @@ def _resolve_llm_selection(task: Task, user_id: str | None) -> tuple[str, str]:
     provider = raw_provider if isinstance(raw_provider, str) else None
     model_id = raw_model_id if isinstance(raw_model_id, str) else None
     if provider:
+        # provider 来自 /llm/models 的展示分组标签（deepseek/openai/litellm…），不是注册服务名。
+        # 文本 LLM 统一经 proxy 路由，真正的选择键是 model_id —— 把展示名归一到注册的默认服务并
+        # 保留 model_id，否则 SmartFactory.get_service 会因 "Service llm:<展示名> not found" 崩在 worker。
+        if provider not in ServiceRegistry.list_services("llm"):
+            provider = _select_default_llm_provider()
         model_id = model_id or _default_model_id_for_provider(provider, user_id)
         return provider, model_id
     provider = _select_default_llm_provider()

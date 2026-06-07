@@ -232,9 +232,10 @@ class TaskService:
             from app.services.asr_quota_service import KNOWN_VARIANTS
 
             if asr_variant not in KNOWN_VARIANTS:
+                # 40000 的 i18n 模板是 "{detail}"，必须用 detail= 传原因，否则前端只会收到裸 "{detail}"
                 raise BusinessError(
                     ErrorCode.PARAMETER_ERROR,
-                    reason=f"未知 asr_variant: {asr_variant}（可用: {KNOWN_VARIANTS}）",
+                    detail=f"未知 asr_variant: {asr_variant}（可用: {sorted(KNOWN_VARIANTS)}）",
                 )
 
         asr_provider = options.get("asr_provider")
@@ -244,14 +245,22 @@ class TaskService:
             if asr_providers and asr_provider not in asr_providers:
                 raise BusinessError(ErrorCode.ASR_PROVIDER_NOT_AVAILABLE, provider=asr_provider)
 
-        llm_provider = options.get("llm_provider") or options.get("provider")
-        if llm_provider:
-            text_llm_providers = ServiceRegistry.list_text_llm_providers()
-            if text_llm_providers and llm_provider not in text_llm_providers:
-                raise BusinessError(
-                    ErrorCode.PARAMETER_ERROR,
-                    reason=f"未知或不支持文本生成的 LLM provider: {llm_provider}（可用: {sorted(text_llm_providers)}）",
-                )
+        # LLM 的 provider 字段来自 /llm/models 的「展示分组」标签（deepseek/openai/litellm…），
+        # 并非注册服务名：文本 LLM 已统一经 proxy 路由，真正的选择键是 model_id
+        # （worker 侧 _resolve_llm_selection 会把展示名归一到注册的 proxy 服务）。
+        # 因此这里不再按注册服务名校验 provider（否则用户一选具体模型就被误拒为 40000），
+        # 只兜底确认确有可用的文本 LLM 后端，避免无任何后端可用时白创建任务。
+        llm_selected = (
+            options.get("llm_provider")
+            or options.get("provider")
+            or options.get("llm_model_id")
+            or options.get("model_id")
+        )
+        if llm_selected and not ServiceRegistry.list_text_llm_providers():
+            raise BusinessError(
+                ErrorCode.PARAMETER_ERROR,
+                detail="当前没有可用的文本 LLM 服务，请稍后重试",
+            )
 
     @staticmethod
     async def _check_asr_quota_precheck(db: AsyncSession, user: CurrentUser, data: TaskCreateRequest) -> None:

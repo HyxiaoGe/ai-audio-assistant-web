@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.exceptions import BusinessError
+from app.core.registry import ServiceRegistry
 from app.i18n.codes import ErrorCode
 from app.schemas.task import TaskCreateRequest, TaskOptions
 from app.services.task_service import TaskService
@@ -22,6 +23,27 @@ def test_validate_rejects_unknown_asr_variant() -> None:
     with pytest.raises(BusinessError) as ei:
         TaskService._validate_provider_selection(_req(asr_variant="turbo"))
     assert ei.value.code == ErrorCode.PARAMETER_ERROR
+
+
+def test_unknown_asr_variant_carries_detail_kwarg() -> None:
+    # 40000 的 i18n 模板是 "{detail}"；拒绝原因必须放在 detail=（而非 reason=），
+    # 否则前端只会收到没渲染的裸 "{detail}"。
+    with pytest.raises(BusinessError) as ei:
+        TaskService._validate_provider_selection(_req(asr_variant="turbo"))
+    assert "detail" in ei.value.kwargs
+    assert "turbo" in ei.value.kwargs["detail"]
+
+
+def test_validate_accepts_catalog_llm_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 前端从 /llm/models 选模型时会带上展示分组 provider（如 deepseek），它不是注册服务名。
+    # LLM 已统一经 proxy 路由（按 model_id），创建期不应再按注册名拒绝这类 provider。
+    monkeypatch.setattr(
+        ServiceRegistry,
+        "list_text_llm_providers",
+        classmethod(lambda cls: ["proxy"]),
+    )
+    # 不应抛异常
+    TaskService._validate_provider_selection(_req(provider="deepseek", model_id="chat-default"))
 
 
 @pytest.mark.parametrize("variant", ["file", "file_fast", None])
