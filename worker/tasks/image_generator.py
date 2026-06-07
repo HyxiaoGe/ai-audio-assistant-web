@@ -39,6 +39,21 @@ IMAGE_PLACEHOLDER_PATTERN_NEW_SINGLE = r"(?<!\{)\{IMAGE:\s*([^|]+)\s*\|\s*([^|]+
 IMAGE_PLACEHOLDER_PATTERN_OLD = r"\{?\{IMAGE:\s*([^}|]+)\}?\}"
 
 
+def _dedupe_key_texts(items: list[str]) -> list[str]:
+    """按出现顺序去重 key_texts。
+
+    占位符里若同一标签被 LLM 写了多遍，配图模型会把同一文字渲染多次（重复节点）。
+    这里在源头按首次出现顺序去重，作为防御性兜底（生图模型自身的凑版式重复另由提示词约束）。
+    """
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return deduped
+
+
 def extract_image_placeholders(content: str) -> list[dict]:
     """提取所有图片占位符（支持新旧两种格式，单双花括号）
 
@@ -59,7 +74,7 @@ def extract_image_placeholders(content: str) -> list[dict]:
         image_type = match.group(1).strip().lower()
         description = match.group(2).strip()
         key_texts_str = match.group(3).strip()
-        key_texts = [t.strip() for t in key_texts_str.split(",") if t.strip()]
+        key_texts = _dedupe_key_texts([t.strip() for t in key_texts_str.split(",") if t.strip()])
 
         # 重建原始占位符用于后续替换
         placeholder = f"{{{{IMAGE: {match.group(1).strip()} | {match.group(2).strip()} | {match.group(3).strip()}}}}}"
@@ -83,7 +98,7 @@ def extract_image_placeholders(content: str) -> list[dict]:
         image_type = match.group(1).strip().lower()
         description = match.group(2).strip()
         key_texts_str = match.group(3).strip()
-        key_texts = [t.strip() for t in key_texts_str.split(",") if t.strip()]
+        key_texts = _dedupe_key_texts([t.strip() for t in key_texts_str.split(",") if t.strip()])
 
         # 使用原始单花括号格式
         placeholder = f"{{IMAGE: {match.group(1).strip()} | {match.group(2).strip()} | {match.group(3).strip()}}}"
