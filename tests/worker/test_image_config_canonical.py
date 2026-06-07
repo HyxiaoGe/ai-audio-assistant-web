@@ -47,6 +47,13 @@ def test_lecture_mapping_is_academic(cfg: dict) -> None:
     assert lec["layout"] == "hierarchical"
 
 
+def test_all_styles_are_landscape_16_9(cfg: dict) -> None:
+    # 配图嵌在文章流中按正文宽度展示；竖版会在宽栏里留大块空边、打断阅读（突兀），
+    # 故 7 种风格统一 16:9 横版铺满正文宽度。lecture/tutorial 曾为 3:4，已并入横版。
+    for key, spec in cfg["content_style_mapping"].items():
+        assert spec["aspect_ratio"] == "16:9", f"{key} 应为 16:9 横版，实为 {spec['aspect_ratio']}"
+
+
 def test_visual_styles_are_thick_with_mood(cfg: dict) -> None:
     styles = cfg["visual_styles"]
     assert set(styles) == {"flat_vector", "isometric_3d", "hand_drawn", "infographic_modern", "chalkboard"}
