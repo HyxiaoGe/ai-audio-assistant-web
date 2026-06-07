@@ -36,7 +36,7 @@ def test_style_specific_prompt_types_preserved(cfg: dict) -> None:
 
 
 def test_version_current_and_changelog_history(cfg: dict) -> None:
-    assert cfg["version"] == "1.8.0"
+    assert cfg["version"] == "1.9.0"
     assert cfg["version"] in cfg["changelog"]
     # 历史条目保留
     assert "1.5.0" in cfg["changelog"]
@@ -46,7 +46,7 @@ def test_default_image_model_is_seedream(cfg: dict) -> None:
     image_model = cfg["features"]["auto_images"]["image_model"]
     assert image_model["provider"] == "image_service"
     # 必须与 image-service SUPPORTED_MODELS 的裸别名严格一致
-    assert image_model["model_id"] == "doubao-seedream-4-0"
+    assert image_model["model_id"] == "doubao-seedream-4-5"
 
 
 def test_max_tokens_enlarged_for_reasoning_models(cfg: dict) -> None:
