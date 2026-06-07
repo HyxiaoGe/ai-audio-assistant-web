@@ -262,3 +262,28 @@ def test_encode_webp_falls_back_to_png_on_invalid_input() -> None:
 
     assert fmt == "png"
     assert data == b"not-an-image"
+
+
+def test_dedupe_key_texts_preserves_first_occurrence_order() -> None:
+    """重复标签按首次出现顺序去重，非重复项原样保留。"""
+    assert image_generator._dedupe_key_texts(["A", "B", "A", "C", "B"]) == ["A", "B", "C"]
+    assert image_generator._dedupe_key_texts(["X", "Y", "Z"]) == ["X", "Y", "Z"]
+    assert image_generator._dedupe_key_texts([]) == []
+
+
+def test_extract_image_placeholders_dedupes_duplicate_key_texts() -> None:
+    """占位符里重复的 key_texts 在解析阶段即去重，避免配图把同一文字渲染多次。"""
+    content = "{{IMAGE: infographic | 三大挑战 | 挑战1, 挑战2, 挑战2, 挑战3}}"
+    specs = image_generator.extract_image_placeholders(content)
+
+    assert len(specs) == 1
+    assert specs[0]["key_texts"] == ["挑战1", "挑战2", "挑战3"]
+
+
+def test_extract_image_placeholders_dedupes_single_brace_format() -> None:
+    """单花括号新格式同样去重（与双花括号同语义）。"""
+    content = "{IMAGE: timeline | 历程 | 2003年, 2006年, 2006年, 2018年}"
+    specs = image_generator.extract_image_placeholders(content)
+
+    assert len(specs) == 1
+    assert specs[0]["key_texts"] == ["2003年", "2006年", "2018年"]
