@@ -36,6 +36,7 @@ from app.services.asr_quota_service import record_usage_sync
 from app.services.notifications.service import NotificationService
 from app.services.notifications.types import NotificationType
 from app.services.rag import ingest_task_chunks_sync
+from app.services.summary.markdown_fence import strip_markdown_fence
 from app.services.summary.style_catalog import normalize_content_style
 from app.services.summary.style_resolution import (
     is_auto_style,
@@ -1496,6 +1497,8 @@ def _process_youtube(
                             session.add_all(llm_usages)
                             session.commit()
                         raise
+                    # LLM 偶发把整段散文包进 ```markdown 围栏，落库前在源头剥掉（与前端渲染防御同语义）
+                    content = strip_markdown_fence(content)
                     logger.info(
                         "Task %s: Generated %s summary (%d characters)",
                         task_id,
