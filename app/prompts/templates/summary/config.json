@@ -1,5 +1,5 @@
 {
-  "version": "1.7.0",
+  "version": "1.8.0",
   "features": {
     "auto_images": {
       "enabled": true,
@@ -8,7 +8,7 @@
       "supported_summary_types": ["overview"],
       "image_model": {
         "provider": "image_service",
-        "model_id": "gemini-3-pro-image-preview"
+        "model_id": "doubao-seedream-4-0"
       }
     }
   },
@@ -59,6 +59,13 @@
   "default_locale": "zh-CN",
   "supported_locales": ["zh-CN", "en-US"],
   "changelog": {
+    "1.8.0": {
+      "date": "2026-06-07",
+      "changes": [
+        "默认配图模型由 Gemini 3 Pro Image（¥0.96/张）切为字节 Doubao-Seedream-4.0（¥0.20/张，省 ~79%）；image-service 直连火山方舟 Ark 出图",
+        "全局切回开关=本处 image_model.model_id：回退保质量改 gemini-3-pro-image-preview、回退保成本改 gemini-3.1-flash-image-preview"
+      ]
+    },
     "1.7.0": {
       "date": "2026-06-05",
       "changes": [

@@ -547,7 +547,7 @@ async def generate_single_image(
         config = get_auto_images_config()
         image_model = config.get("image_model", {})
         provider = image_model.get("provider", "image_service")
-        model_id = image_model.get("model_id", "gemini-3-pro-image-preview")
+        model_id = image_model.get("model_id", "doubao-seedream-4-0")
 
         llm_service = await SmartFactory.get_service(
             "llm",
