@@ -66,18 +66,26 @@ class OSSStorageService(StorageService):
         RetryConfig(max_attempts=3, initial_delay=0.5, max_delay=5.0),
         exceptions=(OssError, ConnectionError, TimeoutError),
     )
-    def presign_put_object(self, object_name: str, expires_in: int) -> str:
+    def presign_put_object(self, object_name: str, expires_in: int, content_type: str | None = None) -> str:
         """生成上传签名 URL
 
         Args:
             object_name: 对象名称（路径）
             expires_in: 过期时间（秒）
+            content_type: 浏览器 PUT 时会发送的 Content-Type（取自 file.type，与 presign 请求同源）
 
         Returns:
             预签名上传 URL
+
+        Note:
+            OSS 签名 V1 把 Content-Type 计入 string-to-sign。浏览器 XHR PUT 会带
+            Content-Type=file.type，若签名时不绑定相同的 Content-Type，OSS 会因两边不一致
+            返回 SignatureDoesNotMatch(403)。这里把 content_type 绑进签名，既让浏览器直传
+            通过校验，又让对象按真实类型落库元数据（307 直下时 OSS 据此回 Content-Type）。
         """
-        # 生成 PUT 方法的签名 URL
-        url = self._bucket.sign_url("PUT", object_name, expires_in, slash_safe=True)
+        # 生成 PUT 方法的签名 URL；绑定 Content-Type 使浏览器发送的同名 header 通过签名校验
+        headers = {"Content-Type": content_type} if content_type else None
+        url = self._bucket.sign_url("PUT", object_name, expires_in, slash_safe=True, headers=headers)
         return url
 
     @monitor("storage", "oss")

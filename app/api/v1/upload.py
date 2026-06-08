@@ -63,10 +63,11 @@ def _build_file_key(filename: str, user_id: str) -> str:
     return f"upload/{user_id}/{now:%Y/%m/%d}/{file_id}{ext}"
 
 
-async def _build_upload_url(file_key: str, expires_in: int, user_id: str) -> str:
-    # 统一存储：浏览器直传 OSS（公网 host，绕开 Cloudflare 100MB 上限）
+async def _build_upload_url(file_key: str, expires_in: int, user_id: str, content_type: str) -> str:
+    # 统一存储：浏览器直传 OSS（公网 host，绕开 Cloudflare 100MB 上限）。
+    # 绑定 content_type：浏览器 PUT 带 Content-Type=file.type，OSS 签名需两边一致，否则 403。
     storage = await SmartFactory.get_service("storage", provider="oss", user_id=user_id)
-    return storage.presign_put_object(file_key, expires_in)
+    return storage.presign_put_object(file_key, expires_in, content_type)
 
 
 def _ensure_extension_allowed(filename: str, allowed: Iterable[str]) -> None:
@@ -104,7 +105,7 @@ async def presign_upload(
 
     expires_in = _get_presign_expires()
     file_key = _build_file_key(data.filename, user.id)
-    upload_url = await _build_upload_url(file_key, expires_in, user.id)
+    upload_url = await _build_upload_url(file_key, expires_in, user.id, data.content_type)
 
     return success(
         data={
