@@ -276,7 +276,9 @@ async def polish_transcripts(
     if not segments:
         return []
 
-    groups = group_segments_by_time(segments, window_seconds)
+    # 每组上限取自配置：下调段数让单组调用稳定落在 proxy 的 120s 读超时内，免去静默超时重试。
+    max_per_group = max(1, settings.POLISH_MAX_SEGMENTS_PER_GROUP)
+    groups = group_segments_by_time(segments, window_seconds, max_per_group=max_per_group)
 
     concurrency = max_concurrency if max_concurrency is not None else settings.POLISH_CONCURRENCY
     concurrency = max(1, concurrency)

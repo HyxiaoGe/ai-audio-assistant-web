@@ -119,11 +119,20 @@ class Settings(BaseSettings):
     LITELLM_MODEL: str = Field(default="chat-default")
     LITELLM_MAX_TOKENS: int = Field(default=4096)
 
-    # 转写润色的并发 LLM 调用上限。润色把长转写按时间窗切成多组、各组独立调一次
-    # deepseek-chat，原为串行（长任务 ~8min）。有界并发将其压到 ~1-2min；上限必须
-    # 低于 proxy_llm 熔断阈值（failure_threshold=5），避免偶发空返回（51102）在同一
-    # 窗口扎堆把熔断打 OPEN、连累随后同走 proxy_llm 的摘要生成。默认 3，建议 ≤4。
-    POLISH_CONCURRENCY: int = Field(default=3)
+    # 转写润色的并发 LLM 调用上限。润色把长转写按时间窗/段数切成多组、各组独立调一次
+    # deepseek-chat。有界并发压缩总耗时；上限必须 < proxy_llm 熔断阈值（failure_threshold=5），
+    # 使「一整波同时失败」也不足以把熔断打 OPEN、连累随后同走 proxy_llm 的摘要生成。
+    # 实测 647 段/14 组(每组 50 段)在并发 3 下 ~16min：故默认提到 4（仍 <5 保熔断不变式），
+    # 配合下方更小的分组（每组调用稳定落在 120s httpx 超时内、免去静默超时重试）显著提速。
+    POLISH_CONCURRENCY: int = Field(default=4)
+
+    # 单个润色分组的最大片段数。每组拼成一次非流式 chat 调用，httpx 客户端读超时 120s——
+    # 非流式响应在生成完成前不回任何字节，故单组生成一旦 >120s 就会静默触发读超时 + @retry
+    # 重试（最多 3 次、各 120s），白白浪费一整次超时时长并重解整组。实测每组 50 段时多组
+    # 落在 ~110-240s（>120s 即已在超时重试）。下调到 25 段，使单组稳定落在 120s 内、消除
+    # 这层重试税，并减小单组输出（降低截断/空返回风险）。分组同时受 window_seconds 约束，
+    # 取先到者；密集语音下本上限通常是实际生效的约束。
+    POLISH_MAX_SEGMENTS_PER_GROUP: int = Field(default=25)
 
     # 摘要配图的并发生成上限。摘要按 {{IMAGE:}} 锚点最多生成 max_images=6 张，原为无界一次性
     # 并发 6 张 → 首发即撞 image-service 429（429 不在客户端重试白名单，该张直接终态失败），

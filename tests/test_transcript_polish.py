@@ -245,6 +245,35 @@ async def test_polish_transcripts_respects_concurrency_limit():
 
 
 @pytest.mark.asyncio
+async def test_polish_transcripts_groups_by_configured_max_per_group(monkeypatch):
+    """polish_transcripts 按 settings.POLISH_MAX_SEGMENTS_PER_GROUP 限制单组段数。
+
+    回归守卫：下调每组段数是为了让单组非流式 chat 调用稳定落在 proxy 的 120s 读超时内、
+    免去静默超时重试。密集（同一时间窗内）的 7 段在上限=3 时应切成 3 组 → 恰好 3 次 chat。
+    """
+    from app.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "POLISH_MAX_SEGMENTS_PER_GROUP", 3)
+
+    call_count = 0
+
+    class _CountingLLM:
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            nonlocal call_count
+            call_count += 1
+            seqs = _seqs_in_prompt(messages)
+            return "\n".join(f"[{s}] x{s}" for s in seqs)
+
+    # 7 段密集排布（同一 180s 窗内），使「每组上限」成为唯一切分约束。
+    segs = [_seg(i, f"s{i}", i * 1.0, i * 1.0 + 0.5) for i in range(1, 8)]
+    results = await polish_transcripts(_CountingLLM(), segs)
+
+    assert len(results) == 7
+    assert [r.sequence for r in results] == list(range(1, 8))
+    assert call_count == 3  # ceil(7/3): 组 3+3+1
+
+
+@pytest.mark.asyncio
 async def test_polish_transcripts_all_groups_fail_all_fallback():
     """所有组都失败时，全量回退原文、段数不变、不向上抛异常（整段 polish 不挂）。"""
     mock_llm = AsyncMock()
