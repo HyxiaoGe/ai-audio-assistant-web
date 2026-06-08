@@ -16,6 +16,7 @@ from app.schemas.task import (
     TaskCreateResponse,
     TaskDetailResponse,
     TaskListItem,
+    TaskStatusCountsResponse,
 )
 from app.services.task_service import PROCESSING_STATUSES, TaskService
 
@@ -62,6 +63,20 @@ async def list_tasks(
     items, total = await TaskService.list_tasks(db, user, page, page_size, status)
     response = PageResponse[TaskListItem](items=items, total=total, page=page, page_size=page_size)
     return success(data=jsonable_encoder(response))
+
+
+@router.get("/status-counts")
+async def get_task_status_counts(
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> JSONResponse:
+    """列表页筛选 tab 的状态计数（all / processing / completed / failed）。
+
+    一次 GROUP BY 返回全部计数，替代前端为四个 tab 各发一次 page_size=1 查询。
+    注意：路由须声明在 ``/{task_id}`` 之前，否则会被动态段捕获。
+    """
+    counts = await TaskService.get_status_counts(db, user)
+    return success(data=jsonable_encoder(TaskStatusCountsResponse(**counts)))
 
 
 @router.get("/{task_id}")

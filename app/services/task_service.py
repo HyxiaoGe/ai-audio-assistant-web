@@ -381,6 +381,36 @@ class TaskService:
         return items, total
 
     @staticmethod
+    async def get_status_counts(db: AsyncSession, user: CurrentUser) -> dict[str, int]:
+        """一次 GROUP BY 统计当前用户各状态任务数，按列表筛选的同一伞形规则分桶。
+
+        与 list_tasks 共用 PROCESSING_STATUSES 单一事实源，避免计数与筛选漂移；
+        替代前端为四个 tab 各发一次 page_size=1 列表查询（列表页加载 5 连发 → 2）。
+        """
+        rows = (
+            await db.execute(
+                select(Task.status, func.count())
+                .where(
+                    Task.user_id == user.id,
+                    Task.deleted_at.is_(None),
+                )
+                .group_by(Task.status)
+            )
+        ).all()
+        processing_set = set(PROCESSING_STATUSES)
+        counts = {"all": 0, "processing": 0, "completed": 0, "failed": 0}
+        for status, count in rows:
+            count = int(count)
+            counts["all"] += count
+            if status == "completed":
+                counts["completed"] += count
+            elif status == "failed":
+                counts["failed"] += count
+            elif status in processing_set:
+                counts["processing"] += count
+        return counts
+
+    @staticmethod
     async def get_task_detail(db: AsyncSession, user: CurrentUser, task_id: str) -> TaskDetailResponse:
         result = await db.execute(
             select(Task).where(

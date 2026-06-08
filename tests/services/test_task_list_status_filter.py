@@ -85,3 +85,46 @@ def test_list_status_filter_whitelist_accepts_polishing() -> None:
     assert "polishing" in _LIST_STATUS_FILTERS
     assert set(PROCESSING_STATUSES) <= _LIST_STATUS_FILTERS
     assert {"all", "processing", "completed", "failed"} <= _LIST_STATUS_FILTERS
+
+
+class _RowsSession:
+    """get_status_counts 只 execute 一次 GROUP BY；用预置 rows 驱动分桶断言。"""
+
+    def __init__(self, rows: list[Any]) -> None:
+        self.rows = rows
+        self.statements: list[Any] = []
+
+    async def execute(self, stmt: Any) -> _FakeResult:
+        self.statements.append(stmt)
+        return _FakeResult(rows=self.rows)
+
+
+async def test_status_counts_buckets_processing_umbrella() -> None:
+    # processing 角标必须与 list_tasks 的伞形筛选一致：queued/transcribing/polishing
+    # 都算"处理中"；completed/failed 精确；all 为总和。
+    rows = [
+        ("completed", 3),
+        ("failed", 2),
+        ("transcribing", 1),
+        ("polishing", 1),
+        ("queued", 4),
+    ]
+    db = _RowsSession(rows)
+    user = CurrentUser(id="00000000-0000-0000-0000-000000000001", email="t@example.com")
+
+    counts = await TaskService.get_status_counts(db, user)
+
+    assert counts == {"all": 11, "processing": 6, "completed": 3, "failed": 2}
+
+
+async def test_status_counts_query_groups_by_status_scoped_to_user() -> None:
+    # 单次 GROUP BY、限定本人且排除软删除——替代四个 tab 各发一次 page_size=1 查询。
+    db = _RowsSession([])
+    user = CurrentUser(id="00000000-0000-0000-0000-000000000001", email="t@example.com")
+
+    await TaskService.get_status_counts(db, user)
+
+    sql = _compiled_sql(db.statements[0])
+    assert "group by" in sql and "status" in sql
+    assert "count(" in sql
+    assert "deleted_at is null" in sql

@@ -42,6 +42,19 @@ class TaskListItem(BaseModel):
     updated_at: datetime
 
 
+class TaskStatusCountsResponse(BaseModel):
+    """任务状态计数（列表页筛选 tab 的角标）。
+
+    与 list_tasks 共用同一伞形分桶规则（processing 覆盖 PROCESSING_STATUSES），
+    一次 GROUP BY 返回全部，替代前端为四个 tab 各发一次 page_size=1 查询。
+    """
+
+    all: int
+    processing: int
+    completed: int
+    failed: int
+
+
 class TaskStageResponse(BaseModel):
     """任务阶段信息"""
 
