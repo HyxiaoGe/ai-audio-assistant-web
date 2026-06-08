@@ -56,6 +56,57 @@ def _http_exception_message(exc: HTTPException, locale: str, code: ErrorCode) ->
     return get_message(code, locale, detail=str(exc.detail))
 
 
+def _is_media_stream_request(request: Request) -> bool:
+    """媒体字节流：GET /api/v1/media/<key>（POST /media/ticket 不在此列）。
+
+    这些 URL 由浏览器 <audio>/<img> 直连、不经 api-client 解析 envelope，需要真实
+    HTTP 状态码才能触发其 error 事件，进而由前端刷新短票并重试。其余端点一律保持
+    统一 200+envelope（前端按 code 字段判定）。
+    """
+    return request.method == "GET" and request.url.path.startswith("/api/v1/media/")
+
+
+def _media_http_status(code: ErrorCode) -> int:
+    """把统一错误码按区间映射为真实 HTTP 状态码（仅用于媒体字节流路径）。"""
+    value = int(code)
+    if 40100 <= value < 40200:  # 鉴权（未提供/失效/无效）
+        return 401
+    if 40300 <= value < 40400:  # 越权
+        return 403
+    if 40400 <= value < 40500:  # 资源不存在
+        return 404
+    if 51000 <= value < 52000:  # 三方/存储错误
+        return 502
+    if 40000 <= value < 41000:  # 参数/冲突类
+        return 400
+    return 500
+
+
+async def business_error_handler(request: Request, exc: BusinessError) -> JSONResponse:
+    locale = getattr(request.state, "locale", "zh")
+    message = get_message(exc.code, locale, **exc.kwargs)
+    if _is_media_stream_request(request):
+        return error(exc.code.value, message, status_code=_media_http_status(exc.code))
+    return error(exc.code.value, message)
+
+
+async def database_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
+    locale = getattr(request.state, "locale", "zh")
+    # 媒体字节流路径（get_media_user → _resolve_user 的 db.get/flush 可能抛 DBAPIError）
+    # 同样需要真实 HTTP 状态码，否则 <audio> 收到 200+JSON 无法触发 error 事件刷票重试。
+    is_media = _is_media_stream_request(request)
+    if "invalid UUID" in str(exc):
+        # 无效的ID直接当作资源不存在处理，用户不需要知道ID格式问题
+        code = ErrorCode.TASK_NOT_FOUND
+        message = get_message(code, locale)
+        status_code = _media_http_status(code) if is_media else 200
+        return error(code.value, message, status_code=status_code)
+    code = ErrorCode.DATABASE_SERVICE_ERROR
+    message = get_message(code, locale)
+    status_code = _media_http_status(code) if is_media else 200
+    return error(code.value, message, status_code=status_code)
+
+
 def create_app() -> FastAPI:
     _enable_docs = os.getenv("ENABLE_DOCS", "true").lower() == "true"
     app = FastAPI(
@@ -110,11 +161,7 @@ def create_app() -> FastAPI:
         await litellm_health.stop()
         MonitoringSystem.get_instance().stop()
 
-    @app.exception_handler(BusinessError)
-    async def business_error_handler(request: Request, exc: BusinessError) -> JSONResponse:
-        locale = getattr(request.state, "locale", "zh")
-        message = get_message(exc.code, locale, **exc.kwargs)
-        return error(exc.code.value, message)
+    app.add_exception_handler(BusinessError, business_error_handler)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
@@ -123,15 +170,7 @@ def create_app() -> FastAPI:
         message = _http_exception_message(exc, locale, code)
         return error(code.value, message)
 
-    @app.exception_handler(DBAPIError)
-    async def database_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
-        locale = getattr(request.state, "locale", "zh")
-        if "invalid UUID" in str(exc):
-            # 无效的ID直接当作资源不存在处理，用户不需要知道ID格式问题
-            message = get_message(ErrorCode.TASK_NOT_FOUND, locale)
-            return error(ErrorCode.TASK_NOT_FOUND.value, message)
-        message = get_message(ErrorCode.DATABASE_SERVICE_ERROR, locale)
-        return error(ErrorCode.DATABASE_SERVICE_ERROR.value, message)
+    app.add_exception_handler(DBAPIError, database_error_handler)
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -146,7 +185,8 @@ def create_app() -> FastAPI:
 
         locale = getattr(request.state, "locale", "zh")
         message = get_message(ErrorCode.INTERNAL_SERVER_ERROR, locale)
-        return error(ErrorCode.INTERNAL_SERVER_ERROR.value, message)
+        status_code = 500 if _is_media_stream_request(request) else 200
+        return error(ErrorCode.INTERNAL_SERVER_ERROR.value, message, status_code=status_code)
 
     return app
 

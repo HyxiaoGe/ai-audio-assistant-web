@@ -26,7 +26,9 @@ def get_request_id() -> str:
     return uuid4().hex
 
 
-def _build_response(code: int, message: str, data: DataPayload) -> JSONResponse:
+def _build_response(
+    code: int, message: str, data: DataPayload, status_code: int = 200
+) -> JSONResponse:
     trace_id = get_request_id()
     return JSONResponse(
         {
@@ -34,7 +36,8 @@ def _build_response(code: int, message: str, data: DataPayload) -> JSONResponse:
             "message": message,
             "data": data,
             "traceId": trace_id,
-        }
+        },
+        status_code=status_code,
     )
 
 
@@ -42,5 +45,12 @@ def success(data: DataPayload = None, message: str = "成功") -> JSONResponse:
     return _build_response(0, message, data)
 
 
-def error(code: int, message: str, data: DataPayload = None) -> JSONResponse:
-    return _build_response(code, message, data)
+def error(code: int, message: str, data: DataPayload = None, status_code: int = 200) -> JSONResponse:
+    """Build an error envelope.
+
+    ``status_code`` defaults to 200 (the unified-response contract the frontend
+    api-client parses by the ``code`` field). Pass a real HTTP status for
+    responses consumed directly by the browser (e.g. the media byte-stream
+    proxy, where ``<audio>``/``<img>`` need a non-2xx to fire ``error``).
+    """
+    return _build_response(code, message, data, status_code)
