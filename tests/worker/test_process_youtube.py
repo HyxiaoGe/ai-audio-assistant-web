@@ -345,3 +345,147 @@ def test_enqueue_summary_images_sends_async_task(monkeypatch: pytest.MonkeyPatch
     assert sent[0]["name"] == "worker.tasks.generate_summary_images_async"
     assert sent[0]["kwargs"]["summary_id"] == str(summary.id)
     assert sent[0]["kwargs"]["user_id"] == "user-1"
+
+
+# ============================================================
+# yt-dlp 抓取韧性：超时注入 + 瞬时/永久错误分类 + 仅瞬时重试
+# ============================================================
+
+
+class _FakeYDL:
+    """模拟 yt-dlp 的 with 上下文；extract_info 依次消费 side_effects（异常即抛、否则返回）。"""
+
+    _side_effects: list[Any] = []
+    _calls: dict[str, int] = {"n": 0}
+
+    def __init__(self, opts: dict[str, Any]) -> None:
+        self.opts = opts
+
+    def __enter__(self) -> _FakeYDL:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def extract_info(self, url: str, download: bool = False) -> Any:
+        i = _FakeYDL._calls["n"]
+        _FakeYDL._calls["n"] += 1
+        effect = _FakeYDL._side_effects[i]
+        if isinstance(effect, Exception):
+            raise effect
+        return effect
+
+    def prepare_filename(self, info: Any) -> str:
+        return "/tmp/fake.mp4"  # noqa: S108 - 测试桩
+
+
+@pytest.mark.parametrize(
+    "message,expected_transient",
+    [
+        ("Read timed out.", True),
+        ("Connection reset by peer", True),
+        ("HTTP Error 503: Service Unavailable", True),
+        ("Unable to download webpage: <urlopen error timed out>", True),
+        ("Private video. Sign in if you've been granted access", False),
+        ("Video unavailable", False),
+        ("This video has been removed by the uploader", False),
+        ("Incomplete YouTube ID", False),
+        ("Video is not available in your country", False),
+    ],
+)
+def test_is_transient_youtube_error(message: str, expected_transient: bool) -> None:
+    assert process_youtube._is_transient_youtube_error(Exception(message)) is expected_transient
+
+
+def test_is_transient_false_for_business_error() -> None:
+    # 已被归类的 BusinessError（含我们判定的永久失败）不再重试。
+    from app.core.exceptions import BusinessError
+    from app.i18n.codes import ErrorCode
+
+    assert process_youtube._is_transient_youtube_error(BusinessError(ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE)) is False
+
+
+def test_classify_youtube_error_maps_known_keywords() -> None:
+    from app.core.exceptions import BusinessError
+    from app.i18n.codes import ErrorCode
+
+    assert process_youtube._classify_youtube_error(Exception("Private video")).code == ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE
+    assert process_youtube._classify_youtube_error(Exception("Video unavailable")).code == ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE
+    assert process_youtube._classify_youtube_error(Exception("Incomplete YouTube ID")).code == ErrorCode.INVALID_URL_FORMAT
+    assert process_youtube._classify_youtube_error(Exception("Read timed out")).code == ErrorCode.YOUTUBE_DOWNLOAD_FAILED
+    # 已是 BusinessError 时原样返回（不二次包装）。
+    be = BusinessError(ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE)
+    assert process_youtube._classify_youtube_error(be) is be
+
+
+def test_run_with_youtube_retry_retries_transient_then_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(process_youtube.time, "sleep", lambda *_a: None)
+    calls = {"n": 0}
+
+    def _always_transient() -> None:
+        calls["n"] += 1
+        raise ValueError("read timed out")
+
+    with pytest.raises(ValueError):
+        process_youtube._run_with_youtube_retry(_always_transient, max_attempts=3, what="resolve")
+    assert calls["n"] == 3  # 首次 + 2 次重试
+
+
+def test_run_with_youtube_retry_no_retry_on_permanent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(process_youtube.time, "sleep", lambda *_a: None)
+    calls = {"n": 0}
+
+    def _permanent() -> None:
+        calls["n"] += 1
+        raise ValueError("Private video")
+
+    with pytest.raises(ValueError):
+        process_youtube._run_with_youtube_retry(_permanent, max_attempts=3, what="resolve")
+    assert calls["n"] == 1  # 永久错误立即抛出、不重试
+
+
+def test_run_with_youtube_retry_returns_after_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(process_youtube.time, "sleep", lambda *_a: None)
+    calls = {"n": 0}
+
+    def _flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise ValueError("connection reset by peer")
+        return "ok"
+
+    assert process_youtube._run_with_youtube_retry(_flaky, max_attempts=3, what="download") == "ok"
+    assert calls["n"] == 3
+
+
+def test_youtube_ydl_opts_injects_resilience(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    monkeypatch.setattr(process_youtube.settings, "YOUTUBE_DOWNLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(process_youtube.settings, "YOUTUBE_OUTPUT_TEMPLATE", "%(id)s.%(ext)s")
+    monkeypatch.setattr(process_youtube.settings, "YOUTUBE_DOWNLOAD_FORMAT", "bestaudio/best")
+    monkeypatch.setattr(process_youtube.settings, "YOUTUBE_SOCKET_TIMEOUT", 42)
+    monkeypatch.setattr(process_youtube.settings, "YOUTUBE_DOWNLOAD_RETRIES", 7)
+
+    opts = process_youtube._youtube_ydl_opts()
+    assert opts["socket_timeout"] == 42
+    assert opts["retries"] == 7
+    assert opts["fragment_retries"] == 7
+    assert opts["extractor_retries"] == 7
+    assert opts["noplaylist"] is True
+    assert opts["format"] == "bestaudio/best"
+
+
+def test_extract_youtube_info_retries_transient_then_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(process_youtube.time, "sleep", lambda *_a: None)
+    monkeypatch.setattr(process_youtube.settings, "YOUTUBE_RESOLVE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(process_youtube, "_youtube_ydl_opts", lambda: {})
+    _FakeYDL._calls["n"] = 0
+    _FakeYDL._side_effects = [
+        ValueError("read timed out"),
+        {"title": "Hello", "url": "https://cdn.example/direct.m4a"},
+    ]
+    monkeypatch.setattr(process_youtube, "YoutubeDL", _FakeYDL)
+
+    direct_url, title = process_youtube._extract_youtube_info("https://youtu.be/abc")
+    assert title == "Hello"
+    assert direct_url == "https://cdn.example/direct.m4a"
+    assert _FakeYDL._calls["n"] == 2  # 1 次瞬时失败 + 1 次成功

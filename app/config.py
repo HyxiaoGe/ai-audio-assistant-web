@@ -168,6 +168,17 @@ class Settings(BaseSettings):
     YOUTUBE_OUTPUT_TEMPLATE: str | None = Field(default=None)
     YOUTUBE_DOWNLOAD_FORMAT: str | None = Field(default=None)
 
+    # —— yt-dlp 抓取韧性 ——（worker 解析/下载 YouTube 用；国内直连 YouTube 抖动大，需重试+超时）
+    # 单连接 socket 读/连超时（秒）。yt-dlp 默认不设上限，慢连接会无限期挂住占满 worker。
+    YOUTUBE_SOCKET_TIMEOUT: int = Field(default=30)
+    # yt-dlp 自身的下载/分片/解析重试次数（库内重试，针对单次请求内的瞬时网络抖动）。
+    YOUTUBE_DOWNLOAD_RETRIES: int = Field(default=5)
+    # 应用层对「解析(extract_info)」整体的重试次数(含首次)。解析是创建后最易因 CN 直连超时
+    # 误失败的一步；仅对瞬时错误(超时/连接/5xx)重试，私有/删除/地域等永久错误立即失败不空耗。
+    YOUTUBE_RESOLVE_MAX_ATTEMPTS: int = Field(default=3)
+    # 应用层对「下载」整体的重试次数(含首次)。下载本身已有 yt-dlp 库内重试兜底，故应用层少重试。
+    YOUTUBE_DOWNLOAD_MAX_ATTEMPTS: int = Field(default=2)
+
     # Google OAuth for YouTube API
     GOOGLE_CLIENT_ID: str | None = Field(default=None)
     GOOGLE_CLIENT_SECRET: str | None = Field(default=None)

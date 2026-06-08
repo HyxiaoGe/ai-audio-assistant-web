@@ -429,38 +429,131 @@ def _extract_direct_url(info: dict) -> str | None:
     return None
 
 
-def _extract_youtube_info(url: str) -> tuple[str | None, str | None]:
-    output_dir = _get_download_dir()
-    outtmpl = str(output_dir / _get_output_template())
-    fmt = _get_download_format()
-    ydl_opts = {
-        "format": fmt,
-        "outtmpl": outtmpl,
+# —— yt-dlp 抓取韧性：超时 + 瞬时/永久错误分类 + 仅瞬时重试 ——
+# 命中即判为「永久失败」的关键词（私有/删除/不可用/地域/需登录/坏链接）：重试无意义，
+# 立即失败并给出友好错误码，避免空耗 worker、配额与时间。
+_PERMANENT_YOUTUBE_KEYWORDS: tuple[str, ...] = (
+    "private video",
+    "video unavailable",
+    "video is unavailable",
+    "this video isn't available",
+    "isn't available",
+    "has been removed",
+    "removed by the uploader",
+    "is not available",
+    "members-only",
+    "members only",
+    "sign in",
+    "login required",
+    "not available in your country",
+    "geo-restrict",
+    "incomplete youtube id",
+    "invalid youtube id",
+    "unsupported url",
+    "is not a valid url",
+    "no video formats found",
+)
+
+
+def _is_transient_youtube_error(exc: Exception) -> bool:
+    """瞬时(可重试) vs 永久(不可重试)。命中永久关键词或已判定的 BusinessError → 不重试；
+    其余（网络超时 / 连接重置 / HTTP 5xx / 分片错误）默认视为瞬时，值得重试。"""
+    if isinstance(exc, BusinessError):
+        return False
+    msg = str(exc).lower()
+    return not any(keyword in msg for keyword in _PERMANENT_YOUTUBE_KEYWORDS)
+
+
+def _classify_youtube_error(exc: Exception) -> BusinessError:
+    """把 yt-dlp 原始异常归一成带友好错误码/文案的 BusinessError，用于失败阶段的终态标记。
+    （承接旧 create 路径里 _validate_youtube_video_sync 的关键词分类逻辑。）"""
+    if isinstance(exc, BusinessError):
+        return exc
+    msg = str(exc).lower()
+    if any(k in msg for k in ("private", "members", "sign in", "login")):
+        return BusinessError(ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE)
+    if any(k in msg for k in ("unavailable", "has been removed", "removed by", "is not available", "isn't available")):
+        return BusinessError(ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE)
+    if any(k in msg for k in ("incomplete youtube id", "invalid youtube id", "unsupported url", "is not a valid url")):
+        return BusinessError(ErrorCode.INVALID_URL_FORMAT)
+    if "country" in msg or "geo-restrict" in msg:
+        return BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="该视频存在地域限制，当前地区无法访问")
+    if "timeout" in msg or "timed out" in msg:
+        return BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="网络超时，请稍后重试")
+    return BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason=str(exc)[:200])
+
+
+def _youtube_ydl_opts() -> dict[str, Any]:
+    """yt-dlp 基础选项 + 韧性参数。在原 format/outtmpl/noplaylist/quiet 之上注入：
+    - socket_timeout：单连接读/连超时，避免慢连接无限期挂住占满 worker；
+    - retries / fragment_retries / extractor_retries：yt-dlp 库内重试，吸收单次请求内的瞬时抖动。
+    解析与下载共用同一组选项（下载路径再单独挂 progress_hooks）。"""
+    return {
+        "format": _get_download_format(),
+        "outtmpl": str(_get_download_dir() / _get_output_template()),
         "noplaylist": True,
         "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": settings.YOUTUBE_SOCKET_TIMEOUT,
+        "retries": settings.YOUTUBE_DOWNLOAD_RETRIES,
+        "fragment_retries": settings.YOUTUBE_DOWNLOAD_RETRIES,
+        "extractor_retries": settings.YOUTUBE_DOWNLOAD_RETRIES,
     }
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        title = info.get("title") if isinstance(info, dict) else None
-        direct_url = info if isinstance(info, str) else _extract_direct_url(info)
-        return direct_url, title
+
+
+def _run_with_youtube_retry(fn: Callable[[], Any], *, max_attempts: int, what: str) -> Any:
+    """对 yt-dlp 调用做「仅瞬时错误」的应用层重试（指数退避，含首次共 max_attempts 次）。
+
+    永久错误（私有/删除/地域/坏链接）立即抛出不重试；瞬时错误（超时/连接/5xx）退避后重试。
+    这是 yt-dlp 库内 retries 之上的第二层：库内重试覆盖单次请求内的分片/连接抖动，
+    本层覆盖「整次解析/下载」级别的失败（如握手阶段超时直接抛错、库内重试够不着的情况）。
+    """
+    attempts = max(1, max_attempts)
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 - 需按错误内容判定瞬时/永久
+            last_exc = exc
+            if attempt >= attempts or not _is_transient_youtube_error(exc):
+                raise
+            delay = min(2.0 * (2 ** (attempt - 1)), 20.0)
+            logger.warning(
+                "youtube %s transient failure (attempt %d/%d), retrying in %.1fs: %s",
+                what,
+                attempt,
+                attempts,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+    if last_exc is not None:  # 理论不可达（循环内已 return 或 raise）
+        raise last_exc
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def _extract_youtube_info(url: str) -> tuple[str | None, str | None]:
+    def _do() -> tuple[str | None, str | None]:
+        with YoutubeDL(_youtube_ydl_opts()) as ydl:
+            info = ydl.extract_info(url, download=False)
+            title = info.get("title") if isinstance(info, dict) else None
+            direct_url = info if isinstance(info, str) else _extract_direct_url(info)
+            return direct_url, title
+
+    return _run_with_youtube_retry(_do, max_attempts=settings.YOUTUBE_RESOLVE_MAX_ATTEMPTS, what="resolve")
 
 
 def _download_youtube(url: str, progress_callback=None) -> str:
-    output_dir = _get_download_dir()
-    outtmpl = str(output_dir / _get_output_template())
-    fmt = _get_download_format()
-    ydl_opts = {
-        "format": fmt,
-        "outtmpl": outtmpl,
-        "noplaylist": True,
-        "quiet": True,
-    }
+    ydl_opts = _youtube_ydl_opts()
     if progress_callback is not None:
         ydl_opts["progress_hooks"] = [progress_callback]
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        return ydl.prepare_filename(info)
+
+    def _do() -> str:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            return ydl.prepare_filename(info)
+
+    return _run_with_youtube_retry(_do, max_attempts=settings.YOUTUBE_DOWNLOAD_MAX_ATTEMPTS, what="download")
 
 
 def _get_audio_duration(file_path: str) -> int | None:
@@ -781,10 +874,7 @@ def _process_youtube(
                 stage_manager.complete_stage(session, StageType.RESOLVE_YOUTUBE, {"title": title})
         except Exception as exc:
             logger.exception("youtube info extraction failed: %s", exc)
-            if isinstance(exc, BusinessError):
-                error = exc
-            else:
-                error = BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason=str(exc))
+            error = _classify_youtube_error(exc)
             with get_sync_db_session() as session:
                 task = _get_task(session, task_id)
                 if task is None:
@@ -839,10 +929,7 @@ def _process_youtube(
         except Exception as exc:
             logger.exception("youtube download failed: %s", exc)
             if not direct_url:
-                if isinstance(exc, BusinessError):
-                    error = exc
-                else:
-                    error = BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason=str(exc))
+                error = _classify_youtube_error(exc)
                 with get_sync_db_session() as session:
                     task = _get_task(session, task_id)
                     if task is None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import ipaddress
 import logging
@@ -14,7 +13,6 @@ if TYPE_CHECKING:
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from yt_dlp import YoutubeDL
 
 from app.api.deps import CurrentUser, is_admin_user
 from app.config import settings
@@ -81,136 +79,6 @@ class TaskService:
     def _generate_content_hash(content: str) -> str:
         """生成内容的 SHA256 哈希值."""
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _validate_youtube_video_sync(url: str) -> str | None:
-        """同步验证 YouTube 视频是否可访问（用于在异步上下文中通过 asyncio.to_thread 调用）.
-
-        Args:
-            url: YouTube 视频 URL
-
-        Returns:
-            视频标题（如果验证成功）
-
-        Raises:
-            BusinessError: 如果视频不可访问或验证失败
-        """
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "extract_flat": False,
-            "socket_timeout": 15,  # 15 秒超时
-        }
-
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    raise BusinessError(ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE)
-
-                # 返回视频标题（可选）
-                title = info.get("title") if isinstance(info, dict) else None
-                return title
-
-        except Exception as exc:
-            error_msg = str(exc).lower()
-            logger.warning(f"YouTube video validation failed: {exc}")
-
-            # 判断是否为视频不可访问
-            if any(
-                keyword in error_msg
-                for keyword in [
-                    "video unavailable",
-                    "private video",
-                    "video has been removed",
-                    "this video isn't available",
-                    "video is unavailable",
-                    "has been removed",
-                    "is not available",
-                    "members-only",
-                    "premiere",
-                ]
-            ):
-                raise BusinessError(ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE)
-
-            # 视频 ID 不完整或格式错误
-            if any(
-                keyword in error_msg
-                for keyword in [
-                    "incomplete youtube id",
-                    "truncated",
-                    "invalid youtube id",
-                    "malformed",
-                ]
-            ):
-                raise BusinessError(ErrorCode.INVALID_URL_FORMAT)
-
-            # 网络超时
-            if "timeout" in error_msg or "timed out" in error_msg:
-                raise BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="网络超时，请稍后重试")
-
-            # 地域限制
-            if any(
-                keyword in error_msg
-                for keyword in [
-                    "not available in your country",
-                    "geo-restricted",
-                    "region",
-                ]
-            ):
-                raise BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="该视频存在地域限制，当前地区无法访问")
-
-            # 需要登录
-            if any(
-                keyword in error_msg
-                for keyword in [
-                    "sign in",
-                    "login",
-                    "members only",
-                ]
-            ):
-                raise BusinessError(ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE)
-
-            # 其他下载错误 - 只返回简洁的错误信息
-            # 提取错误的关键部分，避免暴露技术细节
-            if "error:" in error_msg:
-                # 尝试提取 yt-dlp 错误信息中的关键部分
-                parts = str(exc).split("ERROR:")
-                if len(parts) > 1:
-                    # 取第一个 ERROR 后面的内容，限制长度
-                    clean_msg = parts[1].strip().split("\n")[0][:100]
-                    # 移除技术前缀如 [youtube:truncated_id]
-                    clean_msg = re.sub(r"\[[\w:]+\]\s+\w+:\s+", "", clean_msg)
-                    raise BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason=f"视频解析失败：{clean_msg}")
-
-            # 完全未知的错误，返回通用提示
-            raise BusinessError(
-                ErrorCode.YOUTUBE_DOWNLOAD_FAILED,
-                reason="视频链接无效或暂时无法访问，请检查链接是否正确",
-            )
-
-    @staticmethod
-    async def _validate_youtube_video(url: str) -> str | None:
-        """异步验证 YouTube 视频是否可访问.
-
-        Args:
-            url: YouTube 视频 URL
-
-        Returns:
-            视频标题（如果验证成功）
-
-        Raises:
-            BusinessError: 如果视频不可访问或验证失败
-        """
-        try:
-            # 在线程池中运行同步的 yt-dlp 调用，设置 20 秒总超时
-            title = await asyncio.wait_for(
-                asyncio.to_thread(TaskService._validate_youtube_video_sync, url), timeout=20.0
-            )
-            return title
-        except TimeoutError:
-            logger.warning(f"YouTube video validation timeout: {url}")
-            raise BusinessError(ErrorCode.YOUTUBE_DOWNLOAD_FAILED, reason="视频验证超时，请检查网络连接或稍后重试")
 
     @staticmethod
     def _validate_provider_selection(data: TaskCreateRequest) -> None:
@@ -374,20 +242,14 @@ class TaskService:
         if data.source_type == "youtube":
             if not data.source_url:
                 raise BusinessError(ErrorCode.MISSING_REQUIRED_PARAMETER, field="source_url")
-            # 严格校验拉取 URL（白名单主机 + 拒绝 IP 字面量），防 SSRF；
-            # 必须在 _validate_youtube_video（会真正发起 yt-dlp 抓取）之前执行
+            # 严格校验拉取 URL（白名单主机 + 拒绝 IP 字面量），防 SSRF。纯函数、无网络副作用。
             TaskService.validate_ingest_url(data.source_url)
 
-            # 预检查：验证视频是否可访问（避免创建注定失败的任务）
-            logger.info(f"Pre-validating YouTube video: {data.source_url}")
-            video_title = await TaskService._validate_youtube_video(data.source_url)
-
-            # 如果用户没有提供标题，使用视频标题
-            if video_title and not data.title:
-                data.title = video_title
-                logger.info(f"Auto-filled task title from video: {video_title}")
-
-            # 自动生成 content_hash（基于 YouTube 视频ID）
+            # 不在创建路径上做同步 yt-dlp 校验。旧实现 await extract_info、给 20s 总超时阻塞请求：
+            # 国内直连 YouTube 抖动一旦 >20s 即误杀，任务还没入库就抛 51300，前端只见「卡顿/失败」
+            # 且 DB 里查不到（不可见失败）。改为立即入库 queued 并派发，由 worker 的 RESOLVE_YOUTUBE
+            # 阶段真正解析、回填标题、即便失败也记成「可见可重试」的 failed 任务——与订阅自动转写
+            # youtube_auto_transcribe 同一模式。content_hash 仅靠正则取 video_id（不依赖网络），去重照常生效。
             video_id = TaskService._extract_youtube_video_id(data.source_url)
             if video_id:
                 data.content_hash = TaskService._generate_content_hash(f"youtube:{video_id}")
