@@ -104,6 +104,21 @@ def _resolve_llm_selection(task: Task, user_id: str | None) -> tuple[str, str]:
     return provider, model_id
 
 
+def _resolve_polish_selection(user_id: str | None) -> tuple[str, str]:
+    """转写润色固定走内部选定的高性价比模型（默认 deepseek-chat），刻意不跟随用户为「摘要」
+    选择的模型 —— polish 是机械式 ASR 纠错，重思考模型只会更慢且无质量增益。见
+    settings.POLISH_MODEL_ID / POLISH_PROVIDER。provider 仅在已注册时采用，否则归一到默认注册
+    的 llm 服务（与 _resolve_llm_selection 同样的归一逻辑），避免 SmartFactory.get_service 因
+    展示名找不到服务而崩在 worker。"""
+    model_id = settings.POLISH_MODEL_ID
+    provider = settings.POLISH_PROVIDER
+    if not provider or provider not in ServiceRegistry.list_services("llm"):
+        provider = _select_default_llm_provider()
+    if not model_id:
+        model_id = _default_model_id_for_provider(provider, user_id)
+    return provider, model_id
+
+
 def _resolve_asr_provider(task: Task) -> str | None:
     options = task.options or {}
     raw_provider = options.get("asr_provider")
@@ -1393,7 +1408,8 @@ def _process_youtube(
                         for t in transcript_rows
                     ]
 
-                    polish_provider, polish_model_id = _resolve_llm_selection(task, str(task.user_id))
+                    # polish 用内部钉死的模型（默认 deepseek-chat），不跟随用户为摘要选的模型。
+                    polish_provider, polish_model_id = _resolve_polish_selection(str(task.user_id))
                     polish_llm = asyncio.run(
                         SmartFactory.get_service(
                             "llm",

@@ -134,6 +134,15 @@ class Settings(BaseSettings):
     # 取先到者；密集语音下本上限通常是实际生效的约束。
     POLISH_MAX_SEGMENTS_PER_GROUP: int = Field(default=25)
 
+    # 转写润色（polish）固定使用的内部模型，刻意不跟随用户为「摘要」选择的模型。
+    # polish 是机械式 ASR 纠错（错别字/同音字/中英术语/纯语气词置空），不需要重思考模型：
+    # 实测重思考模型 doubao-seed-2-0-pro 每次烧 1400+ 思考 token、慢 4 倍却无质量增益（上个真实
+    # 任务 polish 占 569s/68%）。25 段实测 deepseek-chat 质量满分（上下文纠错 bird→BERT、正确保留
+    # 实质语气段、中英排版更干净）且仅 ~10s，故内部钉死 deepseek-chat。provider 留空或非注册时回落
+    # 到默认注册的 proxy 服务（见 worker.tasks.process_youtube._resolve_polish_selection）。
+    POLISH_MODEL_ID: str = Field(default="deepseek-chat")
+    POLISH_PROVIDER: str = Field(default="proxy")
+
     # 摘要配图的并发生成上限。摘要按 {{IMAGE:}} 锚点最多生成 max_images=6 张，原为无界一次性
     # 并发 6 张 → 首发即撞 image-service 429（429 不在客户端重试白名单，该张直接终态失败），
     # 累计失败还会触发 image_service 熔断（阈值 5）。有界并发把在途数压到此值以下消除 burst。
