@@ -46,9 +46,7 @@ def _build_test_app(
     """
     calls = {"storage": 0}
 
-    async def fake_get_service(
-        service_type: str, **kwargs: Any
-    ) -> _FakeStorage:  # noqa: ARG001
+    async def fake_get_service(service_type: str, **kwargs: Any) -> _FakeStorage:  # noqa: ARG001
         calls["storage"] += 1
         provider = kwargs.get("provider") or "minio"
         return _FakeStorage(base=f"https://{provider}.example/bucket")
@@ -76,9 +74,7 @@ def _build_test_app(
     # 媒体接口现在依赖 token 鉴权；测试里用 fake DB + 可选的用户覆盖。
     app.dependency_overrides[get_db] = _fake_db
     if user_id is not None:
-        app.dependency_overrides[get_media_user] = lambda: CurrentUser(
-            id=user_id, email=f"{user_id}@example.com"
-        )
+        app.dependency_overrides[get_media_user] = lambda: CurrentUser(id=user_id, email=f"{user_id}@example.com")
 
     # 把 BusinessError 统一转成 4xx，方便断言
     @app.exception_handler(BusinessError)
@@ -303,3 +299,37 @@ async def test_owned_prefixes_stream_for_owner(monkeypatch: pytest.MonkeyPatch, 
 
     assert resp.status_code == 200
     assert resp.content == b"ok"
+
+
+# ---------------------------------------------------------------------------
+# OSS 直下（统一存储后的主路径）：对象在 OSS → 307 重定向，不经服务端代理
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_oss_present_redirects_307_without_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """对象在 OSS 时 307 直下到预签名 URL，浏览器直连，不触发服务端代理。"""
+
+    class _OssStorage(_FakeStorage):
+        def file_exists(self, object_name: str) -> bool:  # noqa: ARG002
+            return True
+
+    proxied = {"hit": False}
+
+    def handler(_request: httpx.Request) -> httpx.Response:  # pragma: no cover - 直下不应经代理
+        proxied["hit"] = True
+        return httpx.Response(200, content=b"should-not-proxy")
+
+    app, _ = _build_test_app(monkeypatch, handler)
+
+    async def oss_get_service(_service_type: str, **_kwargs: Any) -> _OssStorage:
+        return _OssStorage(base="https://oss.example/bucket")
+
+    monkeypatch.setattr(media_module.SmartFactory, "get_service", oss_get_service)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/api/v1/media/{_OWNED_KEY}")
+
+    assert resp.status_code == 307
+    assert resp.headers["location"] == f"https://oss.example/bucket/{_OWNED_KEY}?sig=fake"
+    assert proxied["hit"] is False

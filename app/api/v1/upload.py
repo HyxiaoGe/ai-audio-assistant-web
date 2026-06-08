@@ -64,8 +64,8 @@ def _build_file_key(filename: str, user_id: str) -> str:
 
 
 async def _build_upload_url(file_key: str, expires_in: int, user_id: str) -> str:
-    # 使用 SmartFactory 获取 storage 服务（默认使用 COS）
-    storage = await SmartFactory.get_service("storage", provider="cos", user_id=user_id)
+    # 统一存储：浏览器直传 OSS（公网 host，绕开 Cloudflare 100MB 上限）
+    storage = await SmartFactory.get_service("storage", provider="oss", user_id=user_id)
     return storage.presign_put_object(file_key, expires_in)
 
 

@@ -453,7 +453,7 @@ async def upload_image(
     image_data: bytes,
     image_format: str = "png",
 ) -> str:
-    """上传图片到存储服务（同时上传到云存储和 MinIO）
+    """上传图片到统一存储 OSS（单写；前端经媒体端点 307/代理直下 OSS）
 
     Args:
         user_id: 用户 ID
@@ -476,21 +476,13 @@ async def upload_image(
     try:
         content_type = f"image/{image_format}"
 
-        # 上传到 MinIO（供前端访问）
-        try:
-            minio_storage = await SmartFactory.get_service("storage", provider="minio")
-            minio_storage.upload_file(object_name=object_key, file_path=tmp_path, content_type=content_type)
-            logger.info(f"Uploaded summary image to MinIO: {object_key}")
-        except Exception as e:
-            logger.warning(f"Failed to upload to MinIO: {e}")
-
-        # 上传到云存储（备份）
-        try:
-            cloud_storage = await SmartFactory.get_service("storage")
-            cloud_storage.upload_file(object_name=object_key, file_path=tmp_path, content_type=content_type)
-            logger.info(f"Uploaded summary image to cloud storage: {object_key}")
-        except Exception as e:
-            logger.warning(f"Failed to upload to cloud storage: {e}")
+        # 统一存储：单写 OSS（前端经媒体端点 307 直下 OSS）。
+        # 单写后不再有 dual-write 冗余兜底：上传失败必须向上抛出，由调用方
+        # generate_single_image 的外层 except 把该配图落库为 status="failed"（前端可重试），
+        # 否则会把指向不存在对象的 key 当成功写库 → 详情页永久破图且无自愈。
+        storage = await SmartFactory.get_service("storage", provider="oss")
+        storage.upload_file(object_name=object_key, file_path=tmp_path, content_type=content_type)
+        logger.info(f"Uploaded summary image to OSS: {object_key}")
 
         return object_key
 
@@ -510,7 +502,7 @@ def get_image_url(object_key: str) -> str:
     import asyncio
 
     async def _get_url():
-        storage = await SmartFactory.get_service("storage")
+        storage = await SmartFactory.get_service("storage", provider="oss")
         # 使用预签名 URL，有效期 7 天
         return storage.generate_presigned_url(object_key, expires_in=7 * 24 * 3600)
 
@@ -586,7 +578,7 @@ async def generate_single_image(
         # 8. 转 WebP 压缩（减小经公网慢隧道的传输量；转码失败回退原 png）
         image_data, image_format = _encode_webp(image_data)
 
-        # 9. 上传到存储（MinIO + 云存储）
+        # 9. 上传到统一存储 OSS（失败会抛出 → 落入下方 except → status="failed"，前端可重试）
         object_key = await upload_image(user_id, task_id, image_data, image_format=image_format)
 
         # 9. 返回相对路径（前端通过 same-origin nginx 代理访问）

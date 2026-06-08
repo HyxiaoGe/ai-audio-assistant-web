@@ -101,10 +101,7 @@ async def test_process_summary_images_plans_default_article_image_when_summary_h
 
 def _img_placeholders(n: int) -> list[dict]:
     """构造 n 个可区分身份的占位符（P0..P{n-1}），结果据 placeholder 回填/断言。"""
-    return [
-        {"placeholder": f"P{i}", "type": "infographic", "description": f"d{i}", "key_texts": []}
-        for i in range(n)
-    ]
+    return [{"placeholder": f"P{i}", "type": "infographic", "description": f"d{i}", "key_texts": []} for i in range(n)]
 
 
 @pytest.mark.asyncio
@@ -127,9 +124,7 @@ async def test_generate_images_parallel_respects_concurrency_limit(
     monkeypatch.setattr(image_generator, "generate_single_image", fake_generate_single_image)
 
     placeholders = _img_placeholders(5)  # 5 张
-    results = await image_generator.generate_images_parallel(
-        placeholders, "u", "t", max_images=5, max_concurrency=2
-    )
+    results = await image_generator.generate_images_parallel(placeholders, "u", "t", max_images=5, max_concurrency=2)
 
     assert len(results) == 5
     assert state["peak"] <= 2  # 5 张但峰值被信号量压在 2
@@ -151,9 +146,7 @@ async def test_generate_images_parallel_preserves_order_despite_completion_order
     monkeypatch.setattr(image_generator, "generate_single_image", fake_generate_single_image)
 
     placeholders = _img_placeholders(4)
-    results = await image_generator.generate_images_parallel(
-        placeholders, "u", "t", max_images=4, max_concurrency=3
-    )
+    results = await image_generator.generate_images_parallel(placeholders, "u", "t", max_images=4, max_concurrency=3)
 
     assert [r["placeholder"] for r in results] == ["P0", "P1", "P2", "P3"]
     assert [r["url"] for r in results] == ["/img0.png", "/img1.png", "/img2.png", "/img3.png"]
@@ -173,9 +166,7 @@ async def test_generate_images_parallel_single_failure_isolated(
     monkeypatch.setattr(image_generator, "generate_single_image", fake_generate_single_image)
 
     placeholders = _img_placeholders(3)
-    results = await image_generator.generate_images_parallel(
-        placeholders, "u", "t", max_images=3, max_concurrency=2
-    )
+    results = await image_generator.generate_images_parallel(placeholders, "u", "t", max_images=3, max_concurrency=2)
 
     by_ph = {r["placeholder"]: r for r in results}
     assert len(results) == 3
@@ -262,6 +253,64 @@ def test_encode_webp_falls_back_to_png_on_invalid_input() -> None:
 
     assert fmt == "png"
     assert data == b"not-an-image"
+
+
+@pytest.mark.asyncio
+async def test_upload_image_propagates_storage_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回归（修复点本体）：单写 OSS 后 upload_image 不得吞掉 storage 上传异常——必须抛出。
+    旧 dual-write 时吞掉可容忍（另一份兜底）；单写后吞掉会返回指向不存在对象的 key 当成功。"""
+
+    class _FailingStorage:
+        def upload_file(self, **_kwargs: object) -> None:
+            raise RuntimeError("oss put_object failed")
+
+    async def fake_get_service(*_args: object, **_kwargs: object) -> _FailingStorage:
+        return _FailingStorage()
+
+    monkeypatch.setattr(image_generator.SmartFactory, "get_service", fake_get_service)
+
+    with pytest.raises(RuntimeError, match="oss put_object failed"):
+        await image_generator.upload_image("u", "t", b"PNGBYTES", image_format="png")
+
+
+@pytest.mark.asyncio
+async def test_generate_single_image_marks_failed_when_oss_upload_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回归：单写 OSS 后 upload_image 失败必须冒泡 → generate_single_image 落 status='failed'/url=None
+    （前端可重试），不得吞掉异常把指向不存在对象的 key 当成功（否则详情页永久破图、无自愈）。"""
+
+    class _FakePromptManager:
+        def get_image_config(self, _content_style: str) -> dict:
+            return {"default_type": "infographic", "aspect_ratio": "16:9"}
+
+        def get_image_prompt(self, **_kwargs: object) -> str:
+            return "draw something"
+
+    class _FakeLLM:
+        async def generate_image(self, **_kwargs: object) -> bytes:
+            return b"PNGBYTES"
+
+    async def fake_get_service(*_args: object, **_kwargs: object) -> _FakeLLM:
+        return _FakeLLM()
+
+    async def fake_upload_image(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError("oss put_object failed")
+
+    monkeypatch.setattr(image_generator, "get_prompt_manager", lambda: _FakePromptManager())
+    monkeypatch.setattr(image_generator, "get_auto_images_config", lambda: {"image_model": {}})
+    monkeypatch.setattr(image_generator.SmartFactory, "get_service", fake_get_service)
+    monkeypatch.setattr(image_generator, "_encode_webp", lambda data: (data, "png"))
+    monkeypatch.setattr(image_generator, "upload_image", fake_upload_image)
+
+    item = {"placeholder": "P0", "type": "infographic", "description": "d", "key_texts": []}
+    result = await image_generator.generate_single_image(item, "u", "t")
+
+    assert result["status"] == "failed"
+    assert result["url"] is None
+    assert "oss put_object failed" in (result.get("error") or "")
 
 
 def test_dedupe_key_texts_preserves_first_occurrence_order() -> None:

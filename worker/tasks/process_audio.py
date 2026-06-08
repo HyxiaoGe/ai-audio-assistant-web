@@ -95,7 +95,7 @@ async def get_llm_service(provider: str, model_id: str, user_id: str | None = No
     return await SmartFactory.get_service("llm", provider=provider, model_id=model_id, user_id=user_id)
 
 
-async def get_storage_service(provider: str = "cos", user_id: str | None = None) -> StorageService:
+async def get_storage_service(provider: str = "oss", user_id: str | None = None) -> StorageService:
     return await SmartFactory.get_service("storage", provider=provider, user_id=user_id)
 
 
@@ -573,37 +573,32 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                 size_storage: StorageService = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
                 await _enforce_object_size_limit(size_storage, task.source_key)
 
-                # 提取音频时长并同步文件到 MinIO（用于前端播放）
+                # 提取音频时长（统一存储后源文件直接从 OSS 取，前端播放也直读 OSS，无需再同步副本）
                 if not task.duration_seconds:
                     logger.info(
-                        "Task %s: Extracting audio duration and syncing to MinIO",
+                        "Task %s: Extracting audio duration from OSS source",
                         task_id,
                         extra={"task_id": task_id, "source_key": task.source_key},
                     )
 
-                    # 下载文件到临时目录（用于提取时长和上传到 MinIO）
-                    # 使用 SmartFactory 获取 COS storage（异步调用）
-                    cos_storage: StorageService = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
-                    cos_storage_client = cast(Any, cos_storage)
+                    # 下载源文件到临时目录用于 ffprobe（统一存储：OSS）
+                    storage: StorageService = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
+                    oss_bucket = getattr(storage, "_bucket", None)
                     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                         tmp_path = tmp_file.name
 
                     try:
-                        if not hasattr(cos_storage_client, "_client"):
+                        if oss_bucket is None or not hasattr(oss_bucket, "get_object_to_file"):
                             logger.info(
-                                "Task %s: Skipping duration extraction; COS client not available",
+                                "Task %s: Skipping duration extraction; OSS client not available",
                                 task_id,
                                 extra={"task_id": task_id},
                             )
-                            raise RuntimeError("cos client unavailable")
+                            raise RuntimeError("oss client unavailable")
 
-                        # 从 COS 下载文件
-                        logger.info(f"Downloading from COS: {task.source_key}")
-                        cos_storage_client._client.download_file(
-                            Bucket=cos_storage_client._bucket,
-                            Key=task.source_key,
-                            DestFilePath=tmp_path,
-                        )
+                        # 从 OSS 下载源文件
+                        logger.info(f"Downloading source from OSS: {task.source_key}")
+                        oss_bucket.get_object_to_file(task.source_key, tmp_path)
 
                         # 提取音频时长
                         result = subprocess.run(  # nosec
@@ -631,17 +626,7 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                                 task.duration_seconds,
                                 extra={"task_id": task_id, "duration": task.duration_seconds},
                             )
-
-                        # 上传到 MinIO（用于前端播放）
-                        # 使用 SmartFactory 获取 MinIO storage
-                        minio_storage: StorageService = await _maybe_await(
-                            _call_factory(get_storage_service, "minio", user_id=str(task.user_id))
-                        )
-                        logger.info(f"Uploading to MinIO: {task.source_key}")
-                        minio_storage.upload_file(task.source_key, tmp_path, "audio/wav")
-                        logger.info("Task %s: File synced to MinIO successfully", task_id)
-
-                        await _commit(session)
+                            await _commit(session)
 
                     except RuntimeError:
                         pass
@@ -1066,9 +1051,7 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
             # 写回 task.options.summary_style + auto_detected 来源标记，供配图 / regenerate
             # 复用并供前端仅对 auto 识别结果展示「AI 识别为：X」
             if is_auto_style(requested_style) and content_style != requested_style:
-                task.options = persist_detected_style(
-                    task.options, content_style, auto_detected=True
-                )
+                task.options = persist_detected_style(task.options, content_style, auto_detected=True)
                 await _commit(session)
             logger.info(
                 "Task %s: resolved content_style=%s (requested=%r)",

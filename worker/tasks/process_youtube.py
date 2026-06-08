@@ -1028,31 +1028,18 @@ def _process_youtube(
                     _update_task(session, task, "uploading", 30, "uploading", request_id)
                     stage_manager.start_stage(session, StageType.UPLOAD_STORAGE)
 
-                # 双存储上传：同时上传到 COS 和 MinIO
-                # 使用 SmartFactory 获取 storage 服务
-                cos_storage = asyncio.run(
-                    SmartFactory.get_service("storage", provider="cos", user_id=str(task.user_id))
-                )
-                minio_storage = asyncio.run(
-                    SmartFactory.get_service("storage", provider="minio", user_id=str(task.user_id))
-                )
+                # 统一存储：单写 OSS（ASR 拉取 + 前端播放都从 OSS 直取）
+                storage = asyncio.run(SmartFactory.get_service("storage", provider="oss", user_id=str(task.user_id)))
 
                 logger.info(
-                    "Task %s: Uploading to COS (for ASR access)",
+                    "Task %s: Uploading to OSS",
                     task_id,
                     extra={"task_id": task_id, "source_key": source_key},
                 )
-                cos_storage.upload_file(source_key, filename)
+                storage.upload_file(source_key, filename)
 
                 logger.info(
-                    "Task %s: Uploading to MinIO (for frontend playback)",
-                    task_id,
-                    extra={"task_id": task_id, "source_key": source_key},
-                )
-                minio_storage.upload_file(source_key, filename)
-
-                logger.info(
-                    "Task %s: Dual storage upload completed",
+                    "Task %s: OSS upload completed",
                     task_id,
                     extra={"task_id": task_id},
                 )
@@ -1165,11 +1152,11 @@ def _process_youtube(
 
                 audio_candidates = []
                 if task.source_key:
-                    # 使用 SmartFactory 获取 COS storage
-                    cos_storage = asyncio.run(
-                        SmartFactory.get_service("storage", provider="cos", user_id=str(task.user_id))
+                    # 统一存储：从 OSS 取预签名 GET 供 ASR 访问
+                    storage = asyncio.run(
+                        SmartFactory.get_service("storage", provider="oss", user_id=str(task.user_id))
                     )
-                    audio_url = cos_storage.generate_presigned_url(task.source_key, expires_in=7200)
+                    audio_url = storage.generate_presigned_url(task.source_key, expires_in=7200)
                     audio_candidates.append(audio_url)
                 if direct_url:
                     audio_candidates.append(direct_url)
@@ -1550,9 +1537,7 @@ def _process_youtube(
                 # 写回 task.options.summary_style + auto_detected 来源标记，供配图/regenerate
                 # 复用并供前端仅对 auto 识别结果展示「AI 识别为：X」
                 if is_auto_style(requested_style) and content_style != requested_style:
-                    task.options = persist_detected_style(
-                        task.options, content_style, auto_detected=True
-                    )
+                    task.options = persist_detected_style(task.options, content_style, auto_detected=True)
                     session.commit()
                 logger.info(
                     "Task %s: resolved content_style=%s (requested=%r)",

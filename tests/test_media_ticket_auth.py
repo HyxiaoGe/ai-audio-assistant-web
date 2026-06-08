@@ -333,25 +333,35 @@ async def test_media_stream_cross_tenant_denied_with_valid_ticket() -> None:
 
 
 def _images_app(monkeypatch: pytest.MonkeyPatch, calls: dict[str, int]) -> FastAPI:
-    class _FakeMinioResponse:
-        def read(self) -> bytes:
-            return b"PNGDATA"
+    """图片端点现经 media.serve_media_object（allow_redirect=False，服务端代理统一存储 OSS）返回。
 
-        def close(self) -> None:
-            pass
+    mock SmartFactory storage（只签 URL）+ httpx 传输（回放 PNG 字节），不触网、不连 minio。
+    """
 
-        def release_conn(self) -> None:
-            pass
+    class _FakeStorage:
+        def generate_presigned_url(self, object_name: str, expires_in: int) -> str:  # noqa: ARG002
+            return f"https://oss.example/bucket/{object_name}?sig=fake"
 
-    class _FakeMinio:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
+    async def fake_get_service(_service_type: str, **_kwargs: Any) -> _FakeStorage:
+        calls["storage"] += 1
+        return _FakeStorage()
 
-        def get_object(self, _bucket: str, _key: str) -> _FakeMinioResponse:
-            calls["get_object"] += 1
-            return _FakeMinioResponse()
+    monkeypatch.setattr(media_module.SmartFactory, "get_service", fake_get_service)
+    monkeypatch.setattr(media_module, "_candidate_providers", lambda: ["oss"])
 
-    monkeypatch.setattr("minio.Minio", _FakeMinio)
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls["upstream"] += 1
+        return httpx.Response(200, content=b"PNGDATA", headers={"Content-Type": "image/png", "Content-Length": "7"})
+
+    transport = httpx.MockTransport(handler)
+    original_init = httpx.AsyncClient.__init__
+
+    def patched_init(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> None:
+        if "transport" not in kwargs:  # 不覆盖测试客户端的 ASGITransport
+            kwargs["transport"] = transport
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
 
     app = FastAPI()
     app.include_router(summaries_module.router, prefix="/api/v1")
@@ -362,20 +372,20 @@ def _images_app(monkeypatch: pytest.MonkeyPatch, calls: dict[str, int]) -> FastA
 
 @pytest.mark.asyncio
 async def test_image_owner_ok_with_media_ticket(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = {"get_object": 0}
+    calls = {"storage": 0, "upstream": 0}
     token = issue_scoped_token(sub="u1", scope="media", ttl=300)
     async with _client(_images_app(monkeypatch, calls)) as client:
         resp = await client.get("/api/v1/summaries/images/u1/task/img.png", params={"token": token})
     assert resp.status_code == 200
     assert resp.content == b"PNGDATA"
-    assert calls["get_object"] == 1
+    assert calls["upstream"] == 1
 
 
 @pytest.mark.asyncio
 async def test_image_cross_tenant_denied_with_media_ticket(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = {"get_object": 0}
+    calls = {"storage": 0, "upstream": 0}
     token = issue_scoped_token(sub="u1", scope="media", ttl=300)
     async with _client(_images_app(monkeypatch, calls)) as client:
         resp = await client.get("/api/v1/summaries/images/u2/task/img.png", params={"token": token})
     assert resp.status_code == 404
-    assert calls["get_object"] == 0
+    assert calls["storage"] == 0

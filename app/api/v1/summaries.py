@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_db, get_media_user, get_stream_user
-from app.api.v1.media import assert_owns_media_key
+from app.api.v1.media import assert_owns_media_key, serve_media_object
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.rate_limit import rate_limit, rate_limit_query
@@ -731,50 +731,22 @@ async def get_summary_image(
     path: str,
     user: CurrentUser = Depends(get_media_user),
 ) -> Response:
-    """获取摘要配图（直接代理返回图片内容）
+    """获取摘要配图（从统一存储 OSS 服务端代理返回图片内容）
 
     path 格式: {user_id}/{task_id}/{image_id}.png
 
     需携带 token（header 或 ?token=，供文章内联 <img> 使用），且仅限对象归属者访问。
+    图片小且不可变：用 allow_redirect=False 强制服务端代理（同源 URL 稳定可被浏览器长缓存，
+    优于每次重签的 307 直下），并打 private+immutable 缓存头。
     """
-    from minio import Minio
-
-    from app.config import settings
-
-    # 完整的 object_key
     object_key = f"summary_images/{path}"
     assert_owns_media_key(object_key, user.id)
 
-    # 直接从 MinIO 获取图片内容
-    client = Minio(
-        endpoint=settings.MINIO_ENDPOINT,
-        access_key=settings.MINIO_ACCESS_KEY,
-        secret_key=settings.MINIO_SECRET_KEY,
-        secure=bool(settings.MINIO_USE_SSL),
-    )
-
-    try:
-        response = client.get_object(settings.MINIO_BUCKET, object_key)
-        image_data = response.read()
-        response.close()
-        response.release_conn()
-
-        # 根据扩展名确定 content-type
-        content_type = "image/png"
-        if path.endswith(".jpg") or path.endswith(".jpeg"):
-            content_type = "image/jpeg"
-        elif path.endswith(".gif"):
-            content_type = "image/gif"
-        elif path.endswith(".webp"):
-            content_type = "image/webp"
-
-        # 图片按随机 image_id 命名、内容不可变 → 可长缓存。带 media token 鉴权属私有内容，
-        # 用 private（仅浏览器缓存、不让 CF/共享代理缓存）+ immutable，让同一会话内反复进
-        # 详情页命中浏览器缓存、免去每次经慢隧道重下（实测端点无 Cache-Control → CF DYNAMIC 不缓存）。
-        return Response(
-            content=image_data,
-            media_type=content_type,
-            headers={"Cache-Control": "private, max-age=2592000, immutable"},
-        )
-    except Exception as e:
-        raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR, reason=f"Image not found: {e}")
+    resp = await serve_media_object(object_key, allow_redirect=False)
+    # 图片按随机 image_id 命名、内容不可变 → 可长缓存。带 media token 鉴权属私有内容，
+    # 用 private（仅浏览器缓存、不让 CF/共享代理缓存）+ immutable，让同一会话内反复进详情页
+    # 命中浏览器缓存、免去重复经隧道回源。强制覆盖而非 setdefault：_proxy_media 会转发上游
+    # OSS 的 cache-control，setdefault 对已存在 key 是 no-op，会让私有/不可变语义被悄悄丢弃
+    # （甚至若上游回 public，私有图会带可共享缓存头穿过 CF）。本端点单点掌控缓存语义。
+    resp.headers["Cache-Control"] = "private, max-age=2592000, immutable"
+    return resp

@@ -14,13 +14,14 @@ Forwards Range requests transparently for audio/video seeking.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 
 from app.api.deps import CurrentUser, get_current_user, get_media_user
 from app.config import settings
@@ -38,13 +39,15 @@ router = APIRouter()
 
 # 预签名 URL 仅用于服务端立即代理，60 秒足够
 _PRESIGN_EXPIRES = 60
+# OSS 直下重定向：浏览器拿到预签名 GET 后直连 OSS，需覆盖较长播放 / seek 会话
+_REDIRECT_PRESIGN_EXPIRES = 3600
 # 单次代理请求最长 10 分钟（覆盖大体积音频/视频）
 _PROXY_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
 _CHUNK_SIZE = 64 * 1024
 
-# MinIO 是前端可播放资源的约定主存储（YouTube/图片都会双写一份到 MinIO），
-# 其它云存储仅作为兜底，覆盖历史数据或单写到云端的对象。
-_PRIMARY_PROVIDER = "minio"
+# 统一存储后 OSS 为前端可播放资源的主存储；cos/minio 仅作过渡期兜底，
+# 覆盖尚未迁移、仅存在于历史后端的对象。
+_PRIMARY_PROVIDER = "oss"
 
 _FORWARD_RESPONSE_HEADERS = {
     "content-type",
@@ -98,22 +101,35 @@ async def mint_media_ticket(
     return success(data={"token": token, "expires_in": settings.MEDIA_TOKEN_TTL})
 
 
-@router.get("/{file_path:path}")
-async def stream_media(
-    file_path: str,
-    request: Request,
-    user: CurrentUser = Depends(get_media_user),
-) -> StreamingResponse:
-    """Stream a media file from whatever storage backend hosts it.
+async def _oss_direct_redirect(file_path: str) -> RedirectResponse | None:
+    """对象已在 OSS 时，签发长效预签名 GET 并 307 重定向，让浏览器直连 OSS 取字节。
 
-    Access requires a valid token (Authorization header or `?token=` query, the
-    latter for browser `<audio>`/`<img>` elements that cannot send headers) and
-    is gated to the owner encoded in the object key — see assert_owns_media_key.
+    OSS 不可用或对象不在 OSS（未迁移 / 仅存在于历史后端）时返回 None，由调用方回落到代理。
+    媒体元素（<img>/<audio>）跟随 307 直接拉 OSS，且不触发 CORS，故无需 OSS GET CORS。
     """
-    assert_owns_media_key(file_path, user.id)
+    try:
+        oss = await SmartFactory.get_service("storage", provider="oss")
+    except Exception as exc:
+        logger.warning("acquire oss for redirect failed: %s", exc)
+        return None
+    try:
+        # file_exists 是同步网络 HEAD（oss2 阻塞调用），落在每个媒体请求的最热路径上，
+        # 必须卸到线程池，避免阻塞事件循环。generate_presigned_url 是纯本地 HMAC 签名，无需线程化。
+        if not await asyncio.to_thread(oss.file_exists, file_path):
+            return None
+        url = oss.generate_presigned_url(file_path, _REDIRECT_PRESIGN_EXPIRES)
+    except Exception as exc:
+        logger.warning("oss exists/presign failed for %s: %s", file_path, exc)
+        return None
+    return RedirectResponse(url, status_code=307)
 
+
+async def _proxy_media(file_path: str, range_header: str | None) -> StreamingResponse:
+    """过渡期兜底：服务端从存储后端读取并流式代理，转发 Range 以支持 seek。
+
+    覆盖尚未迁移到 OSS、仅存在于 cos/minio 的历史对象；全量切到 OSS 后此路径不再触发。
+    """
     forward_headers: dict[str, str] = {}
-    range_header = request.headers.get("range")
     if range_header:
         forward_headers["Range"] = range_header
 
@@ -168,9 +184,7 @@ async def stream_media(
             )
             raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR)
 
-        response_headers = {
-            k: v for k, v in upstream.headers.items() if k.lower() in _FORWARD_RESPONSE_HEADERS
-        }
+        response_headers = {k: v for k, v in upstream.headers.items() if k.lower() in _FORWARD_RESPONSE_HEADERS}
         media_type = response_headers.get("content-type") or "application/octet-stream"
 
         async def iter_body(
@@ -192,3 +206,35 @@ async def stream_media(
 
     logger.info("media %s not found on any backend (tried=%s)", file_path, tried)
     raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+
+
+async def serve_media_object(
+    file_path: str, range_header: str | None = None, *, allow_redirect: bool = True
+) -> Response:
+    """统一媒体取用：优先 OSS 直下（307 重定向，浏览器直连），否则回落服务端代理。
+
+    调用方须先用 assert_owns_media_key 完成归属校验。
+    allow_redirect=False 时强制走服务端代理（小图片场景：同源 URL 稳定、可被浏览器长缓存，
+    优于每次重签 URL 导致缓存失效的 307）。
+    """
+    if allow_redirect:
+        redirect = await _oss_direct_redirect(file_path)
+        if redirect is not None:
+            return redirect
+    return await _proxy_media(file_path, range_header)
+
+
+@router.get("/{file_path:path}")
+async def stream_media(
+    file_path: str,
+    request: Request,
+    user: CurrentUser = Depends(get_media_user),
+) -> Response:
+    """Serve a media file: redirect to OSS when present, else proxy from a backend.
+
+    Access requires a valid token (Authorization header or `?token=` query, the
+    latter for browser `<audio>`/`<img>` elements that cannot send headers) and
+    is gated to the owner encoded in the object key — see assert_owns_media_key.
+    """
+    assert_owns_media_key(file_path, user.id)
+    return await serve_media_object(file_path, request.headers.get("range"))
