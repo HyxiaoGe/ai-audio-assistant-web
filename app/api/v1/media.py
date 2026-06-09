@@ -1,15 +1,13 @@
 """Media file streaming endpoint.
 
-Proxies media files from whatever storage backend hosts them, so the frontend
-sees a single same-origin URL (`/api/v1/media/<key>`) regardless of provider.
-Avoids cross-origin CORS issues from cloud storage hosts like TOS/COS/OSS.
+Serves media to the frontend under a single same-origin URL
+(`/api/v1/media/<key>`), avoiding cross-origin CORS issues from the OSS host.
 
-Implementation strategy: try each candidate storage backend in priority order
-(MinIO first — it's the canonical frontend-playback target by convention;
-remaining healthy backends after that as fallback for legacy/dual-upload data).
-For each candidate, generate a short-lived presigned URL and proxy the request.
-On upstream 404 (object missing on this backend), try the next backend.
-Forwards Range requests transparently for audio/video seeking.
+Storage is unified on Alibaba OSS. Audio/video resolve via a 307 redirect to a
+presigned OSS GET so the browser streams bytes directly from OSS (see
+`_oss_direct_redirect`). Small immutable assets (summary images) are instead
+server-side proxied from OSS for a stable, long-cacheable same-origin URL (see
+`_proxy_media`). Range requests are forwarded transparently for seeking.
 """
 
 from __future__ import annotations
@@ -26,8 +24,6 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response, Streamin
 from app.api.deps import CurrentUser, get_current_user, get_media_user
 from app.config import settings
 from app.core.exceptions import BusinessError
-from app.core.health_checker import HealthChecker
-from app.core.registry import ServiceRegistry
 from app.core.response import success
 from app.core.security import SCOPE_MEDIA, issue_scoped_token
 from app.core.smart_factory import SmartFactory
@@ -44,10 +40,6 @@ _REDIRECT_PRESIGN_EXPIRES = 3600
 # 单次代理请求最长 10 分钟（覆盖大体积音频/视频）
 _PROXY_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
 _CHUNK_SIZE = 64 * 1024
-
-# 统一存储后 OSS 为前端可播放资源的主存储；cos/minio 仅作过渡期兜底，
-# 覆盖尚未迁移、仅存在于历史后端的对象。
-_PRIMARY_PROVIDER = "oss"
 
 _FORWARD_RESPONSE_HEADERS = {
     "content-type",
@@ -73,22 +65,6 @@ def assert_owns_media_key(object_key: str, user_id: str) -> None:
         raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
 
-def _candidate_providers() -> list[str]:
-    """Return storage providers to try, in priority order.
-
-    MinIO first (canonical), then any other healthy storage backend.
-    Falls back to the full registry list if no health data is available
-    (e.g. before HealthChecker has run).
-    """
-    healthy = HealthChecker.get_healthy_services("storage")
-    pool = healthy or ServiceRegistry.list_services("storage")
-    ordered: list[str] = []
-    if _PRIMARY_PROVIDER in pool:
-        ordered.append(_PRIMARY_PROVIDER)
-    ordered.extend(name for name in pool if name != _PRIMARY_PROVIDER)
-    return ordered
-
-
 @router.post("/ticket")
 async def mint_media_ticket(
     user: CurrentUser = Depends(get_current_user),
@@ -104,7 +80,7 @@ async def mint_media_ticket(
 async def _oss_direct_redirect(file_path: str) -> RedirectResponse | None:
     """对象已在 OSS 时，签发长效预签名 GET 并 307 重定向，让浏览器直连 OSS 取字节。
 
-    OSS 不可用或对象不在 OSS（未迁移 / 仅存在于历史后端）时返回 None，由调用方回落到代理。
+    OSS 不可用或对象不在 OSS（尚未迁移 / 暂态错误）时返回 None，由调用方回落到服务端代理。
     媒体元素（<img>/<audio>）跟随 307 直接拉 OSS，且不触发 CORS，故无需 OSS GET CORS。
     """
     try:
@@ -125,87 +101,77 @@ async def _oss_direct_redirect(file_path: str) -> RedirectResponse | None:
 
 
 async def _proxy_media(file_path: str, range_header: str | None) -> StreamingResponse:
-    """过渡期兜底：服务端从存储后端读取并流式代理，转发 Range 以支持 seek。
+    """服务端从 OSS 读取并流式代理，转发 Range 以支持 seek。
 
-    覆盖尚未迁移到 OSS、仅存在于 cos/minio 的历史对象；全量切到 OSS 后此路径不再触发。
+    用于小而不可变的图片（summary images）：同源 URL 稳定、可被浏览器长缓存，优于
+    每次重签的 307。音频/视频走 _oss_direct_redirect 的 307 直下，不经此路径。
     """
     forward_headers: dict[str, str] = {}
     if range_header:
         forward_headers["Range"] = range_header
 
-    providers = _candidate_providers()
-    if not providers:
+    try:
+        storage = await SmartFactory.get_service("storage", provider="oss")
+    except Exception as exc:
+        logger.warning("acquire oss for proxy failed: %s", exc)
+        raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR) from exc
+
+    try:
+        presigned = storage.generate_presigned_url(file_path, _PRESIGN_EXPIRES)
+    except Exception as exc:
+        logger.warning("presign failed for %s: %s", file_path, exc)
+        raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR) from exc
+
+    client = httpx.AsyncClient(timeout=_PROXY_TIMEOUT, follow_redirects=True)
+    try:
+        upstream = await client.send(
+            client.build_request("GET", presigned, headers=forward_headers),
+            stream=True,
+        )
+    except httpx.HTTPError as exc:
+        await client.aclose()
+        logger.warning("upstream GET failed for %s: %s", file_path, exc)
+        raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR) from exc
+
+    if upstream.status_code == 404:
+        await upstream.aclose()
+        await client.aclose()
+        logger.info("media %s not found on oss", file_path)
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+
+    if upstream.status_code >= 400:
+        body_preview = ""
+        with contextlib.suppress(Exception):
+            body_preview = (await upstream.aread()).decode("utf-8", errors="replace")[:200]
+        await upstream.aclose()
+        await client.aclose()
+        logger.warning(
+            "upstream oss returned %s for %s: %s",
+            upstream.status_code,
+            file_path,
+            body_preview,
+        )
         raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR)
 
-    tried: list[str] = []
-    for provider in providers:
-        try:
-            storage = await SmartFactory.get_service("storage", provider=provider)
-        except Exception as exc:
-            logger.warning("acquire storage %s failed: %s", provider, exc)
-            continue
+    response_headers = {k: v for k, v in upstream.headers.items() if k.lower() in _FORWARD_RESPONSE_HEADERS}
+    media_type = response_headers.get("content-type") or "application/octet-stream"
 
+    async def iter_body(
+        upstream: httpx.Response = upstream, client: httpx.AsyncClient = client
+    ) -> AsyncIterator[bytes]:
         try:
-            presigned = storage.generate_presigned_url(file_path, _PRESIGN_EXPIRES)
-        except Exception as exc:
-            logger.warning("presign failed on %s for %s: %s", provider, file_path, exc)
-            continue
-
-        client = httpx.AsyncClient(timeout=_PROXY_TIMEOUT, follow_redirects=True)
-        try:
-            upstream = await client.send(
-                client.build_request("GET", presigned, headers=forward_headers),
-                stream=True,
-            )
-        except httpx.HTTPError as exc:
-            await client.aclose()
-            logger.warning("upstream GET on %s failed for %s: %s", provider, file_path, exc)
-            continue
-
-        if upstream.status_code == 404:
+            async for chunk in upstream.aiter_bytes(_CHUNK_SIZE):
+                yield chunk
+        finally:
             await upstream.aclose()
             await client.aclose()
-            tried.append(provider)
-            logger.info("media %s not found on %s, trying next backend", file_path, provider)
-            continue
 
-        if upstream.status_code >= 400:
-            body_preview = ""
-            with contextlib.suppress(Exception):
-                body_preview = (await upstream.aread()).decode("utf-8", errors="replace")[:200]
-            await upstream.aclose()
-            await client.aclose()
-            logger.warning(
-                "upstream %s returned %s for %s: %s",
-                provider,
-                upstream.status_code,
-                file_path,
-                body_preview,
-            )
-            raise BusinessError(ErrorCode.FILE_STORAGE_SERVICE_ERROR)
-
-        response_headers = {k: v for k, v in upstream.headers.items() if k.lower() in _FORWARD_RESPONSE_HEADERS}
-        media_type = response_headers.get("content-type") or "application/octet-stream"
-
-        async def iter_body(
-            upstream: httpx.Response = upstream, client: httpx.AsyncClient = client
-        ) -> AsyncIterator[bytes]:
-            try:
-                async for chunk in upstream.aiter_bytes(_CHUNK_SIZE):
-                    yield chunk
-            finally:
-                await upstream.aclose()
-                await client.aclose()
-
-        return StreamingResponse(
-            iter_body(),
-            status_code=upstream.status_code,
-            headers=response_headers,
-            media_type=media_type,
-        )
-
-    logger.info("media %s not found on any backend (tried=%s)", file_path, tried)
-    raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+    return StreamingResponse(
+        iter_body(),
+        status_code=upstream.status_code,
+        headers=response_headers,
+        media_type=media_type,
+    )
 
 
 async def serve_media_object(
@@ -230,7 +196,7 @@ async def stream_media(
     request: Request,
     user: CurrentUser = Depends(get_media_user),
 ) -> Response:
-    """Serve a media file: redirect to OSS when present, else proxy from a backend.
+    """Serve a media file: redirect to OSS when present, else server-side proxy from OSS.
 
     Access requires a valid token (Authorization header or `?token=` query, the
     latter for browser `<audio>`/`<img>` elements that cannot send headers) and

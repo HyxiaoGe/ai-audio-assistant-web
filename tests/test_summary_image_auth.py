@@ -45,7 +45,6 @@ def _build_app(
 
     # 代理逻辑（serve_media_object → _proxy_media）的依赖都挂在 media_module 上
     monkeypatch.setattr(media_module.SmartFactory, "get_service", fake_get_service)
-    monkeypatch.setattr(media_module, "_candidate_providers", lambda: ["oss"])
 
     def handler(_request: httpx.Request) -> httpx.Response:
         calls["upstream"] += 1

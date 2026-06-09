@@ -347,7 +347,6 @@ def _images_app(monkeypatch: pytest.MonkeyPatch, calls: dict[str, int]) -> FastA
         return _FakeStorage()
 
     monkeypatch.setattr(media_module.SmartFactory, "get_service", fake_get_service)
-    monkeypatch.setattr(media_module, "_candidate_providers", lambda: ["oss"])
 
     def handler(_request: httpx.Request) -> httpx.Response:
         calls["upstream"] += 1
