@@ -140,16 +140,22 @@ async def test_polish_transcripts_max_tokens_reserves_reasoning_headroom():
 
 
 @pytest.mark.asyncio
-async def test_polish_transcripts_llm_failure_graceful():
+async def test_polish_transcripts_llm_failure_graceful(monkeypatch):
+    from app.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "POLISH_RETRY_BACKOFF_SECONDS", 0.0)
+
     mock_llm = AsyncMock()
     mock_llm.chat = AsyncMock(side_effect=RuntimeError("LLM down"))
 
     segs = [_seg(1, "hello", 0, 5)]
     results = await polish_transcripts(mock_llm, segs)
-    # Should fall back to original
+    # 重试耗尽后回退原文，不丢数据
     assert len(results) == 1
     assert results[0].polished_content == "hello"
     assert results[0].changed is False
+    # 持续失败应耗尽全部 attempts（首次 + 重试）后才回退
+    assert mock_llm.chat.call_count == _settings.POLISH_MAX_ATTEMPTS_PER_GROUP
 
 
 # ============================================================
@@ -188,8 +194,11 @@ async def test_polish_transcripts_preserves_order_despite_completion_order():
 
 
 @pytest.mark.asyncio
-async def test_polish_transcripts_one_group_failure_does_not_affect_others():
+async def test_polish_transcripts_one_group_failure_does_not_affect_others(monkeypatch):
     """单组失败（模拟 51102 空返回抛错）只回退该组原文，不连累其它组、不抛出。"""
+    from app.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "POLISH_RETRY_BACKOFF_SECONDS", 0.0)
 
     class _OneGroupFailsLLM:
         async def chat(self, messages: list[dict], **kwargs) -> str:
@@ -274,8 +283,12 @@ async def test_polish_transcripts_groups_by_configured_max_per_group(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_polish_transcripts_all_groups_fail_all_fallback():
+async def test_polish_transcripts_all_groups_fail_all_fallback(monkeypatch):
     """所有组都失败时，全量回退原文、段数不变、不向上抛异常（整段 polish 不挂）。"""
+    from app.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "POLISH_RETRY_BACKOFF_SECONDS", 0.0)
+
     mock_llm = AsyncMock()
     mock_llm.chat = AsyncMock(side_effect=RuntimeError("LLM down"))
 
@@ -286,3 +299,104 @@ async def test_polish_transcripts_all_groups_fail_all_fallback():
     assert [r.sequence for r in results] == [1, 2, 3]
     assert [r.polished_content for r in results] == ["a", "b", "c"]
     assert all(r.changed is False for r in results)
+
+
+# ============================================================
+# 单组重试（瞬时失败 / 退化响应 → 回退前先重试）
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_polish_group_retries_transient_exception_then_succeeds(monkeypatch):
+    """首次 chat 抛错（瞬时），重试一次成功 → 该组正常润色，不回退。"""
+    from app.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "POLISH_MAX_ATTEMPTS_PER_GROUP", 3)
+    monkeypatch.setattr(_settings, "POLISH_RETRY_BACKOFF_SECONDS", 0.0)
+
+    calls = {"n": 0}
+
+    class _FlakyLLM:
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("transient empty return (51102)")
+            seqs = _seqs_in_prompt(messages)
+            return "\n".join(f"[{s}] polished{s}" for s in seqs)
+
+    results = await polish_transcripts(_FlakyLLM(), [_seg(1, "raw", 0, 5)])
+
+    assert calls["n"] == 2  # 首次失败 + 重试成功
+    assert results[0].polished_content == "polished1"
+    assert results[0].changed is True
+
+
+@pytest.mark.asyncio
+async def test_polish_group_degenerate_empty_response_is_retried(monkeypatch):
+    """200 但退化（空白 / 无 [序号] 行）必须被当作可重试失败，而非静默"无改动"。
+
+    这正是 ce50b09b 开头两组的失败形态：HTTP 层不会重试这种"成功但空"的响应，
+    旧实现 parse 后整组 changed=False 静默回退原文丢润色。
+    """
+    from app.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "POLISH_MAX_ATTEMPTS_PER_GROUP", 2)
+    monkeypatch.setattr(_settings, "POLISH_RETRY_BACKOFF_SECONDS", 0.0)
+
+    calls = {"n": 0}
+
+    class _EmptyThenOkLLM:
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return "   \n  "  # 退化：纯空白，无任何 [序号] 行
+            seqs = _seqs_in_prompt(messages)
+            return "\n".join(f"[{s}] fixed{s}" for s in seqs)
+
+    results = await polish_transcripts(_EmptyThenOkLLM(), [_seg(1, "raw", 0, 5)])
+
+    assert calls["n"] == 2
+    assert results[0].polished_content == "fixed1"
+    assert results[0].changed is True
+
+
+@pytest.mark.asyncio
+async def test_polish_group_falls_back_after_exhausting_retries(monkeypatch):
+    """持续退化响应：用尽 attempts 后回退原文、不丢数据。"""
+    from app.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "POLISH_MAX_ATTEMPTS_PER_GROUP", 3)
+    monkeypatch.setattr(_settings, "POLISH_RETRY_BACKOFF_SECONDS", 0.0)
+
+    calls = {"n": 0}
+
+    class _AlwaysEmptyLLM:
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            calls["n"] += 1
+            return ""  # 始终退化
+
+    results = await polish_transcripts(_AlwaysEmptyLLM(), [_seg(1, "keepme", 0, 5)])
+
+    assert calls["n"] == 3  # 用尽全部尝试
+    assert results[0].polished_content == "keepme"  # 回退原文
+    assert results[0].changed is False
+
+
+@pytest.mark.asyncio
+async def test_polish_attempts_one_disables_retry(monkeypatch):
+    """POLISH_MAX_ATTEMPTS_PER_GROUP=1 关闭重试（恢复旧行为）：退化只调一次即回退。"""
+    from app.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "POLISH_MAX_ATTEMPTS_PER_GROUP", 1)
+
+    calls = {"n": 0}
+
+    class _EmptyLLM:
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            calls["n"] += 1
+            return ""
+
+    results = await polish_transcripts(_EmptyLLM(), [_seg(1, "x", 0, 5)])
+
+    assert calls["n"] == 1  # 不重试
+    assert results[0].changed is False

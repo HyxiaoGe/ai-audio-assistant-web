@@ -134,6 +134,19 @@ class Settings(BaseSettings):
     # 取先到者；密集语音下本上限通常是实际生效的约束。
     POLISH_MAX_SEGMENTS_PER_GROUP: int = Field(default=25)
 
+    # 单组润色在回退原文前的最大尝试次数（含首次）。可重试的失败有两类：① chat 抛异常
+    # （超时已在 HTTP 层重试，这里多兜熔断 OPEN 等）；② 响应退化——空 / 无任何 [序号] 行
+    # （代理推理吃满 max_tokens 回空最常见，这类「200 但无效」HTTP 层不会重试、过去被 parse
+    # 当成"整组无改动"静默回退原文丢润色）。默认 2 = 首次 + 1 次重试：足以救回观测到的瞬时
+    # 空返回，又刻意保守——重试经同一 Semaphore 限流，瞬时在途数仍 ≤ POLISH_CONCURRENCY，
+    # 不破坏「一波失败不足以打 OPEN 熔断、连累随后摘要」的不变式；代理真宕时重试快速失败再
+    # 回退，graceful。设为 1 即关闭重试（恢复旧行为）。
+    POLISH_MAX_ATTEMPTS_PER_GROUP: int = Field(default=2)
+
+    # 润色单组重试的线性退避基数（秒）：第 n 次重试前 sleep n×本值，给瞬时空返回/半开熔断
+    # 留恢复窗口。退避在 Semaphore 之外 sleep，期间槽位让给其它组。
+    POLISH_RETRY_BACKOFF_SECONDS: float = Field(default=1.0)
+
     # 转写润色（polish）固定使用的内部模型，刻意不跟随用户为「摘要」选择的模型。
     # polish 是机械式 ASR 纠错（错别字/同音字/中英术语/纯语气词置空），不需要重思考模型：
     # 实测重思考模型 doubao-seed-2-0-pro 每次烧 1400+ 思考 token、慢 4 倍却无质量增益（上个真实

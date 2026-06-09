@@ -118,6 +118,22 @@ def build_polish_user_prompt(segments: list[dict[str, Any]]) -> str:
 _RESULT_PATTERN = re.compile(r"\[(\d+)\]\s*(.*)")
 
 
+class PolishResponseError(Exception):
+    """润色响应退化（空 / 无任何 [序号] 行）。视为可重试失败，而非静默"整组无改动"。"""
+
+
+def _looks_like_polish_response(response: str | None) -> bool:
+    """响应是否含至少一行可解析的 [序号] 内容。
+
+    空串 / 纯空白 / 全是无格式文本（代理推理吃满预算回空、或 LLM 拒答）→ False。
+    据此把「200 但无效」从 parse 的静默"无改动"升级为可重试失败；只要有一行命中即认为
+    有效（部分返回交给 parse 逐段回退，不在此重试，避免对合法的少量返回过度重试）。
+    """
+    if not response or not response.strip():
+        return False
+    return any(_RESULT_PATTERN.match(line.strip()) for line in response.splitlines())
+
+
 def parse_polish_response(
     response: str,
     original_segments: list[dict[str, Any]],
@@ -193,10 +209,13 @@ async def _polish_one_group(
     total_groups: int,
     sem: asyncio.Semaphore,
 ) -> list[PolishResult]:
-    """润色单个分组。协程内吞掉所有异常并回退原文，绝不向上抛——
+    """润色单个分组，带有界重试；最终仍失败才回退原文（绝不向上抛、绝不丢数据）。
 
-    这样并发收集时任一组失败（51102 空返回 / 超时 / 熔断 OPEN）都不会取消同批其它组，
-    与原串行实现「单组失败不影响其他组」语义 1:1 一致。
+    并发收集时任一组失败（重试耗尽后）都不取消同批其它组，与「单组失败不影响其他组」
+    语义一致。可重试的失败有两类：① chat 抛异常（超时已在 HTTP 层重试，这里多兜熔断 OPEN
+    等）；② 响应退化——空 / 无任何 [序号] 行（代理推理吃满预算回空最常见，这类「200 但无效」
+    HTTP 层不会重试、过去被 parse 当成"整组无改动"静默回退原文丢润色）。重试经同一 Semaphore
+    限流（瞬时在途数仍 ≤ 并发上限，不破坏熔断不变式），各次之间线性退避。
     """
     user_prompt = build_polish_user_prompt(group)
 
@@ -213,36 +232,63 @@ async def _polish_one_group(
     content_budget = max(len(user_prompt) * 2, 2048)
     max_tokens = min(content_budget + 2000, 12000)
 
-    try:
-        # 信号量只护住 IO（chat 调用），分组/拼 prompt 是纯 CPU 留在锁外，
-        # 使有界并发尽快释放槽位给下一组。
-        async with sem:
-            response: str = await llm_service.chat(
-                messages,
-                temperature=0.3,
-                max_tokens=max_tokens,
+    attempts = max(1, settings.POLISH_MAX_ATTEMPTS_PER_GROUP)
+    backoff_base = max(0.0, settings.POLISH_RETRY_BACKOFF_SECONDS)
+    last_exc: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            # 信号量只护住 IO（chat 调用），分组/拼 prompt 是纯 CPU 留在锁外，
+            # 使有界并发尽快释放槽位给下一组。
+            async with sem:
+                response: str = await llm_service.chat(
+                    messages,
+                    temperature=0.3,
+                    max_tokens=max_tokens,
+                )
+
+            # 退化响应（空/无 [序号] 行）抬成可重试失败，而非被 parse 静默当成"无改动"。
+            if not _looks_like_polish_response(response):
+                raise PolishResponseError(f"degenerate response (len={len((response or '').strip())})")
+
+            group_results = parse_polish_response(response, group)
+            changed_in_group = sum(1 for r in group_results if r.changed)
+            logger.info(
+                "Polish group {}/{}: {}/{} segments changed (attempt {}/{})",
+                group_idx,
+                total_groups,
+                changed_in_group,
+                len(group),
+                attempt,
+                attempts,
             )
+            return group_results
 
-        group_results = parse_polish_response(response, group)
-        changed_in_group = sum(1 for r in group_results if r.changed)
-        logger.info(
-            "Polish group {}/{}: {}/{} segments changed",
-            group_idx,
-            total_groups,
-            changed_in_group,
-            len(group),
-        )
-        return group_results
+        except Exception as exc:
+            last_exc = exc
+            if attempt < attempts:
+                backoff = backoff_base * attempt
+                logger.warning(
+                    "Polish group {}/{} attempt {}/{} failed ({}: {}); retrying in {:.1f}s",
+                    group_idx,
+                    total_groups,
+                    attempt,
+                    attempts,
+                    type(exc).__name__,
+                    exc,
+                    backoff,
+                )
+                if backoff > 0:
+                    await asyncio.sleep(backoff)
 
-    except Exception as exc:
-        # 单组失败不影响其他组，该组全部回退到原文。
-        # 用 opt(exception=exc) 把完整堆栈记进日志，便于定位是 51102 空返回 / 截断 / 超时 / 熔断。
-        logger.opt(exception=exc).warning(
-            "Polish group {}/{} failed, falling back to original",
-            group_idx,
-            total_groups,
-        )
-        return _fallback_to_original(group)
+    # 重试耗尽：回退原文，opt(exception) 记完整堆栈便于定位 51102 空返回 / 截断 / 超时 / 熔断。
+    logger.opt(exception=last_exc).warning(
+        "Polish group {}/{} failed after {} attempts, falling back to original",
+        group_idx,
+        total_groups,
+        attempts,
+    )
+    return _fallback_to_original(group)
 
 
 async def polish_transcripts(
