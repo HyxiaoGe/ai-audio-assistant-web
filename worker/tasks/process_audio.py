@@ -673,8 +673,10 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
             #   FULL_RUN           干净首跑 -> 付费前写 claim、付费转写、补记计费
             existing_transcripts = (
                 (
-                    await session.execute(
-                        select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
+                    await _maybe_await(
+                        session.execute(
+                            select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
+                        )
                     )
                 )
                 .scalars()
@@ -682,8 +684,12 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
             )
             usage_rows = (
                 (
-                    await session.execute(
-                        select(ASRUsage).where(ASRUsage.task_id == str(task_id)).order_by(ASRUsage.created_at.desc())
+                    await _maybe_await(
+                        session.execute(
+                            select(ASRUsage)
+                            .where(ASRUsage.task_id == str(task_id))
+                            .order_by(ASRUsage.created_at.desc())
+                        )
                     )
                 )
                 .scalars()
@@ -954,7 +960,7 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
 
             try:
                 polish_query = select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
-                polish_result = await session.execute(polish_query)
+                polish_result = await _maybe_await(session.execute(polish_query))
                 transcript_rows = polish_result.scalars().all()
 
                 seg_dicts = [
@@ -1025,7 +1031,7 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
 
             # 从 DB 读取最新转写内容（可能已被润色修改）
             summarize_query = select(Transcript).where(Transcript.task_id == task_id).order_by(Transcript.sequence)
-            summarize_result = await session.execute(summarize_query)
+            summarize_result = await _maybe_await(session.execute(summarize_query))
             latest_transcripts = summarize_result.scalars().all()
             latest_segments = [
                 TranscriptSegment(
