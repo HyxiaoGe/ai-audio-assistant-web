@@ -7,6 +7,7 @@
   "40011": "File size exceeds limit (max {max_size})",
   "40012": "Invalid URL format",
   "40013": "Unsupported YouTube URL format",
+  "40014": "The file contains no audio track and cannot be transcribed; please upload audio/video that has sound",
   "40100": "Authentication token not provided",
   "40101": "Invalid authentication token",
   "40102": "Authentication token expired, please login again",

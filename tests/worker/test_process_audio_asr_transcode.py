@@ -113,3 +113,26 @@ def test_probe_duration_seconds(tmp_path) -> None:
 
 def test_probe_duration_seconds_bad_path_returns_none() -> None:
     assert process_audio._probe_duration_seconds("/nonexistent/none.wav") is None
+
+
+@_needs_ffmpeg
+def test_has_audio_stream_true_for_audio(tmp_path) -> None:
+    src = str(tmp_path / "tone.wav")
+    _make_tone(src, seconds=1)
+    assert process_audio._has_audio_stream(src) is True
+
+
+@_needs_ffmpeg
+def test_has_audio_stream_false_for_video_only(tmp_path) -> None:
+    # 纯视频无音轨（正是用户那个 YouTube 视频流导出的情形）
+    video_only = str(tmp_path / "video_only.mp4")
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=128x128:rate=10", "-an", video_only],
+        capture_output=True,
+        check=True,
+    )
+    assert process_audio._has_audio_stream(video_only) is False
+
+
+def test_has_audio_stream_bad_path_returns_false() -> None:
+    assert process_audio._has_audio_stream("/nonexistent/none.mp4") is False

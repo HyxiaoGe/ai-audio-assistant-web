@@ -160,6 +160,28 @@ def _probe_duration_seconds(path: str) -> int | None:
     return None
 
 
+def _has_audio_stream(path: str) -> bool:
+    """探测媒体是否含音频轨道（纯视频流/无声录屏会没有），用于在转码前给出明确的“无音轨”错误。"""
+    result = subprocess.run(  # nosec
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+            path,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
 def _transcode_to_mp3_16k(input_path: str) -> str:
     """抽音轨转 16k 单声道 mp3（48kbps≈21MB/小时），大幅压小后再送云 ASR。
 
@@ -682,6 +704,10 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                                 )
 
                         if not asr_audio_ready:
+                            if not _has_audio_stream(src_tmp):
+                                # 纯视频/无声文件：确定性失败，别回退（原件也没音轨，送 ASR 没意义），
+                                # 直接回明确文案而不是模糊的「转写服务暂时不可用」
+                                raise BusinessError(ErrorCode.NO_AUDIO_STREAM)
                             mp3_tmp = _transcode_to_mp3_16k(src_tmp)
                             storage.upload_file(asr_audio_key, mp3_tmp, content_type="audio/mpeg")
                             asr_audio_ready = True
@@ -691,6 +717,16 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                                 asr_audio_key,
                                 extra={"task_id": task_id, "asr_audio_key": asr_audio_key},
                             )
+                    except BusinessError as exc:
+                        if exc.code is ErrorCode.NO_AUDIO_STREAM:
+                            raise  # 无音轨是确定性失败，终止任务并回明确文案
+                        # 其它转码/取时长失败不致命：回退到原始上传对象当 ASR 候选（小文件仍可直接转写）
+                        logger.warning(
+                            "Task %s: ASR audio transcode/probe failed, falling back to source: %s",
+                            task_id,
+                            exc,
+                            extra={"task_id": task_id},
+                        )
                     except Exception as exc:
                         # 转码/取时长失败不致命：回退到原始上传对象当 ASR 候选（小文件仍可直接转写）
                         logger.warning(
