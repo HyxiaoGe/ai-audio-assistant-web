@@ -35,8 +35,8 @@ async def _fake_consume_quota(*args: Any, **kwargs: Any) -> _FakeQuotaConsumptio
     return _FakeQuotaConsumptionResult()
 
 
-async def _fake_ingest_task_chunks(*args: Any, **kwargs: Any) -> None:
-    """Fake RAG ingest that does nothing"""
+def _fake_ingest_task_chunks(*args: Any, **kwargs: Any) -> None:
+    """Fake RAG ingest that does nothing（同步——worker 用同步 session，调的是 ingest_task_chunks_sync）"""
     return None
 
 
@@ -225,7 +225,7 @@ async def test_process_audio_success_upload(monkeypatch: pytest.MonkeyPatch) -> 
         "generate_summaries_with_quality_awareness",
         _fake_generate_summaries,
     )
-    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
 
     # Mock AsrFreeQuotaService.consume_quota
     from app.services import asr_free_quota_service
@@ -274,7 +274,7 @@ async def test_process_audio_success_youtube(monkeypatch: pytest.MonkeyPatch) ->
         "generate_summaries_with_quality_awareness",
         _fake_generate_summaries,
     )
-    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
 
     # Mock AsrFreeQuotaService.consume_quota
     from app.services import asr_free_quota_service
@@ -350,7 +350,7 @@ async def test_process_audio_summary_failure_does_not_fail_task(monkeypatch: pyt
         "generate_summaries_with_quality_awareness",
         _fake_generate_summaries_error,
     )
-    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
 
     # Mock AsrFreeQuotaService.consume_quota
     from app.services import asr_free_quota_service
@@ -528,7 +528,7 @@ async def test_process_audio_retry_finalizes_cost_without_recharge(monkeypatch: 
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
     monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
-    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
 
     from app.services import asr_free_quota_service
 
@@ -581,7 +581,7 @@ async def test_process_audio_retry_skips_when_already_finalized(monkeypatch: pyt
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
     monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
-    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
 
     from app.services import asr_free_quota_service
 
@@ -641,7 +641,7 @@ async def test_process_audio_retry_finalizes_cost_when_provider_lookup_fails(
     monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
     monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
-    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
 
     from app.services import asr_free_quota_service
 
@@ -770,7 +770,7 @@ async def test_process_audio_progress_envelope_has_task_progress_kind(
     monkeypatch.setattr(process_audio, "publish_message", capture)
     monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
-    monkeypatch.setattr(process_audio, "ingest_task_chunks_async", _fake_ingest_task_chunks)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
 
     from app.services import asr_free_quota_service
 

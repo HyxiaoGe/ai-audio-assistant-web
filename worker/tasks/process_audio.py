@@ -35,7 +35,7 @@ from app.services.asr_quota_service import record_usage
 from app.services.llm.base import LLMService
 from app.services.notifications.service import NotificationService
 from app.services.notifications.types import NotificationType
-from app.services.rag import ingest_task_chunks_async
+from app.services.rag import ingest_task_chunks_sync
 from app.services.storage.base import StorageService
 from app.services.summary.style_resolution import (
     is_auto_style,
@@ -1046,7 +1046,9 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                 )
 
             try:
-                await ingest_task_chunks_async(session, task, transcripts, str(task.user_id))
+                # worker session 是同步的，必须用同步入库（同步嵌入 + 同步提交）；
+                # 异步变体会在同步 Result 上 await 而运行期报错。
+                ingest_task_chunks_sync(session, task, transcripts, str(task.user_id))
             except Exception as exc:
                 logger.warning(
                     "Task %s: RAG chunk ingest failed: %s",
