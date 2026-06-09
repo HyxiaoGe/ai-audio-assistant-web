@@ -11,7 +11,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from uuid import uuid4
 
@@ -123,6 +123,77 @@ async def _enforce_object_size_limit(storage: StorageService, object_key: str) -
             reason=f"uploaded object exceeds the {limit_mb}MB limit",
             max_size=f"{limit_mb}MB",
         )
+
+
+def _derive_asr_audio_key(source_key: str) -> str:
+    """送 ASR 用的紧凑音频对象键（16k 单声道 mp3）。
+
+    与原始上传对象分离：原件保留供前端播放/下载，ASR 只吃这个小文件——云 ASR 对
+    「URL 拉取的单文件」普遍有 100MB 上限（如阿里云 FlashRecognizer），而用户可上传至 500MB，
+    故先转码压小再送 ASR。键形如 upload/{user}/{date}/{id}.asr16k.mp3。
+    """
+    return f"{PurePosixPath(source_key).with_suffix('').as_posix()}.asr16k.mp3"
+
+
+def _probe_duration_seconds(path: str) -> int | None:
+    """ffprobe 取时长（秒，向下取整）；失败返回 None。"""
+    result = subprocess.run(  # nosec
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        try:
+            return int(float(result.stdout.strip()))
+        except ValueError:
+            return None
+    return None
+
+
+def _transcode_to_mp3_16k(input_path: str) -> str:
+    """抽音轨转 16k 单声道 mp3（48kbps≈21MB/小时），大幅压小后再送云 ASR。
+
+    ffmpeg 失败抛 BusinessError(FILE_PROCESSING_ERROR)；调用方对失败做回退（仍可送原始文件）。
+    """
+    output_path = f"{input_path}.asr16k.mp3"
+    result = subprocess.run(  # nosec
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            input_path,
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-acodec",
+            "libmp3lame",
+            "-b:a",
+            "48k",
+            output_path,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        # ffmpeg 在打开输出后才失败（磁盘满 / 被 OOM-kill 等）会留下半截 mp3，这里兜底清掉
+        with suppress(Exception):
+            Path(output_path).unlink(missing_ok=True)
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise BusinessError(ErrorCode.FILE_PROCESSING_ERROR, reason=detail)
+    return output_path
 
 
 async def publish_message(channel: str, message: str) -> None:
@@ -570,80 +641,74 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                     raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_key")
 
                 # 服务端强制校验对象真实大小（presigned PUT 无法签 size，客户端 size_bytes 可绕过）
-                size_storage: StorageService = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
-                await _enforce_object_size_limit(size_storage, task.source_key)
-
-                # 提取音频时长（统一存储后源文件直接从 OSS 取，前端播放也直读 OSS，无需再同步副本）
-                if not task.duration_seconds:
-                    logger.info(
-                        "Task %s: Extracting audio duration from OSS source",
-                        task_id,
-                        extra={"task_id": task_id, "source_key": task.source_key},
-                    )
-
-                    # 下载源文件到临时目录用于 ffprobe（统一存储：OSS）
-                    storage: StorageService = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
-                    oss_bucket = getattr(storage, "_bucket", None)
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                        tmp_path = tmp_file.name
-
-                    try:
-                        if oss_bucket is None or not hasattr(oss_bucket, "get_object_to_file"):
-                            logger.info(
-                                "Task %s: Skipping duration extraction; OSS client not available",
-                                task_id,
-                                extra={"task_id": task_id},
-                            )
-                            raise RuntimeError("oss client unavailable")
-
-                        # 从 OSS 下载源文件
-                        logger.info(f"Downloading source from OSS: {task.source_key}")
-                        oss_bucket.get_object_to_file(task.source_key, tmp_path)
-
-                        # 提取音频时长
-                        result = subprocess.run(  # nosec
-                            [
-                                "ffprobe",
-                                "-v",
-                                "error",
-                                "-show_entries",
-                                "format=duration",
-                                "-of",
-                                "default=noprint_wrappers=1:nokey=1",
-                                tmp_path,
-                            ],
-                            capture_output=True,
-                            text=True,
-                            check=False,
-                        )
-
-                        if result.returncode == 0 and result.stdout.strip():
-                            duration = float(result.stdout.strip())
-                            task.duration_seconds = int(duration)
-                            logger.info(
-                                "Task %s: Audio duration set to %d seconds",
-                                task_id,
-                                task.duration_seconds,
-                                extra={"task_id": task_id, "duration": task.duration_seconds},
-                            )
-                            await _commit(session)
-
-                    except RuntimeError:
-                        pass
-                    finally:
-                        # 删除临时文件
-                        try:
-                            Path(tmp_path).unlink(missing_ok=True)
-                        except Exception as e:
-                            logger.warning(f"Failed to delete temp file {tmp_path}: {e}")
+                storage: StorageService = await _maybe_await(get_storage_service(user_id=str(task.user_id)))
+                await _enforce_object_size_limit(storage, task.source_key)
 
                 expires_in = settings.UPLOAD_PRESIGN_EXPIRES
                 if not expires_in:
                     raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="upload_presign_expires")
-                # 使用 COS 存储生成带签名的 URL 供 ASR 访问
-                # 使用 SmartFactory 获取 COS storage
-                cos_storage = await _maybe_await(_call_factory(get_storage_service, user_id=str(task.user_id)))
-                audio_candidates.append(cos_storage.generate_presigned_url(task.source_key, expires_in))
+
+                # 送 ASR 前先把音轨转成 16k 单声道 mp3：云 ASR 对「URL 拉取的单文件」普遍有 100MB 上限
+                # （如阿里云 FlashRecognizer），而用户可上传至 500MB。转码产物单独落库（asr16k.mp3），
+                # 原始上传对象保留供前端播放/下载，互不影响。复用同一次下载顺带补 duration。
+                asr_audio_key = _derive_asr_audio_key(task.source_key)
+                oss_bucket = getattr(storage, "_bucket", None)
+                try:
+                    asr_audio_ready = storage.file_exists(asr_audio_key)  # 重试幂等：已转码过则跳过
+                except Exception:
+                    asr_audio_ready = False
+
+                need_local_work = not asr_audio_ready or not task.duration_seconds
+                if need_local_work and oss_bucket is not None and hasattr(oss_bucket, "get_object_to_file"):
+                    src_tmp: str | None = None
+                    mp3_tmp: str | None = None
+                    try:
+                        suffix = PurePosixPath(task.source_key).suffix or ".bin"
+                        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+                            src_tmp = tmp_file.name
+                        logger.info(f"Downloading source from OSS: {task.source_key}")
+                        oss_bucket.get_object_to_file(task.source_key, src_tmp)
+
+                        if not task.duration_seconds:
+                            duration = _probe_duration_seconds(src_tmp)
+                            if duration:
+                                task.duration_seconds = duration
+                                await _commit(session)
+                                logger.info(
+                                    "Task %s: Audio duration set to %d seconds",
+                                    task_id,
+                                    task.duration_seconds,
+                                    extra={"task_id": task_id, "duration": task.duration_seconds},
+                                )
+
+                        if not asr_audio_ready:
+                            mp3_tmp = _transcode_to_mp3_16k(src_tmp)
+                            storage.upload_file(asr_audio_key, mp3_tmp, content_type="audio/mpeg")
+                            asr_audio_ready = True
+                            logger.info(
+                                "Task %s: Transcoded ASR audio uploaded to %s",
+                                task_id,
+                                asr_audio_key,
+                                extra={"task_id": task_id, "asr_audio_key": asr_audio_key},
+                            )
+                    except Exception as exc:
+                        # 转码/取时长失败不致命：回退到原始上传对象当 ASR 候选（小文件仍可直接转写）
+                        logger.warning(
+                            "Task %s: ASR audio transcode/probe failed, falling back to source: %s",
+                            task_id,
+                            exc,
+                            extra={"task_id": task_id},
+                        )
+                    finally:
+                        for tmp in (src_tmp, mp3_tmp):
+                            if tmp:
+                                with suppress(Exception):
+                                    Path(tmp).unlink(missing_ok=True)
+
+                # 送 ASR 候选：优先紧凑 mp3（绕 100MB），失败再回退原始上传对象
+                if asr_audio_ready:
+                    audio_candidates.append(storage.generate_presigned_url(asr_audio_key, expires_in))
+                audio_candidates.append(storage.generate_presigned_url(task.source_key, expires_in))
             else:
                 if task.source_key:
                     # YouTube 下载的音频也使用 COS 存储（双存储方案）

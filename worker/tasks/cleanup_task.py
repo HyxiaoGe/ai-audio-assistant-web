@@ -17,6 +17,7 @@ from app.models.transcript import Transcript
 from app.services.storage.base import StorageService
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
+from worker.tasks.process_audio import _derive_asr_audio_key
 
 logger = logging.getLogger("worker.cleanup_task")
 
@@ -74,12 +75,19 @@ def cleanup_task_data(self, task_id: str, user_id: str) -> None:
             logger.info("Cleanup task skipped: task not deleted: %s", task_id)
             return
         source_key = task.source_key
+        source_type = task.source_type
 
     if source_key:
+        # 待清理对象：原始上传/下载对象 + （仅 upload）送 ASR 的转码副本 asr16k.mp3。
+        # 后者由 process_audio 在转写前生成、独立落库，不连带删除会在 OSS 永久残留（孤儿对象）。
+        keys_to_delete = [source_key]
+        if source_type == "upload":
+            keys_to_delete.append(_derive_asr_audio_key(source_key))
         # 统一以 OSS 为主；过渡期一并清理 cos/minio 历史副本（best-effort，缺凭证则跳过）
-        _delete_storage_object("oss", source_key, user_id)
-        _delete_storage_object("cos", source_key, user_id)
-        _delete_storage_object("minio", source_key, user_id)
+        for key in keys_to_delete:
+            _delete_storage_object("oss", key, user_id)
+            _delete_storage_object("cos", key, user_id)
+            _delete_storage_object("minio", key, user_id)
 
     with get_sync_db_session() as session:
         session.execute(delete(Transcript).where(Transcript.task_id == task_id))
