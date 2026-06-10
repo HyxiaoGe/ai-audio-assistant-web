@@ -21,7 +21,7 @@ from app.core.exceptions import BusinessError
 from app.core.registry import ServiceRegistry
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
-from app.schemas.public import PublicTaskDetailResponse, PublicTaskListItem
+from app.schemas.public import PublicTaskDetailResponse, PublicTaskListItem, PublicYouTubeInfo
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem, TaskVisibilityResponse
 from app.services.asr_quota_service import check_any_provider_available
 from app.services.media_url import build_media_download_url
@@ -409,9 +409,7 @@ class TaskService:
         return task
 
     @staticmethod
-    async def list_public_tasks(
-        db: AsyncSession, page: int, page_size: int
-    ) -> tuple[list[PublicTaskListItem], int]:
+    async def list_public_tasks(db: AsyncSession, page: int, page_size: int) -> tuple[list[PublicTaskListItem], int]:
         base_query = select(Task).where(
             Task.is_public.is_(True),
             Task.status == "completed",
@@ -438,11 +436,34 @@ class TaskService:
         return items, total
 
     @staticmethod
+    def _build_public_youtube_info(task: Task) -> PublicYouTubeInfo | None:
+        """从公开可访问信息构建 youtube_info,不依赖用户账号或 YouTube API。
+
+        video_id 从 source_url 提取;缩略图 URL 由 video_id 推算(YouTube 标准格式,
+        无需鉴权);channel/统计等无来源的字段置 None。
+        """
+        if task.source_type != "youtube" or not task.source_url:
+            return None
+        video_id = TaskService._extract_youtube_video_id(task.source_url)
+        if not video_id:
+            return None
+        thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+        return PublicYouTubeInfo(
+            video_id=video_id,
+            title=task.title,
+            thumbnail_url=thumbnail_url,
+            duration_seconds=task.duration_seconds,
+            channel_id=None,
+            channel_title=None,
+        )
+
+    @staticmethod
     async def get_public_task_detail(db: AsyncSession, task_id: str) -> PublicTaskDetailResponse:
         task = await TaskService.get_public_task(db, task_id)
         audio_url = None
         if task.source_key:
             audio_url = await build_media_download_url(task.source_key, task.user_id)
+        youtube_info = TaskService._build_public_youtube_info(task)
         return PublicTaskDetailResponse(
             id=str(task.id),
             title=task.title,
@@ -454,6 +475,7 @@ class TaskService:
             detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(task.options),
             published_at=task.published_at,
             created_at=task.created_at,
+            youtube_info=youtube_info,
         )
 
     @staticmethod
