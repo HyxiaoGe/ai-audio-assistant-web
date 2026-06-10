@@ -40,6 +40,7 @@ class TaskListItem(BaseModel):
     duration_seconds: int | None
     created_at: datetime
     updated_at: datetime
+    is_public: bool = False
 
 
 class TaskStatusCountsResponse(BaseModel):
@@ -104,6 +105,9 @@ class TaskDetailResponse(BaseModel):
     # 仅当本次摘要风格由后台自动识别得到时(options.summary_style_auto_detected=True)，
     # 暴露识别出的具体风格供前端展示「AI 识别为：X」；用户显式选风格时为 None。
     detected_summary_style: str | None = None
+    # 公开可见性(探索广场);默认值兜底使未触及该特性的旧构造点零改动
+    is_public: bool = False
+    published_at: datetime | None = None
 
     @staticmethod
     def detected_summary_style_from_options(options: dict | None) -> str | None:
@@ -113,6 +117,18 @@ class TaskDetailResponse(BaseModel):
             value = opts.get("summary_style")
             return value if isinstance(value, str) else None
         return None
+
+
+class TaskVisibilityUpdateRequest(BaseModel):
+    """更新任务公开可见性(仅管理员,且只能操作本人任务)。"""
+
+    is_public: bool
+
+
+class TaskVisibilityResponse(BaseModel):
+    id: str
+    is_public: bool
+    published_at: datetime | None
 
 
 class TaskBatchDeleteRequest(BaseModel):
