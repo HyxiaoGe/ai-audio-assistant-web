@@ -7,6 +7,7 @@ import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+from uuid import UUID
 
 if TYPE_CHECKING:
     from app.schemas.task import YouTubeVideoInfo
@@ -20,6 +21,7 @@ from app.core.exceptions import BusinessError
 from app.core.registry import ServiceRegistry
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
+from app.schemas.public import PublicTaskDetailResponse, PublicTaskListItem
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem
 from app.services.asr_quota_service import check_any_provider_available
 from app.services.media_url import build_media_download_url
@@ -379,6 +381,79 @@ class TaskService:
             for row in rows
         ]
         return items, total
+
+    @staticmethod
+    async def get_public_task(db: AsyncSession, task_id: str) -> Task:
+        """公开读路径的资格收口:存在+is_public+completed+未删,否则一律 TASK_NOT_FOUND。
+
+        统一 404 不泄露存在性;task_id 先做 UUID 形态校验,防匿名恶意输入打出 DB 层
+        UUID cast 异常变 500。
+        """
+        try:
+            UUID(task_id)
+        except (ValueError, TypeError):
+            raise BusinessError(ErrorCode.TASK_NOT_FOUND) from None
+        task = (
+            await db.execute(
+                select(Task).where(
+                    Task.id == task_id,
+                    Task.is_public.is_(True),
+                    Task.status == "completed",
+                    Task.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if task is None:
+            raise BusinessError(ErrorCode.TASK_NOT_FOUND)
+        return task
+
+    @staticmethod
+    async def list_public_tasks(
+        db: AsyncSession, page: int, page_size: int
+    ) -> tuple[list[PublicTaskListItem], int]:
+        base_query = select(Task).where(
+            Task.is_public.is_(True),
+            Task.status == "completed",
+            Task.deleted_at.is_(None),
+        )
+        count_query = select(func.count()).select_from(base_query.subquery())
+        total = int((await db.execute(count_query)).scalar_one())
+        items_query = (
+            base_query.order_by(Task.published_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        )
+        rows = (await db.execute(items_query)).scalars().all()
+        items = [
+            PublicTaskListItem(
+                id=str(row.id),
+                title=row.title,
+                source_type=row.source_type,
+                duration_seconds=row.duration_seconds,
+                detected_language=row.detected_language,
+                detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(row.options),
+                published_at=row.published_at,
+            )
+            for row in rows
+        ]
+        return items, total
+
+    @staticmethod
+    async def get_public_task_detail(db: AsyncSession, task_id: str) -> PublicTaskDetailResponse:
+        task = await TaskService.get_public_task(db, task_id)
+        audio_url = None
+        if task.source_key:
+            audio_url = await build_media_download_url(task.source_key, task.user_id)
+        return PublicTaskDetailResponse(
+            id=str(task.id),
+            title=task.title,
+            source_type=task.source_type,
+            source_url=task.source_url,
+            audio_url=audio_url,
+            duration_seconds=task.duration_seconds,
+            detected_language=task.detected_language,
+            detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(task.options),
+            published_at=task.published_at,
+            created_at=task.created_at,
+        )
 
     @staticmethod
     async def get_status_counts(db: AsyncSession, user: CurrentUser) -> dict[str, int]:
