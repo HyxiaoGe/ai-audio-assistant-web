@@ -24,9 +24,13 @@ from app.models.task import Task
 from app.schemas.public import PublicTaskDetailResponse, PublicTaskListItem, PublicYouTubeInfo
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem, TaskVisibilityResponse
 from app.services.asr_quota_service import check_any_provider_available
-from app.services.media_url import build_media_download_url
+from app.services.media_url import build_media_download_url, build_presigned_media_url
 
 logger = logging.getLogger(__name__)
+
+# 公开详情音频直链 TTL(秒):与 app/api/v1/media.py 的 _REDIRECT_PRESIGN_EXPIRES(307 直下)
+# 同值同语义——覆盖较长播放/seek 会话。
+_PUBLIC_AUDIO_PRESIGN_EXPIRES = 3600
 
 # 上传对象 key 由 presign 接口签发，形如
 # ``upload/{user_id}/{YYYY}/{MM}/{DD}/{uuid4hex}{ext}``（见 app/api/v1/upload.py）。
@@ -461,8 +465,14 @@ class TaskService:
     async def get_public_task_detail(db: AsyncSession, task_id: str) -> PublicTaskDetailResponse:
         task = await TaskService.get_public_task(db, task_id)
         audio_url = None
+        audio_direct_url = None
         if task.source_key:
             audio_url = await build_media_download_url(task.source_key, task.user_id)
+            # OSS 预签名直链:音频字节绕开同源代理/隧道。签发面从「点播放时(媒体端点 307)」
+            # 扩大到「每次详情浏览」,同 TTL(3600s)同类残余暴露——取消公开后已签出的 URL
+            # 残余有效 ≤TTL,刻意接受(公开资格本身每次请求过 is_public DB 复核)。
+            # 签发失败置 None 不抛错,前端优先直链、失败回落 audio_url 代理路径。
+            audio_direct_url = await build_presigned_media_url(task.source_key, _PUBLIC_AUDIO_PRESIGN_EXPIRES)
         youtube_info = TaskService._build_public_youtube_info(task)
         return PublicTaskDetailResponse(
             id=str(task.id),
@@ -470,6 +480,7 @@ class TaskService:
             source_type=task.source_type,
             source_url=task.source_url,
             audio_url=audio_url,
+            audio_direct_url=audio_direct_url,
             duration_seconds=task.duration_seconds,
             detected_language=task.detected_language,
             detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(task.options),

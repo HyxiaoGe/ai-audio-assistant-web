@@ -51,6 +51,11 @@ class PublicTaskDetailResponse(BaseModel):
     source_type: str
     source_url: str | None = None
     audio_url: str | None
+    # OSS 预签名直链(3600s,与媒体端点 307 路径同 TTL):浏览器直连 OSS 取音频字节,
+    # 绕开同源代理/隧道。前端优先用它、失败回落 audio_url 代理路径;无音频/签发失败为 None。
+    # 安全面:签发面从「点播放时(307)」扩大到「每次详情浏览」,同 TTL 同类残余暴露
+    # (取消公开后已签出 URL 残余有效 ≤TTL),刻意接受——公开资格每次请求过 is_public DB 复核。
+    audio_direct_url: str | None = None
     duration_seconds: int | None
     detected_language: str | None
     detected_summary_style: str | None = None
@@ -79,13 +84,18 @@ class PublicSummaryImageItem(BaseModel):
     status: str
     url: str | None
     alt: str
+    # url 为 OSS 预签名直链(600s)时的同源代理回落路径:直链过期(长开页面 >TTL)403 后,
+    # 前端切到该路径走媒体票链路自愈。url 本身已是代理形态(换发直链失败回落)时为 None。
+    proxy_url: str | None = None
 
 
 class PublicSummaryItem(BaseModel):
     summary_type: str
     version: int
     content: str
-    image_url: str | None = None  # 旧式单图(image_key)的代理 URL,与私有 SummaryItem 同语义
+    # 旧式单图(image_key):优先 OSS 预签名直链(600s,绕开隧道),签发失败回落
+    # /api/v1/media 代理 URL;字段语义与私有 SummaryItem 对应(私有侧恒为代理 URL,刻意不动)
+    image_url: str | None = None
     images: list[PublicSummaryImageItem] | None = None
     created_at: datetime
 
