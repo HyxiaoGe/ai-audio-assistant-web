@@ -14,6 +14,7 @@ from app.core.i18n import get_message
 from app.core.middleware import (
     LocaleMiddleware,
     LoggingMiddleware,
+    PathExcludingGZipMiddleware,
     RequestIDMiddleware,
     UserContextMiddleware,
 )
@@ -139,6 +140,15 @@ def create_app() -> FastAPI:
     app.add_middleware(LocaleMiddleware)
     app.add_middleware(UserContextMiddleware)
     app.add_middleware(LoggingMiddleware)
+    # GZip 放最外层(add_middleware 后加=外层):origin→CF 边缘段实测裸奔
+    # (260KB 转写 raw 无 content-encoding),压缩典型省 ~100ms/次、最大转写 ~300ms。
+    # 媒体字节流路径整体排除(Range/206 与 gzip 语义错位,音频/WebP 再压无益);
+    # SSE 由锁定的 starlette 0.50.0 默认按 text/event-stream 排除(详见中间件 docstring)。
+    app.add_middleware(
+        PathExcludingGZipMiddleware,
+        exclude_path_prefixes=("/api/v1/media", "/api/v1/summaries/images"),
+        minimum_size=1024,
+    )
 
     @app.on_event("startup")
     async def startup_event() -> None:

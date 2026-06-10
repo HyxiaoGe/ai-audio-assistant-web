@@ -255,6 +255,54 @@ def test_encode_webp_falls_back_to_png_on_invalid_input() -> None:
     assert data == b"not-an-image"
 
 
+def test_encode_webp_downscales_long_edge_to_1920() -> None:
+    """模型现产 2560×1440 超出展示所需（2x retina ~1800px），长边等比降到 1920 再编码。"""
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (2560, 1440), (120, 200, 64)).save(buf, format="PNG")
+
+    data, fmt = image_generator._encode_webp(buf.getvalue())
+
+    assert fmt == "webp"
+    with Image.open(BytesIO(data)) as out:
+        assert out.size == (1920, 1080)  # 等比缩放，长边=1920
+
+
+def test_encode_webp_downscales_portrait_long_edge() -> None:
+    """竖图同样按长边判定（高 2560 → 高 1920），不只看宽。"""
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (1440, 2560), (10, 20, 30)).save(buf, format="PNG")
+
+    data, fmt = image_generator._encode_webp(buf.getvalue())
+
+    assert fmt == "webp"
+    with Image.open(BytesIO(data)) as out:
+        assert out.size == (1080, 1920)
+
+
+def test_encode_webp_keeps_small_image_resolution() -> None:
+    """长边 <1920 的小图绝不放大，分辨率原样保留。"""
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (1280, 720), (200, 100, 50)).save(buf, format="PNG")
+
+    data, fmt = image_generator._encode_webp(buf.getvalue())
+
+    assert fmt == "webp"
+    with Image.open(BytesIO(data)) as out:
+        assert out.size == (1280, 720)
+
+
 @pytest.mark.asyncio
 async def test_upload_image_propagates_storage_failure(
     monkeypatch: pytest.MonkeyPatch,

@@ -31,12 +31,52 @@ from app.schemas.public import (
     PublicTranscriptItem,
     PublicTranscriptListResponse,
 )
-from app.services.media_url import build_media_download_url
+from app.services.media_url import build_media_download_url, build_presigned_media_url
 from app.services.task_service import TaskService
 
 router = APIRouter(prefix="/public", tags=["public"])
 
 _rate_limit = rate_limit_by_ip(limit=settings.RATE_LIMIT_PUBLIC_PER_MIN, scope="public_read")
+
+# 公开 GET 成功路径的边缘缓存头(CF Cache Rule 在 dashboard 侧配,这里做 origin 准备)。
+# 取舍(用户已拍板):取消公开后,文本(标题/转写/摘要)在命中过的边缘 PoP 残留
+# ≤~2min(max-age+stale-while-revalidate);媒体票/音频/图签发每次过 is_public DB
+# 复核即时失效,残余仅纯文本。
+_PUBLIC_CACHE_CONTROL = "public, max-age=60, s-maxage=60, stale-while-revalidate=60"
+
+
+def _cacheable(resp: JSONResponse) -> JSONResponse:
+    """只给「业务成功(code==0)」响应贴边缘缓存头。
+
+    本项目错误信封是 HTTP 200(TASK_NOT_FOUND/限流/DB 错全走异常处理器返回
+    200+错误 code),绝不能让错误信封被边缘缓存——否则刚公开的任务会在 PoP 上缓存
+    「不存在」长达 max-age。隔离方式:头只贴在路由函数体内 success() 构造出的响应
+    对象上;任何异常在 return 前 raise,走 app/main.py 的异常处理器重新构造响应
+    (error() 不带本头)。注意 FastAPI 对「路由直接返回 Response」不会合并注入的
+    response 参数头(fastapi/routing.py raw_response 分支),所以必须贴在这里。
+    """
+    resp.headers["Cache-Control"] = _PUBLIC_CACHE_CONTROL
+    return resp
+
+# 公开配图直链 TTL(秒):媒体字节直连 OSS,绕开同源代理经 cloudflared 隧道的 ~1.5s/请求基线。
+# 安全面:公开端点每次请求都过 is_public DB 复核(取消公开后新请求拿不到新签名),
+# 已签出 URL 的残余暴露 ≤TTL——与既有音频 307 预签名(app/api/v1/media.py)同类且被接受。
+_PUBLIC_IMAGE_PRESIGN_EXPIRES = 600
+
+# 存量配图 URL 的同源代理前缀(worker/tasks/image_generator.py 写库格式:
+# /api/v1/summaries/images/{user_id}/{task_id}/{image_id}.{fmt}),
+# OSS 对象 key = "summary_images/" + 前缀后的路径(见 app/api/v1/summaries.py 图片端点)。
+_SUMMARY_IMAGE_PROXY_PREFIX = "/api/v1/summaries/images/"
+
+
+async def _public_summary_image_url(raw_url: object, status: str) -> str | None:
+    """ready 配图换发短 TTL OSS 直链;非 ready/形态不识别/签发失败一律回落存量代理 URL。"""
+    if not isinstance(raw_url, str) or not raw_url:
+        return None
+    if status != "ready" or not raw_url.startswith(_SUMMARY_IMAGE_PROXY_PREFIX):
+        return raw_url
+    object_key = f"summary_images/{raw_url[len(_SUMMARY_IMAGE_PROXY_PREFIX) :]}"
+    return await build_presigned_media_url(object_key, _PUBLIC_IMAGE_PRESIGN_EXPIRES) or raw_url
 
 
 @router.get("/tasks")
@@ -49,7 +89,7 @@ async def list_public_tasks(
     """公开任务列表(仅 is_public+completed+未删),按发布时间倒序分页。"""
     items, total = await TaskService.list_public_tasks(db, page, page_size)
     response = PageResponse[PublicTaskListItem](items=items, total=total, page=page, page_size=page_size)
-    return success(data=jsonable_encoder(response))
+    return _cacheable(success(data=jsonable_encoder(response)))
 
 
 @router.get("/tasks/{task_id}")
@@ -60,7 +100,7 @@ async def get_public_task_detail(
 ) -> JSONResponse:
     """公开任务详情(白名单字段;非公开/不存在/未完成一律 TASK_NOT_FOUND)。"""
     detail = await TaskService.get_public_task_detail(db, task_id)
-    return success(data=jsonable_encoder(detail))
+    return _cacheable(success(data=jsonable_encoder(detail)))
 
 
 @router.get("/tasks/{task_id}/transcripts")
@@ -72,11 +112,7 @@ async def get_public_transcripts(
     """公开任务转写(裁剪字段,纯只读——不走私有端点的懒拆分写路径)。"""
     task = await TaskService.get_public_task(db, task_id)
     rows = (
-        (
-            await db.execute(
-                select(Transcript).where(Transcript.task_id == task.id).order_by(Transcript.sequence)
-            )
-        )
+        (await db.execute(select(Transcript).where(Transcript.task_id == task.id).order_by(Transcript.sequence)))
         .scalars()
         .all()
     )
@@ -91,9 +127,15 @@ async def get_public_transcripts(
         )
         for row in rows
     ]
-    return success(
-        data=jsonable_encoder(
-            PublicTranscriptListResponse(task_id=str(task.id), total=len(items), items=items)
+    # 转写是公开端点里唯一的大响应(实测最大 ~260KB),序列化热点在 jsonable_encoder
+    # (逐字段反射递归,实测 10-44ms);model_dump(mode="json") 走 pydantic-core 原生
+    # 序列化,产物等价(schema 无 alias/自定义 encoder,字段全是 str/int/float)。
+    # 其余小响应端点不值得动,保持 jsonable_encoder。
+    return _cacheable(
+        success(
+            data=PublicTranscriptListResponse(task_id=str(task.id), total=len(items), items=items).model_dump(
+                mode="json"
+            )
         )
     )
 
@@ -121,18 +163,27 @@ async def get_public_summaries(
     for summary in rows:
         image_url = None
         if summary.image_key:
-            image_url = await build_media_download_url(summary.image_key, task.user_id)
+            # 旧式单图:优先 OSS 直链,签发失败回落同源代理 URL(别让整个摘要 500)
+            image_url = await build_presigned_media_url(summary.image_key, _PUBLIC_IMAGE_PRESIGN_EXPIRES)
+            if image_url is None:
+                image_url = await build_media_download_url(summary.image_key, task.user_id)
         images: list[PublicSummaryImageItem] | None = None
         if summary.images:
-            images = [
-                PublicSummaryImageItem(
-                    placeholder=str(item.get("placeholder", "")),
-                    status=str(item.get("status", "pending")),
-                    url=item.get("url") if isinstance(item.get("url"), str) else None,
-                    alt=str(item.get("alt", "")),
+            images = []
+            for item in summary.images:
+                status = str(item.get("status", "pending"))
+                raw_url = item.get("url") if isinstance(item.get("url"), str) else None
+                final_url = await _public_summary_image_url(raw_url, status)
+                images.append(
+                    PublicSummaryImageItem(
+                        placeholder=str(item.get("placeholder", "")),
+                        status=status,
+                        url=final_url,
+                        # 换发直链成功(url 已非原代理路径)才给回落字段;url 仍是代理时为 None
+                        proxy_url=raw_url if (final_url and raw_url and final_url != raw_url) else None,
+                        alt=str(item.get("alt", "")),
+                    )
                 )
-                for item in summary.images
-            ]
         items.append(
             PublicSummaryItem(
                 summary_type=summary.summary_type,
@@ -143,8 +194,8 @@ async def get_public_summaries(
                 created_at=summary.created_at,
             )
         )
-    return success(
-        data=jsonable_encoder(PublicSummaryListResponse(task_id=str(task.id), total=len(items), items=items))
+    return _cacheable(
+        success(data=jsonable_encoder(PublicSummaryListResponse(task_id=str(task.id), total=len(items), items=items)))
     )
 
 

@@ -18,6 +18,7 @@ from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.response import error
 from app.core.security import verify_scoped_token
+from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
@@ -163,6 +164,43 @@ def _make_app(session: _FakeSession) -> FastAPI:
 
 def _client(app: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+# ===== OSS 直链测试夹具 =====
+
+_FAKE_OSS_HOST = "https://test-bucket.oss-cn-shenzhen.aliyuncs.com"
+
+
+class _FakeOssStorage:
+    """假 OSS storage,接口签名与 media.py 307 路径同款:generate_presigned_url(object_name, expires_in)。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def generate_presigned_url(self, object_name: str, expires_in: int) -> str:
+        self.calls.append((object_name, expires_in))
+        return f"{_FAKE_OSS_HOST}/{object_name}?OSSAccessKeyId=test&Expires=9999999999&Signature=fakesig"
+
+
+@pytest.fixture(autouse=True)
+def _storage_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认 OSS 不可用:单测绝不真签名(本机 .env 可能带真实凭据),回落代理 URL 成为确定行为。"""
+
+    async def _raise(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("storage unavailable in unit tests")
+
+    monkeypatch.setattr(SmartFactory, "get_service", _raise)
+
+
+def _install_fake_oss(monkeypatch: pytest.MonkeyPatch) -> _FakeOssStorage:
+    """覆盖 autouse 的不可用默认,让 OSS 预签名走假实现并记录调用。"""
+    fake = _FakeOssStorage()
+
+    async def _get_service(*_args: Any, **_kwargs: Any) -> Any:
+        return fake
+
+    monkeypatch.setattr(SmartFactory, "get_service", _get_service)
+    return fake
 
 
 # ===== 列表 =====
@@ -426,3 +464,186 @@ async def test_youtube_task_without_valid_video_id_has_null_youtube_info() -> No
         body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
     assert body["code"] == 0
     assert body["data"].get("youtube_info") is None
+
+
+# ===== 公开媒体 OSS 直链(绕开隧道) =====
+
+_LEGACY_IMAGE_KEY = f"summary_images/{_OWNER_ID}/{_TASK_ID}/legacy.png"
+_READY_IMAGE_PROXY_URL = f"/api/v1/summaries/images/{_OWNER_ID}/{_TASK_ID}/img.webp"
+
+
+def _make_image_summary() -> Summary:
+    """带旧式单图(image_key)+新式多图(ready/pending 各一)的 active 摘要。"""
+    summary = Summary(
+        task_id=_TASK_ID,
+        summary_type="overview",
+        version=1,
+        content="# 摘要\n{{IMAGE:concept|图1|关键词}}",
+    )
+    summary.is_active = True
+    summary.created_at = datetime.now(UTC)
+    summary.image_key = _LEGACY_IMAGE_KEY
+    summary.images = [
+        {
+            "placeholder": "{{IMAGE:concept|图1|关键词}}",
+            "status": "ready",
+            "url": _READY_IMAGE_PROXY_URL,
+            "alt": "图1",
+            "model_id": "doubao-seedream-4-5",
+            "error": None,
+        },
+        {
+            "placeholder": "{{IMAGE:concept|图2|关键词}}",
+            "status": "pending",
+            "url": None,
+            "alt": "图2",
+            "model_id": None,
+            "error": None,
+        },
+    ]
+    return summary
+
+
+async def test_public_summaries_ready_images_use_presigned_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ready 配图(image_url 与 images[].url 两处)都换成短 TTL OSS 预签名直链。"""
+    fake = _install_fake_oss(monkeypatch)
+    session = _FakeSession(tasks=[_make_task()], summaries=[_make_image_summary()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}/summaries")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    # 旧式单图 image_key → 直链(不再是 /api/v1/media/ 代理路径,带签名 query)
+    assert "/api/v1/media/" not in item["image_url"]
+    assert "Signature=" in item["image_url"]
+    assert _LEGACY_IMAGE_KEY in item["image_url"]
+    # images[].url(ready)→ 直链,对象 key 由存量代理路径还原(summary_images/ 前缀)
+    ready = item["images"][0]
+    assert "/api/v1/summaries/images/" not in ready["url"]
+    assert "Signature=" in ready["url"]
+    assert f"summary_images/{_OWNER_ID}/{_TASK_ID}/img.webp" in ready["url"]
+    # 直链换发成功时附代理回落路径(前端直链过期 403 后切它走媒体票链路自愈)
+    assert ready["proxy_url"] == _READY_IMAGE_PROXY_URL
+    # pending 图不签名,url 保持 None
+    assert item["images"][1]["url"] is None
+    assert item["images"][1]["proxy_url"] is None
+    # 全部签名都是 600s 短 TTL(取消公开后残余暴露 ≤TTL)
+    assert fake.calls and all(expires == 600 for _key, expires in fake.calls)
+
+
+async def test_public_summaries_presign_failure_falls_back_to_proxy_urls() -> None:
+    """OSS 签发失败时回落现状代理 URL,绝不让整个摘要 500。(autouse 默认 OSS 不可用)"""
+    session = _FakeSession(tasks=[_make_task()], summaries=[_make_image_summary()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}/summaries")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["image_url"] == f"/api/v1/media/{_LEGACY_IMAGE_KEY}"
+    assert item["images"][0]["url"] == _READY_IMAGE_PROXY_URL
+    # url 本身已是代理回落形态时不再给 proxy_url(避免前端把同一路径再试一遍)
+    assert item["images"][0]["proxy_url"] is None
+
+
+async def test_public_detail_audio_direct_url_presigned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """公开详情出 3600s 预签名音频直链;audio_url 代理路径保留不动(前端回落用)。"""
+    fake = _install_fake_oss(monkeypatch)
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
+    assert body["code"] == 0
+    data = body["data"]
+    audio_key = f"upload/{_OWNER_ID}/{_TASK_ID}.mp3"
+    assert data["audio_url"] == f"/api/v1/media/{audio_key}"  # 代理路径不动
+    assert data["audio_direct_url"] is not None
+    assert "/api/v1/media/" not in data["audio_direct_url"]
+    assert "Signature=" in data["audio_direct_url"]
+    assert audio_key in data["audio_direct_url"]
+    assert fake.calls == [(audio_key, 3600)]  # 与媒体端点 307 路径同 TTL
+
+
+async def test_public_detail_audio_direct_url_none_on_presign_failure() -> None:
+    """签发失败时 audio_direct_url=None(不 500),audio_url 代理路径照常。(autouse 默认 OSS 不可用)"""
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["audio_direct_url"] is None
+    assert data["audio_url"] == f"/api/v1/media/upload/{_OWNER_ID}/{_TASK_ID}.mp3"
+
+
+async def test_public_detail_without_audio_has_null_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无音频(source_key=None)的任务即使 OSS 可用也不签名,audio_direct_url=None。"""
+    fake = _install_fake_oss(monkeypatch)
+    session = _FakeSession(tasks=[_make_youtube_task()])  # source_key=None
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
+    assert body["code"] == 0
+    assert body["data"]["audio_direct_url"] is None
+    assert body["data"]["audio_url"] is None
+    assert fake.calls == []
+
+
+# ===== 边缘缓存头(Cache-Control,仅业务成功路径) =====
+
+_CACHE_CONTROL = "public, max-age=60, s-maxage=60, stale-while-revalidate=60"
+_GET_PATHS = (
+    "/public/tasks",
+    f"/public/tasks/{_TASK_ID}",
+    f"/public/tasks/{_TASK_ID}/transcripts",
+    f"/public/tasks/{_TASK_ID}/summaries",
+)
+
+
+async def test_public_get_success_responses_have_cache_control() -> None:
+    """4 个公开 GET 的业务成功(code==0)响应必须带边缘缓存头。"""
+    session = _FakeSession(
+        tasks=[_make_task()],
+        transcripts=[_make_transcript(sequence=1, content="第一段")],
+        summaries=[_make_image_summary()],
+    )
+    async with _client(_make_app(session)) as client:
+        for path in _GET_PATHS:
+            resp = await client.get(path)
+            assert resp.json()["code"] == 0, path
+            assert resp.headers.get("cache-control") == _CACHE_CONTROL, path
+
+
+async def test_public_not_found_envelope_has_no_cache_control() -> None:
+    """利刃回归:错误信封是 HTTP 200+code=40401,绝不能带缓存头——
+    否则刚公开的任务会在边缘 PoP 缓存「不存在」长达 max-age。"""
+    session = _FakeSession(tasks=[_make_task(is_public=False)])  # 私有任务 → TASK_NOT_FOUND
+    async with _client(_make_app(session)) as client:
+        for path in _GET_PATHS[1:]:  # 列表端点无 404 形态
+            resp = await client.get(path)
+            assert resp.status_code == 200, path
+            assert resp.json()["code"] == int(ErrorCode.TASK_NOT_FOUND), path
+            assert "cache-control" not in resp.headers, path
+
+
+async def test_public_rate_limited_envelope_has_no_cache_control(monkeypatch: pytest.MonkeyPatch) -> None:
+    """限流错误信封(同样 HTTP 200)不得带缓存头,否则一个 PoP 被打满后所有人吃缓存限流页。"""
+    import app.core.rate_limit as rate_limit_module
+
+    class _SaturatedRedis:
+        async def incr(self, _key: str) -> int:
+            return settings.RATE_LIMIT_PUBLIC_PER_MIN + 1  # 直接越限
+
+        async def expire(self, _key: str, _ttl: int) -> None:
+            return None
+
+    monkeypatch.setattr(rate_limit_module, "get_redis_client", lambda: _SaturatedRedis())
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session)) as client:
+        resp = await client.get("/public/tasks")
+    assert resp.status_code == 200
+    assert resp.json()["code"] == int(ErrorCode.RATE_LIMIT_EXCEEDED)
+    assert "cache-control" not in resp.headers
+
+
+async def test_media_ticket_mint_has_no_cache_control(_jwt_secret: None) -> None:
+    """媒体票 POST(mint)是即时性凭据签发,成功响应也绝不带缓存头。"""
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session)) as client:
+        resp = await client.post(f"/public/tasks/{_TASK_ID}/media-ticket")
+    assert resp.json()["code"] == 0
+    assert "cache-control" not in resp.headers
