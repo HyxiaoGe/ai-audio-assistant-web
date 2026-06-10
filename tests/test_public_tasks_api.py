@@ -369,6 +369,7 @@ async def test_youtube_task_detail_contains_youtube_info() -> None:
     assert yi["title"] == "Never Gonna Give You Up"
     # 缩略图 URL 由 video_id 推算（YouTube 标准格式）
     assert yi["thumbnail_url"] == f"https://i.ytimg.com/vi/{_YOUTUBE_VIDEO_ID}/hqdefault.jpg"
+    assert yi["duration_seconds"] == 212
     # source_url 透出，供前端嵌入播放器
     assert data.get("source_url") == _YOUTUBE_URL
 
