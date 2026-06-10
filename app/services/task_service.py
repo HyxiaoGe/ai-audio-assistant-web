@@ -419,7 +419,7 @@ class TaskService:
         count_query = select(func.count()).select_from(base_query.subquery())
         total = int((await db.execute(count_query)).scalar_one())
         items_query = (
-            base_query.order_by(Task.published_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            base_query.order_by(Task.published_at.desc().nulls_last()).offset((page - 1) * page_size).limit(page_size)
         )
         rows = (await db.execute(items_query)).scalars().all()
         items = [

@@ -134,6 +134,43 @@ async def get_media_user(
     return _scoped_user(token, expected_scope=SCOPE_MEDIA)
 
 
+@dataclass
+class MediaPrincipal:
+    """媒体端点鉴权主体。public_task_id 非 None = 公开任务媒体票(resource pin),
+    归属校验必须走「仍公开 + key∈允许集」的 DB 复核分支。"""
+
+    user: CurrentUser
+    public_task_id: str | None = None
+
+
+async def get_media_principal(
+    db: AsyncSession = Depends(get_db),
+    token: str | None = Query(default=None, description="media ticket"),
+    authorization: str | None = Header(default=None),
+) -> MediaPrincipal:
+    """媒体端点鉴权:Authorization 头(登录态)或 ?token= 媒体短票。
+
+    与 get_media_user 的唯一差异:识别票内 resource={"public_task": id} pin 并透出;
+    media 票当前唯一合法 resource 形态就是它,其他形态一律拒,防票据跨用途混用。
+    """
+    if authorization:
+        return MediaPrincipal(user=await get_current_user(db, authorization))
+    if not token:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
+    claims = verify_scoped_token(token)
+    if claims.get("scope") != SCOPE_MEDIA:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
+    resource = claims.get("resource")
+    public_task_id: str | None = None
+    if resource is not None:
+        if not isinstance(resource, dict) or not isinstance(resource.get("public_task"), str):
+            raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
+        public_task_id = resource["public_task"]
+    return MediaPrincipal(
+        user=CurrentUser(id=str(claims["sub"]), email=""), public_task_id=public_task_id
+    )
+
+
 async def get_stream_user(
     task_id: str,
     summary_type: str = Query(..., description="摘要类型"),
