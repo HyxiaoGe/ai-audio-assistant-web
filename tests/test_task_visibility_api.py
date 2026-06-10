@@ -149,7 +149,7 @@ async def test_unpublish_clears_published_at_and_is_idempotent() -> None:
     assert second["code"] == 0  # 幂等
 
 
-async def test_republish_refreshes_published_at() -> None:
+async def test_publish_twice_keeps_same_timestamp() -> None:
     session = _FakeSession([_make_task()])
     async with _client(_make_app(session)) as client:
         await client.patch(f"/tasks/{_TASK_ID}/visibility", json={"is_public": True})
@@ -157,3 +157,19 @@ async def test_republish_refreshes_published_at() -> None:
         await client.patch(f"/tasks/{_TASK_ID}/visibility", json={"is_public": True})
         stamp2 = session.tasks[0].published_at  # 已公开再公开:幂等,不刷新时间
     assert stamp1 == stamp2
+
+
+async def test_republish_after_unpublish_gets_new_timestamp() -> None:
+    """unpublish → republish 应刷新 published_at(取消公开后重新公开视为新发布)。"""
+    session = _FakeSession([_make_task()])
+    async with _client(_make_app(session)) as client:
+        # 首次发布
+        await client.patch(f"/tasks/{_TASK_ID}/visibility", json={"is_public": True})
+        stamp1 = session.tasks[0].published_at
+        # 取消公开:published_at 应清空
+        unpub = (await client.patch(f"/tasks/{_TASK_ID}/visibility", json={"is_public": False})).json()
+        assert unpub["data"]["published_at"] is None
+        # 重新发布:应产生新时间戳
+        await client.patch(f"/tasks/{_TASK_ID}/visibility", json={"is_public": True})
+        stamp2 = session.tasks[0].published_at
+    assert stamp2 is not None and stamp2 != stamp1
