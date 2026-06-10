@@ -10,7 +10,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 
-from fastapi import Depends
+from fastapi import Depends, Request
 
 from app.api.deps import CurrentUser, get_current_user, get_current_user_from_query
 from app.core.exceptions import BusinessError
@@ -61,5 +61,24 @@ def rate_limit_query(
     async def _dep(user: CurrentUser = Depends(auth)) -> None:
         bucket = int(time.time() // window_seconds)
         await _check(f"rl:{scope}:{user.id}:{bucket}", limit, window_seconds)
+
+    return _dep
+
+
+def rate_limit_by_ip(*, limit: int, window_seconds: int = 60, scope: str) -> Callable[..., Awaitable[None]]:
+    """匿名公开端点按客户端 IP 固定窗口限流(无 user 可依)。
+
+    经 nginx/cloudflared 反代,直连 socket 是代理地址,故优先取 X-Forwarded-For
+    第一跳,无则回退 request.client.host。XFF 可伪造,这里只做滥用阻尼非安全边界;
+    Redis 故障同样 fail-open。
+    """
+
+    async def _dep(request: Request) -> None:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        client_ip = forwarded.split(",")[0].strip() if forwarded else ""
+        if not client_ip:
+            client_ip = request.client.host if request.client else "unknown"
+        bucket = int(time.time() // window_seconds)
+        await _check(f"rl:{scope}:ip:{client_ip}:{bucket}", limit, window_seconds)
 
     return _dep

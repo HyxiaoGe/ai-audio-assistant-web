@@ -219,6 +219,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_UPLOAD_PRESIGN_PER_MIN: int = Field(default=30)
     RATE_LIMIT_SUMMARY_COMPARE_PER_MIN: int = Field(default=10)
     RATE_LIMIT_YOUTUBE_SYNC_PER_MIN: int = Field(default=10)
+    RATE_LIMIT_PUBLIC_PER_MIN: int = Field(default=60)  # 公开探索端点,按 IP
 
     # PromptHub
     PROMPTHUB_BASE_URL: str | None = Field(default=None)
