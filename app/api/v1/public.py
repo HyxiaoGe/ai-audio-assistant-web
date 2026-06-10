@@ -107,8 +107,12 @@ async def get_public_transcripts(
         )
         for row in rows
     ]
+    # 转写是公开端点里唯一的大响应(实测最大 ~260KB),序列化热点在 jsonable_encoder
+    # (逐字段反射递归,实测 10-44ms);model_dump(mode="json") 走 pydantic-core 原生
+    # 序列化,产物等价(schema 无 alias/自定义 encoder,字段全是 str/int/float)。
+    # 其余小响应端点不值得动,保持 jsonable_encoder。
     return success(
-        data=jsonable_encoder(PublicTranscriptListResponse(task_id=str(task.id), total=len(items), items=items))
+        data=PublicTranscriptListResponse(task_id=str(task.id), total=len(items), items=items).model_dump(mode="json")
     )
 
 
