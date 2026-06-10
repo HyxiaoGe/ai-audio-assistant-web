@@ -148,7 +148,7 @@ def test_single_alembic_head_is_new_revision() -> None:
     )
     assert out.returncode == 0, out.stderr
     heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
-    # 必须恰好单 head（否则说明迁移链分叉）。head 随新迁移前移：渐进式展示新增
-    # b7c3d9e1f2a0（down_revision=本通知迁移 9a1b2c3d4e5f），故当前 head 为它。
+    # 必须恰好单 head（否则说明迁移链分叉）。head 随新迁移前移：公开可见性新增
+    # f6a7b8c9d0e1（down_revision=渐进式展示迁移 b7c3d9e1f2a0），故当前 head 为它。
     assert len(heads) == 1, f"alembic 出现多 head：{out.stdout}"
-    assert "b7c3d9e1f2a0" in heads[0]
+    assert "f6a7b8c9d0e1" in heads[0]

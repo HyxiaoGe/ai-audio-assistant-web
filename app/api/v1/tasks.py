@@ -5,7 +5,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, get_db
+from app.api.deps import CurrentUser, get_admin_user, get_current_user, get_db
 from app.config import settings
 from app.core.rate_limit import rate_limit
 from app.core.response import success
@@ -17,6 +17,7 @@ from app.schemas.task import (
     TaskDetailResponse,
     TaskListItem,
     TaskStatusCountsResponse,
+    TaskVisibilityUpdateRequest,
 )
 from app.services.task_service import PROCESSING_STATUSES, TaskService
 
@@ -88,6 +89,18 @@ async def get_task_detail(
     detail = await TaskService.get_task_detail(db, user, task_id)
     response = TaskDetailResponse(**detail.model_dump())
     return success(data=jsonable_encoder(response))
+
+
+@router.patch("/{task_id}/visibility")
+async def update_task_visibility(
+    task_id: str,
+    data: TaskVisibilityUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_admin_user),
+) -> JSONResponse:
+    """管理员把自己的已完成任务设为公开/取消公开(探索广场可见性开关)。"""
+    result = await TaskService.update_task_visibility(db, user, task_id, data.is_public)
+    return success(data=jsonable_encoder(result))
 
 
 @router.delete("/{task_id}")

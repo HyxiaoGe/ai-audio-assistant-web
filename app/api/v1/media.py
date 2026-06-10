@@ -20,14 +20,17 @@ from collections.abc import AsyncIterator
 import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, get_media_user
+from app.api.deps import CurrentUser, MediaPrincipal, get_current_user, get_db, get_media_principal
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.response import success
 from app.core.security import SCOPE_MEDIA, issue_scoped_token
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
+from app.models.task import Task
 
 logger = logging.getLogger("app.api.media")
 
@@ -62,6 +65,38 @@ def assert_owns_media_key(object_key: str, user_id: str) -> None:
         raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
     parts = object_key.split("/")
     if len(parts) < 3 or parts[0] not in _OWNED_PREFIXES or parts[1] != user_id:
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+
+
+async def assert_public_media_access(
+    db: AsyncSession, public_task_id: str, sub: str, object_key: str
+) -> None:
+    """公开媒体票(resource pin)的允许集复核。
+
+    每次请求 DB 复核「任务仍公开」——管理员取消公开后已签发的票立即失效
+    (残余暴露只剩已发出的 OSS 预签名音频 URL 和浏览器已缓存的图)。
+    允许集 = {task.source_key} ∪ summary_images/{owner}/{task_id}/* ,集外一律
+    RESOURCE_NOT_FOUND(不泄露存在性)。
+    """
+    # 双保险:公开票 sub=任务 owner,key 第二段必须仍等于 sub(防 pin 票横向越权)
+    assert_owns_media_key(object_key, sub)
+    task = (
+        await db.execute(
+            select(Task).where(
+                Task.id == public_task_id,
+                Task.user_id == sub,
+                Task.is_public.is_(True),
+                Task.status == "completed",
+                Task.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if task is None:
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+    allowed = object_key == task.source_key or object_key.startswith(
+        f"summary_images/{task.user_id}/{task.id}/"
+    )
+    if not allowed:
         raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
 
@@ -194,13 +229,17 @@ async def serve_media_object(
 async def stream_media(
     file_path: str,
     request: Request,
-    user: CurrentUser = Depends(get_media_user),
+    principal: MediaPrincipal = Depends(get_media_principal),
+    db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Serve a media file: redirect to OSS when present, else server-side proxy from OSS.
 
     Access requires a valid token (Authorization header or `?token=` query, the
-    latter for browser `<audio>`/`<img>` elements that cannot send headers) and
-    is gated to the owner encoded in the object key — see assert_owns_media_key.
+    latter for browser `<audio>`/`<img>` elements that cannot send headers).
+    普通票/登录态走 owner 命名空间校验;公开任务 pin 票走「仍公开 + 允许集」DB 复核。
     """
-    assert_owns_media_key(file_path, user.id)
+    if principal.public_task_id is not None:
+        await assert_public_media_access(db, principal.public_task_id, principal.user.id, file_path)
+    else:
+        assert_owns_media_key(file_path, principal.user.id)
     return await serve_media_object(file_path, request.headers.get("range"))

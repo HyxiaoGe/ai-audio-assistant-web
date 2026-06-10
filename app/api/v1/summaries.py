@@ -10,8 +10,8 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, get_db, get_media_user, get_stream_user
-from app.api.v1.media import assert_owns_media_key, serve_media_object
+from app.api.deps import CurrentUser, MediaPrincipal, get_current_user, get_db, get_media_principal, get_stream_user
+from app.api.v1.media import assert_owns_media_key, assert_public_media_access, serve_media_object
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.rate_limit import rate_limit, rate_limit_query
@@ -729,7 +729,8 @@ async def stream_comparison(
 @router.get("/images/{path:path}")
 async def get_summary_image(
     path: str,
-    user: CurrentUser = Depends(get_media_user),
+    principal: MediaPrincipal = Depends(get_media_principal),
+    db: AsyncSession = Depends(get_db),
 ) -> Response:
     """获取摘要配图（从统一存储 OSS 服务端代理返回图片内容）
 
@@ -740,7 +741,10 @@ async def get_summary_image(
     优于每次重签的 307 直下），并打 private+immutable 缓存头。
     """
     object_key = f"summary_images/{path}"
-    assert_owns_media_key(object_key, user.id)
+    if principal.public_task_id is not None:
+        await assert_public_media_access(db, principal.public_task_id, principal.user.id, object_key)
+    else:
+        assert_owns_media_key(object_key, principal.user.id)
 
     resp = await serve_media_object(object_key, allow_redirect=False)
     # 图片按随机 image_id 命名、内容不可变 → 可长缓存。带 media token 鉴权属私有内容，

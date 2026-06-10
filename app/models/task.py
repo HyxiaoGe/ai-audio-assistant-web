@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,6 +37,11 @@ class Task(BaseModel):
             "idx_tasks_hash",
             "content_hash",
             postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_tasks_public",
+            text("published_at DESC"),
+            postgresql_where=text("is_public = TRUE AND deleted_at IS NULL"),
         ),
     )
 
@@ -72,6 +78,10 @@ class Task(BaseModel):
 
     asr_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # 公开可见性(探索广场):管理员可把自己的 completed 任务设为公开,匿名可读。
+    is_public: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     notifications: Mapped[list[Notification]] = relationship(

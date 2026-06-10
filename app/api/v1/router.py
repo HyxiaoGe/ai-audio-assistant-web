@@ -8,6 +8,7 @@ from app.api.v1 import (
     llm,
     media,
     notifications,
+    public,
     stats,
     summaries,
     summary_styles,
@@ -32,6 +33,7 @@ api_router.include_router(summaries.router)
 api_router.include_router(summary_styles.router)
 api_router.include_router(users.router)
 api_router.include_router(notifications.router)
+api_router.include_router(public.router)
 api_router.include_router(stats.router)
 api_router.include_router(ws.router)
 api_router.include_router(media.router, prefix="/media", tags=["media"])

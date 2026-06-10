@@ -1057,3 +1057,45 @@ WebSocket 消息也遵循统一格式：
 | 500 | 未捕获的系统异常 |
 
 **说明**：业务错误统一返回 HTTP 200，通过响应体中的 `code` 区分。这样前端可以统一处理响应，通过 `code === 0` 判断成功与否。
+
+---
+
+## 11. 公开探索端点（零鉴权）
+
+匿名只读访问管理员公开的任务，无需携带 `Authorization` 头。
+
+**资格条件**：`is_public = true` AND `status = completed` AND 未软删除。不满足任一条件一律返回 `40401`（不泄露任务存在性）。
+
+**限流**：所有公开端点按客户端 IP 限流，默认 60 次/分钟（可通过环境变量 `RATE_LIMIT_PUBLIC_PER_MIN` 调整）。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/public/tasks` | 公开任务分页列表（`page` / `page_size`，`page_size` ≤ 50，按 `published_at` 倒序） |
+| GET | `/api/v1/public/tasks/{task_id}` | 公开任务详情（白名单字段，含 `audio_url`） |
+| GET | `/api/v1/public/tasks/{task_id}/transcripts` | 公开转写（裁剪版：去掉 `words` / `confidence` / `original_content`） |
+| GET | `/api/v1/public/tasks/{task_id}/summaries` | 公开摘要（active 版；配图集裁掉 `model_id` / `error`） |
+| POST | `/api/v1/public/tasks/{task_id}/media-ticket` | 签发公开媒体短票（`scope=media`，`resource` 钉死该任务；媒体端点在每次请求时 DB 复核仍公开且 key 属于允许集） |
+
+### 11.1 任务可见性开关（管理员）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| PATCH | `/api/v1/tasks/{task_id}/visibility` | body `{"is_public": bool}`；仅 `admin` scope 且只能操作**本人**已 `completed` 的任务；取消公开后已签发的媒体票立即失效（DB 复核不通过） |
+
+**响应示例（发布成功）**：
+```json
+{
+  "code": 0,
+  "message": "成功",
+  "data": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "is_public": true,
+    "published_at": "2026-06-10T08:00:00Z"
+  },
+  "traceId": "req_abc123"
+}
+```
+
+**说明**：
+- `published_at`：首次发布时设置，取消后清空，再次发布时刷新为新时间戳。
+- 已公开任务再次 `PATCH is_public: true` 为幂等操作，`published_at` 不变。

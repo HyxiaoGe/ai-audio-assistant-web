@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
 
-from app.api.deps import CurrentUser, get_db, get_media_user
+from app.api.deps import CurrentUser, MediaPrincipal, get_db, get_media_principal
 from app.api.v1 import media as media_module
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
@@ -74,7 +74,7 @@ def _build_test_app(
     # 媒体接口现在依赖 token 鉴权；测试里用 fake DB + 可选的用户覆盖。
     app.dependency_overrides[get_db] = _fake_db
     if user_id is not None:
-        app.dependency_overrides[get_media_user] = lambda: CurrentUser(id=user_id, email=f"{user_id}@example.com")
+        app.dependency_overrides[get_media_principal] = lambda: MediaPrincipal(user=CurrentUser(id=user_id, email=f"{user_id}@example.com"))
 
     # 把 BusinessError 统一转成 4xx，方便断言
     @app.exception_handler(BusinessError)

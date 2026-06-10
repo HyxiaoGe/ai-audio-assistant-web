@@ -15,7 +15,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
 
-from app.api.deps import CurrentUser, get_db, get_media_user
+from app.api.deps import CurrentUser, MediaPrincipal, get_db, get_media_principal
 from app.api.v1 import media as media_module
 from app.api.v1 import summaries as summaries_module
 from app.core.exceptions import BusinessError
@@ -67,7 +67,7 @@ def _build_app(
     app.include_router(summaries_module.router, prefix="/api/v1")
     app.dependency_overrides[get_db] = _fake_db
     if user_id is not None:
-        app.dependency_overrides[get_media_user] = lambda: CurrentUser(id=user_id, email=f"{user_id}@example.com")
+        app.dependency_overrides[get_media_principal] = lambda: MediaPrincipal(user=CurrentUser(id=user_id, email=f"{user_id}@example.com"))
 
     @app.exception_handler(BusinessError)
     async def _handler(_request: Any, exc: BusinessError) -> Any:

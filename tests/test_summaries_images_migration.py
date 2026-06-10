@@ -50,4 +50,4 @@ def test_single_alembic_head_is_new_revision() -> None:
     heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
     # 必须恰好单 head，且为新迁移（否则说明迁移链分叉）
     assert len(heads) == 1, f"alembic 出现多 head：{out.stdout}"
-    assert "b7c3d9e1f2a0" in heads[0]
+    assert "f6a7b8c9d0e1" in heads[0]
