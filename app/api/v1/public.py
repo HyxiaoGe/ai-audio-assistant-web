@@ -38,6 +38,26 @@ router = APIRouter(prefix="/public", tags=["public"])
 
 _rate_limit = rate_limit_by_ip(limit=settings.RATE_LIMIT_PUBLIC_PER_MIN, scope="public_read")
 
+# 公开 GET 成功路径的边缘缓存头(CF Cache Rule 在 dashboard 侧配,这里做 origin 准备)。
+# 取舍(用户已拍板):取消公开后,文本(标题/转写/摘要)在命中过的边缘 PoP 残留
+# ≤~2min(max-age+stale-while-revalidate);媒体票/音频/图签发每次过 is_public DB
+# 复核即时失效,残余仅纯文本。
+_PUBLIC_CACHE_CONTROL = "public, max-age=60, s-maxage=60, stale-while-revalidate=60"
+
+
+def _cacheable(resp: JSONResponse) -> JSONResponse:
+    """只给「业务成功(code==0)」响应贴边缘缓存头。
+
+    本项目错误信封是 HTTP 200(TASK_NOT_FOUND/限流/DB 错全走异常处理器返回
+    200+错误 code),绝不能让错误信封被边缘缓存——否则刚公开的任务会在 PoP 上缓存
+    「不存在」长达 max-age。隔离方式:头只贴在路由函数体内 success() 构造出的响应
+    对象上;任何异常在 return 前 raise,走 app/main.py 的异常处理器重新构造响应
+    (error() 不带本头)。注意 FastAPI 对「路由直接返回 Response」不会合并注入的
+    response 参数头(fastapi/routing.py raw_response 分支),所以必须贴在这里。
+    """
+    resp.headers["Cache-Control"] = _PUBLIC_CACHE_CONTROL
+    return resp
+
 # 公开配图直链 TTL(秒):媒体字节直连 OSS,绕开同源代理经 cloudflared 隧道的 ~1.5s/请求基线。
 # 安全面:公开端点每次请求都过 is_public DB 复核(取消公开后新请求拿不到新签名),
 # 已签出 URL 的残余暴露 ≤TTL——与既有音频 307 预签名(app/api/v1/media.py)同类且被接受。
@@ -69,7 +89,7 @@ async def list_public_tasks(
     """公开任务列表(仅 is_public+completed+未删),按发布时间倒序分页。"""
     items, total = await TaskService.list_public_tasks(db, page, page_size)
     response = PageResponse[PublicTaskListItem](items=items, total=total, page=page, page_size=page_size)
-    return success(data=jsonable_encoder(response))
+    return _cacheable(success(data=jsonable_encoder(response)))
 
 
 @router.get("/tasks/{task_id}")
@@ -80,7 +100,7 @@ async def get_public_task_detail(
 ) -> JSONResponse:
     """公开任务详情(白名单字段;非公开/不存在/未完成一律 TASK_NOT_FOUND)。"""
     detail = await TaskService.get_public_task_detail(db, task_id)
-    return success(data=jsonable_encoder(detail))
+    return _cacheable(success(data=jsonable_encoder(detail)))
 
 
 @router.get("/tasks/{task_id}/transcripts")
@@ -111,8 +131,12 @@ async def get_public_transcripts(
     # (逐字段反射递归,实测 10-44ms);model_dump(mode="json") 走 pydantic-core 原生
     # 序列化,产物等价(schema 无 alias/自定义 encoder,字段全是 str/int/float)。
     # 其余小响应端点不值得动,保持 jsonable_encoder。
-    return success(
-        data=PublicTranscriptListResponse(task_id=str(task.id), total=len(items), items=items).model_dump(mode="json")
+    return _cacheable(
+        success(
+            data=PublicTranscriptListResponse(task_id=str(task.id), total=len(items), items=items).model_dump(
+                mode="json"
+            )
+        )
     )
 
 
@@ -170,8 +194,8 @@ async def get_public_summaries(
                 created_at=summary.created_at,
             )
         )
-    return success(
-        data=jsonable_encoder(PublicSummaryListResponse(task_id=str(task.id), total=len(items), items=items))
+    return _cacheable(
+        success(data=jsonable_encoder(PublicSummaryListResponse(task_id=str(task.id), total=len(items), items=items)))
     )
 
 

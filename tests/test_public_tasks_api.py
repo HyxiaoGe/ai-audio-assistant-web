@@ -581,3 +581,69 @@ async def test_public_detail_without_audio_has_null_direct_url(monkeypatch: pyte
     assert body["data"]["audio_direct_url"] is None
     assert body["data"]["audio_url"] is None
     assert fake.calls == []
+
+
+# ===== 边缘缓存头(Cache-Control,仅业务成功路径) =====
+
+_CACHE_CONTROL = "public, max-age=60, s-maxage=60, stale-while-revalidate=60"
+_GET_PATHS = (
+    "/public/tasks",
+    f"/public/tasks/{_TASK_ID}",
+    f"/public/tasks/{_TASK_ID}/transcripts",
+    f"/public/tasks/{_TASK_ID}/summaries",
+)
+
+
+async def test_public_get_success_responses_have_cache_control() -> None:
+    """4 个公开 GET 的业务成功(code==0)响应必须带边缘缓存头。"""
+    session = _FakeSession(
+        tasks=[_make_task()],
+        transcripts=[_make_transcript(sequence=1, content="第一段")],
+        summaries=[_make_image_summary()],
+    )
+    async with _client(_make_app(session)) as client:
+        for path in _GET_PATHS:
+            resp = await client.get(path)
+            assert resp.json()["code"] == 0, path
+            assert resp.headers.get("cache-control") == _CACHE_CONTROL, path
+
+
+async def test_public_not_found_envelope_has_no_cache_control() -> None:
+    """利刃回归:错误信封是 HTTP 200+code=40401,绝不能带缓存头——
+    否则刚公开的任务会在边缘 PoP 缓存「不存在」长达 max-age。"""
+    session = _FakeSession(tasks=[_make_task(is_public=False)])  # 私有任务 → TASK_NOT_FOUND
+    async with _client(_make_app(session)) as client:
+        for path in _GET_PATHS[1:]:  # 列表端点无 404 形态
+            resp = await client.get(path)
+            assert resp.status_code == 200, path
+            assert resp.json()["code"] == int(ErrorCode.TASK_NOT_FOUND), path
+            assert "cache-control" not in resp.headers, path
+
+
+async def test_public_rate_limited_envelope_has_no_cache_control(monkeypatch: pytest.MonkeyPatch) -> None:
+    """限流错误信封(同样 HTTP 200)不得带缓存头,否则一个 PoP 被打满后所有人吃缓存限流页。"""
+    import app.core.rate_limit as rate_limit_module
+
+    class _SaturatedRedis:
+        async def incr(self, _key: str) -> int:
+            return settings.RATE_LIMIT_PUBLIC_PER_MIN + 1  # 直接越限
+
+        async def expire(self, _key: str, _ttl: int) -> None:
+            return None
+
+    monkeypatch.setattr(rate_limit_module, "get_redis_client", lambda: _SaturatedRedis())
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session)) as client:
+        resp = await client.get("/public/tasks")
+    assert resp.status_code == 200
+    assert resp.json()["code"] == int(ErrorCode.RATE_LIMIT_EXCEEDED)
+    assert "cache-control" not in resp.headers
+
+
+async def test_media_ticket_mint_has_no_cache_control(_jwt_secret: None) -> None:
+    """媒体票 POST(mint)是即时性凭据签发,成功响应也绝不带缓存头。"""
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session)) as client:
+        resp = await client.post(f"/public/tasks/{_TASK_ID}/media-ticket")
+    assert resp.json()["code"] == 0
+    assert "cache-control" not in resp.headers
