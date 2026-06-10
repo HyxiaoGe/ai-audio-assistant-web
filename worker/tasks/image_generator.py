@@ -419,11 +419,14 @@ def publish_image_ready_global(
         logger.warning("Task %s: publish image_ready to global WS failed, suppressed", task_id, exc_info=True)
 
 
-def _encode_webp(image_data: bytes, quality: int = 85) -> tuple[bytes, str]:
-    """把生成的 png 转成 WebP 以减小体积（保持原分辨率，仅换更高效编码）。
+def _encode_webp(image_data: bytes, quality: int = 85, max_edge: int = 1920) -> tuple[bytes, str]:
+    """把生成的 png 转成 WebP 以减小体积，超宽图先降采样到长边 ``max_edge``。
 
     配图经公网 cloudflared 慢出口传输（实测 ~124KB/s），2K png 单张 ~0.8MB→~6.7s；
-    WebP（q85）通常压到原大小的 ~15-25%，肉眼几乎无差。转码失败则回退原始 png（绝不丢图）。
+    WebP（q85）通常压到原大小的 ~15-25%，肉眼几乎无差。
+    模型现产 2560×1440，而详情页最宽展示栏 2x retina 只需 ~1800 物理 px——长边降到
+    1920 再编码实测体积再降 ~47%，显示端无感（只影响新生成图，存量不动）。
+    resize 在 try 内：任何失败走既有兜底回退原始 png（绝不让配图生成失败）。
     懒导入 PIL（同本文件 minio 的风格），避免模块加载即硬依赖 Pillow。
 
     Returns: (字节, 格式后缀 "webp"|"png")
@@ -439,6 +442,9 @@ def _encode_webp(image_data: bytes, quality: int = 85) -> tuple[bytes, str]:
             if img.mode not in ("RGB", "RGBA"):
                 has_alpha = img.mode in ("LA", "PA") or (img.mode == "P" and "transparency" in img.info)
                 img = img.convert("RGBA" if has_alpha else "RGB")
+            if max(img.size) > max_edge:
+                # thumbnail 等比缩放且只缩不放（小图原样保留），LANCZOS 保细节
+                img.thumbnail((max_edge, max_edge), Image.LANCZOS)
             out = BytesIO()
             img.save(out, format="WEBP", quality=quality, method=6)
             return out.getvalue(), "webp"
