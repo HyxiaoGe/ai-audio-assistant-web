@@ -321,3 +321,108 @@ async def test_media_ticket_rejected_for_private_task(_jwt_secret: None) -> None
     async with _client(_make_app(session)) as client:
         body = (await client.post(f"/public/tasks/{_TASK_ID}/media-ticket")).json()
     assert body["code"] == int(ErrorCode.TASK_NOT_FOUND)
+
+
+# ===== youtube_info =====
+
+_YOUTUBE_VIDEO_ID = "dQw4w9WgXcQ"
+_YOUTUBE_URL = f"https://www.youtube.com/watch?v={_YOUTUBE_VIDEO_ID}"
+
+
+def _make_youtube_task(
+    *,
+    title: str = "Never Gonna Give You Up",
+    duration_seconds: int | None = 212,
+) -> Task:
+    """返回一个公开 youtube 来源的任务，source_url 含合法视频 ID。"""
+    t = Task(
+        id=_TASK_ID,
+        user_id=_OWNER_ID,
+        title=title,
+        source_type="youtube",
+        source_url=_YOUTUBE_URL,
+        source_key=None,
+        status="completed",
+        progress=100,
+        duration_seconds=duration_seconds,
+        options={},
+    )
+    t.is_public = True
+    t.published_at = datetime.now(UTC)
+    t.detected_language = "en"
+    t.deleted_at = None
+    t.created_at = datetime.now(UTC)
+    t.updated_at = datetime.now(UTC)
+    return t
+
+
+async def test_youtube_task_detail_contains_youtube_info() -> None:
+    """公开 youtube 任务详情必须含 youtube_info，且子字段值正确。"""
+    session = _FakeSession(tasks=[_make_youtube_task()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
+    assert body["code"] == 0
+    data = body["data"]
+    yi = data.get("youtube_info")
+    assert yi is not None, "youtube_info 应在公开详情中出现"
+    assert yi["video_id"] == _YOUTUBE_VIDEO_ID
+    assert yi["title"] == "Never Gonna Give You Up"
+    # 缩略图 URL 由 video_id 推算（YouTube 标准格式）
+    assert yi["thumbnail_url"] == f"https://i.ytimg.com/vi/{_YOUTUBE_VIDEO_ID}/hqdefault.jpg"
+    assert yi["duration_seconds"] == 212
+    # source_url 透出，供前端嵌入播放器
+    assert data.get("source_url") == _YOUTUBE_URL
+
+
+async def test_non_youtube_task_detail_has_null_youtube_info() -> None:
+    """非 youtube 来源的任务，youtube_info 必须为 null（不存在或显式 null）。"""
+    session = _FakeSession(tasks=[_make_task()])  # source_type="upload"
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
+    assert body["code"] == 0
+    data = body["data"]
+    # youtube_info 不存在 或 显式为 null
+    assert data.get("youtube_info") is None
+
+
+async def test_youtube_info_excludes_private_fields() -> None:
+    """公开 youtube_info 不得含任何私有字段（owner 标识、内部存储 key、账号凭据等）。"""
+    session = _FakeSession(tasks=[_make_youtube_task()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
+    assert body["code"] == 0
+    data = body["data"]
+    yi = data.get("youtube_info") or {}
+    # 不允许出现的私有字段
+    for forbidden in ("user_id", "access_token", "refresh_token", "subscription_id", "last_synced_at"):
+        assert forbidden not in yi, f"youtube_info 不应含私有字段: {forbidden}"
+    # 整体详情不允许出现的私有字段（已有断言，此处加固 youtube 任务路径）
+    for forbidden in ("error_message", "stages", "options", "source_metadata", "source_key", "status", "user_id"):
+        assert forbidden not in data, f"公开详情不应含私有字段: {forbidden}"
+
+
+async def test_youtube_task_without_valid_video_id_has_null_youtube_info() -> None:
+    """source_url 无法提取 video_id 时，youtube_info 为 null（不崩溃）。"""
+    t = Task(
+        id=_TASK_ID,
+        user_id=_OWNER_ID,
+        title="坏链任务",
+        source_type="youtube",
+        source_url="https://www.youtube.com/channel/UC1234",  # 频道页，无 video_id
+        source_key=None,
+        status="completed",
+        progress=100,
+        duration_seconds=None,
+        options={},
+    )
+    t.is_public = True
+    t.published_at = datetime.now(UTC)
+    t.detected_language = "zh"
+    t.deleted_at = None
+    t.created_at = datetime.now(UTC)
+    t.updated_at = datetime.now(UTC)
+    session = _FakeSession(tasks=[t])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
+    assert body["code"] == 0
+    assert body["data"].get("youtube_info") is None
