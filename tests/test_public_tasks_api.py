@@ -138,9 +138,16 @@ class _FakeSession:
             )
             return _FakeResult(rows=list(rows))
         if "from summaries" in sql:
-            wanted_raw = sql.split("summaries.task_id =")[1].strip().split()[0].strip("'")
-            wanted = self._normalize_uuid(wanted_raw)
-            rows = [r for r in self.summaries if self._normalize_uuid(str(r.task_id)) == wanted and r.is_active]
+            if "summaries.task_id in (" in sql:
+                inside = sql.split("summaries.task_id in (", 1)[1].split(")", 1)[0]
+                wanted_set = {self._normalize_uuid(tok.strip().strip("'")) for tok in inside.split(",") if tok.strip()}
+                rows = [r for r in self.summaries if self._normalize_uuid(str(r.task_id)) in wanted_set and r.is_active]
+            else:
+                wanted_raw = sql.split("summaries.task_id =")[1].strip().split()[0].strip("'")
+                wanted = self._normalize_uuid(wanted_raw)
+                rows = [r for r in self.summaries if self._normalize_uuid(str(r.task_id)) == wanted and r.is_active]
+            if "summary_type = 'overview'" in sql:
+                rows = [r for r in rows if r.summary_type == "overview"]
             return _FakeResult(rows=rows)
         rows = self._filter_tasks(sql)
         rows.sort(key=lambda t: t.published_at or _EPOCH, reverse=True)
@@ -225,6 +232,94 @@ async def test_list_returns_only_public_completed() -> None:
     # 裁剪面:公开列表项不带任何内部字段
     for forbidden in ("status", "progress", "error_message", "source_key", "user_id"):
         assert forbidden not in item
+
+
+async def test_list_items_include_cover_and_excerpt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """列表项带封面(首张 ready 配图 OSS 直链)+ 摘录(正文剥 markdown)。"""
+    fake = _install_fake_oss(monkeypatch)
+    session = _FakeSession(tasks=[_make_task()], summaries=[_make_image_summary()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["cover_url"] and "Signature=" in item["cover_url"]
+    assert "img.webp" in item["cover_url"]
+    assert item["excerpt"] == "摘要"
+    # 封面直链也是 600s 短 TTL
+    assert fake.calls and all(expires == 600 for _key, expires in fake.calls)
+
+
+async def test_list_items_cover_excerpt_none_without_summary() -> None:
+    """无 active overview 摘要的任务:cover_url/excerpt 静默回落 None,不 500。"""
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["cover_url"] is None
+    assert item["excerpt"] is None
+
+
+async def test_list_item_excerpt_without_ready_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    """有 active overview 摘要但无 ready 配图:cover_url=None,excerpt 仍派生。"""
+    _install_fake_oss(monkeypatch)
+    summary = Summary(
+        task_id=_TASK_ID,
+        summary_type="overview",
+        version=1,
+        content="# 摘要\n{{IMAGE:concept|图1|关键词}}",
+    )
+    summary.is_active = True
+    summary.created_at = datetime.now(UTC)
+    summary.image_key = None
+    summary.images = [
+        {
+            "placeholder": "{{IMAGE:concept|图1|关键词}}",
+            "status": "pending",
+            "url": None,
+            "alt": "图1",
+            "model_id": None,
+            "error": None,
+        },
+    ]
+    session = _FakeSession(tasks=[_make_task()], summaries=[summary])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["cover_url"] is None
+    assert item["excerpt"] == "摘要"
+
+
+async def test_list_ignores_non_overview_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 overview 的 active 摘要不参与列表派生:cover_url/excerpt 均 None。"""
+    _install_fake_oss(monkeypatch)
+    summary = Summary(
+        task_id=_TASK_ID,
+        summary_type="key_points",
+        version=1,
+        content="# 摘要\n{{IMAGE:concept|图1|关键词}}",
+    )
+    summary.is_active = True
+    summary.created_at = datetime.now(UTC)
+    summary.image_key = _LEGACY_IMAGE_KEY
+    summary.images = [
+        {
+            "placeholder": "{{IMAGE:concept|图1|关键词}}",
+            "status": "ready",
+            "url": _READY_IMAGE_PROXY_URL,
+            "alt": "图1",
+            "model_id": "doubao-seedream-4-5",
+            "error": None,
+        },
+    ]
+    session = _FakeSession(tasks=[_make_task()], summaries=[summary])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["cover_url"] is None
+    assert item["excerpt"] is None
 
 
 async def test_list_rejects_oversize_page_size() -> None:

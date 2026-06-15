@@ -43,6 +43,8 @@ class PublicTaskListItem(BaseModel):
     detected_language: str | None
     detected_summary_style: str | None = None
     published_at: datetime | None
+    cover_url: str | None = None  # 首张 ready 摘要配图的 OSS 直链(无则 None);封面统一用配图,不用 YouTube 缩略图
+    excerpt: str | None = None  # active overview 摘要正文前 ~80 字(剥 markdown);无则 None
 
 
 class PublicTaskDetailResponse(BaseModel):

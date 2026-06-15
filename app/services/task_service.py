@@ -20,11 +20,14 @@ from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.registry import ServiceRegistry
 from app.i18n.codes import ErrorCode
+from app.models.summary import Summary
 from app.models.task import Task
 from app.schemas.public import PublicTaskDetailResponse, PublicTaskListItem, PublicYouTubeInfo
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem, TaskVisibilityResponse
 from app.services.asr_quota_service import check_any_provider_available
 from app.services.media_url import build_media_download_url, build_presigned_media_url
+from app.services.summary.excerpt import summary_excerpt
+from app.services.summary.public_image import first_ready_image_url, public_summary_image_url
 
 logger = logging.getLogger(__name__)
 
@@ -425,6 +428,10 @@ class TaskService:
             base_query.order_by(Task.published_at.desc().nulls_last()).offset((page - 1) * page_size).limit(page_size)
         )
         rows = (await db.execute(items_query)).scalars().all()
+
+        # 本页任务的封面/摘录:一次批量 IN 查 active overview 摘要(防 N+1),内存按 task_id 归并。
+        enrichment = await TaskService._public_list_enrichment(db, [str(row.id) for row in rows])
+
         items = [
             PublicTaskListItem(
                 id=str(row.id),
@@ -434,10 +441,44 @@ class TaskService:
                 detected_language=row.detected_language,
                 detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(row.options),
                 published_at=row.published_at,
+                cover_url=enrichment.get(str(row.id), (None, None))[0],
+                excerpt=enrichment.get(str(row.id), (None, None))[1],
             )
             for row in rows
         ]
         return items, total
+
+    @staticmethod
+    async def _public_list_enrichment(
+        db: AsyncSession, task_ids: list[str]
+    ) -> dict[str, tuple[str | None, str | None]]:
+        """本页任务 → {task_id: (cover_url, excerpt)}。一次批量 IN 取 active overview 摘要,防 N+1。
+
+        封面=首张 ready 配图换发 OSS 直链(失败回落代理 URL);excerpt=正文剥 markdown 截断。
+        任一缺失回落 None,绝不让列表 500。
+        """
+        if not task_ids:
+            return {}
+        summaries = (
+            (
+                await db.execute(
+                    select(Summary).where(
+                        Summary.task_id.in_(task_ids),
+                        Summary.is_active.is_(True),
+                        Summary.summary_type == "overview",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        result: dict[str, tuple[str | None, str | None]] = {}
+        for summary in summaries:
+            raw_cover = first_ready_image_url(summary.images)
+            cover_url = await public_summary_image_url(raw_cover, "ready") if raw_cover else None
+            excerpt = summary_excerpt(summary.content) or None
+            result[str(summary.task_id)] = (cover_url, excerpt)
+        return result
 
     @staticmethod
     def _build_public_youtube_info(task: Task) -> PublicYouTubeInfo | None:
