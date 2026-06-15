@@ -260,6 +260,68 @@ async def test_list_items_cover_excerpt_none_without_summary() -> None:
     assert item["excerpt"] is None
 
 
+async def test_list_item_excerpt_without_ready_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    """有 active overview 摘要但无 ready 配图:cover_url=None,excerpt 仍派生。"""
+    _install_fake_oss(monkeypatch)
+    summary = Summary(
+        task_id=_TASK_ID,
+        summary_type="overview",
+        version=1,
+        content="# 摘要\n{{IMAGE:concept|图1|关键词}}",
+    )
+    summary.is_active = True
+    summary.created_at = datetime.now(UTC)
+    summary.image_key = None
+    summary.images = [
+        {
+            "placeholder": "{{IMAGE:concept|图1|关键词}}",
+            "status": "pending",
+            "url": None,
+            "alt": "图1",
+            "model_id": None,
+            "error": None,
+        },
+    ]
+    session = _FakeSession(tasks=[_make_task()], summaries=[summary])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["cover_url"] is None
+    assert item["excerpt"] == "摘要"
+
+
+async def test_list_ignores_non_overview_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 overview 的 active 摘要不参与列表派生:cover_url/excerpt 均 None。"""
+    _install_fake_oss(monkeypatch)
+    summary = Summary(
+        task_id=_TASK_ID,
+        summary_type="key_points",
+        version=1,
+        content="# 摘要\n{{IMAGE:concept|图1|关键词}}",
+    )
+    summary.is_active = True
+    summary.created_at = datetime.now(UTC)
+    summary.image_key = _LEGACY_IMAGE_KEY
+    summary.images = [
+        {
+            "placeholder": "{{IMAGE:concept|图1|关键词}}",
+            "status": "ready",
+            "url": _READY_IMAGE_PROXY_URL,
+            "alt": "图1",
+            "model_id": "doubao-seedream-4-5",
+            "error": None,
+        },
+    ]
+    session = _FakeSession(tasks=[_make_task()], summaries=[summary])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["cover_url"] is None
+    assert item["excerpt"] is None
+
+
 async def test_list_rejects_oversize_page_size() -> None:
     async with _client(_make_app(_FakeSession())) as client:
         resp = await client.get("/public/tasks", params={"page_size": 500})
