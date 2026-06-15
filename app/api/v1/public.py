@@ -32,6 +32,12 @@ from app.schemas.public import (
     PublicTranscriptListResponse,
 )
 from app.services.media_url import build_media_download_url, build_presigned_media_url
+from app.services.summary.public_image import (
+    PUBLIC_IMAGE_PRESIGN_EXPIRES as _PUBLIC_IMAGE_PRESIGN_EXPIRES,
+)
+from app.services.summary.public_image import (
+    public_summary_image_url as _public_summary_image_url,
+)
 from app.services.task_service import TaskService
 
 router = APIRouter(prefix="/public", tags=["public"])
@@ -57,26 +63,6 @@ def _cacheable(resp: JSONResponse) -> JSONResponse:
     """
     resp.headers["Cache-Control"] = _PUBLIC_CACHE_CONTROL
     return resp
-
-# 公开配图直链 TTL(秒):媒体字节直连 OSS,绕开同源代理经 cloudflared 隧道的 ~1.5s/请求基线。
-# 安全面:公开端点每次请求都过 is_public DB 复核(取消公开后新请求拿不到新签名),
-# 已签出 URL 的残余暴露 ≤TTL——与既有音频 307 预签名(app/api/v1/media.py)同类且被接受。
-_PUBLIC_IMAGE_PRESIGN_EXPIRES = 600
-
-# 存量配图 URL 的同源代理前缀(worker/tasks/image_generator.py 写库格式:
-# /api/v1/summaries/images/{user_id}/{task_id}/{image_id}.{fmt}),
-# OSS 对象 key = "summary_images/" + 前缀后的路径(见 app/api/v1/summaries.py 图片端点)。
-_SUMMARY_IMAGE_PROXY_PREFIX = "/api/v1/summaries/images/"
-
-
-async def _public_summary_image_url(raw_url: object, status: str) -> str | None:
-    """ready 配图换发短 TTL OSS 直链;非 ready/形态不识别/签发失败一律回落存量代理 URL。"""
-    if not isinstance(raw_url, str) or not raw_url:
-        return None
-    if status != "ready" or not raw_url.startswith(_SUMMARY_IMAGE_PROXY_PREFIX):
-        return raw_url
-    object_key = f"summary_images/{raw_url[len(_SUMMARY_IMAGE_PROXY_PREFIX) :]}"
-    return await build_presigned_media_url(object_key, _PUBLIC_IMAGE_PRESIGN_EXPIRES) or raw_url
 
 
 @router.get("/tasks")
