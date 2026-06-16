@@ -14,8 +14,11 @@ under four conservative constraints so legitimate prose is never deleted
 
 1. Only the very first line / paragraph is inspected (anchored at ``^``); the
    opener is removed once, never looping into the body.
-2. The opener must START with a pure courtesy word (``好的``/``当然``/``Sure``/…),
-   not a bare ``这是``/``以下是`` which can begin legitimate prose.
+2. The opener must START with a pure courtesy word (``好的``/``当然``/``Sure``/…)
+   IMMEDIATELY FOLLOWED BY an interjection separator (comma / colon / space) —
+   ``好的，`` / ``Sure,`` — so fused prose like ``好评如潮的…总结。`` / ``好的总结需要
+   打磨。`` (no separator after the courtesy chars) is never matched. A bare
+   ``这是``/``以下是`` is excluded too (it can begin legitimate prose).
 3. The opener sentence must ALSO contain a service-y phrase (``为您``/``根据您``/…)
    or a meta noun (``摘要``/``要点``/``待办``/summary/…) — double-hit required.
 4. The opener must end with terminal punctuation (``。.：:！!``) reached before
@@ -54,6 +57,7 @@ _SERVICE_OR_META = (
 _PREAMBLE_RE = re.compile(
     r"^[ \t\r\n]*"  # 前导空白/空行
     r"(?:" + _COURTESY + r")"  # 客套开场词起头
+    r"[ \t，,、：:！!]"  # 客套词后必须紧跟分隔符(逗号/冒号/空白),排除「好评/好处/好的总结」词头融合的正文
     r"[^\n。.：:！!]*?"  # 同句其余字符(不跨行,惰性)
     r"(?:" + _SERVICE_OR_META + r")"  # 服务化/元描述标记(同句内)
     r"[^\n。.：:！!]*?"  # 标记之后到句末的字符(不跨行)

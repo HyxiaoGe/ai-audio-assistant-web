@@ -76,6 +76,50 @@ def test_keep_legit_haode_without_service_marker():
     assert strip_summary_preamble(src) == src
 
 
+# ----------------------------------------------------------------------------
+# 词头融合的正文(客套字符后无分隔符)——separator 约束钉死,绝不能误删
+# ----------------------------------------------------------------------------
+
+
+def test_keep_haoping_fused_with_meta_noun():
+    # 「好评」非客套词「好」+ 分隔符,即便首句含「总结」也不剥
+    src = "好评如潮的产品总结。\n正文部分继续这里很长"
+    assert strip_summary_preamble(src) == src
+
+
+def test_keep_haochu_fused_with_meta_noun():
+    src = "好处很多的总结方法介绍。\n正文继续这里也很长"
+    assert strip_summary_preamble(src) == src
+
+
+def test_keep_haode_fused_with_meta_noun():
+    # 「好的总结」是偏正短语(好的+总结,无逗号),不是开场白「好的，…」
+    src = "好的总结需要反复打磨。\n下面是方法"
+    assert strip_summary_preamble(src) == src
+
+
+def test_keep_dangran_fused_body():
+    src = "当然界面设计也要点到为止。\n正文"
+    assert strip_summary_preamble(src) == src
+
+
+# ----------------------------------------------------------------------------
+# 应剥:逗号分隔 + 仅元描述名词(无服务化措辞)也能命中真开场白
+# ----------------------------------------------------------------------------
+
+
+def test_strip_comma_gated_meta_only_preamble():
+    # 「好的，总结如下：」——逗号分隔 + 元描述「总结」,无「为您/根据您」也是开场白
+    src = "好的，总结如下：\n- a\n- b"
+    assert strip_summary_preamble(src) == "- a\n- b"
+
+
+def test_strip_bare_hao_with_comma():
+    # 裸「好」+ 逗号 + 服务化措辞 → 真开场白变体
+    src = "好，这是为您生成的摘要。\n正文"
+    assert strip_summary_preamble(src) == "正文"
+
+
 def test_empty_and_none_return_empty_string():
     assert strip_summary_preamble("") == ""
     assert strip_summary_preamble(None) == ""
