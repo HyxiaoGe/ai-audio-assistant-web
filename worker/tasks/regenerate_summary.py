@@ -18,6 +18,7 @@ from app.models.summary import Summary
 from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.summary.markdown_fence import strip_markdown_fence
+from app.services.summary.preamble import strip_summary_preamble
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import get_sync_redis_client
@@ -317,7 +318,8 @@ def _regenerate_summary(
         asyncio.run(_generate())
 
         # LLM 偶发把整段散文包进 ```markdown 围栏，落库前在源头剥掉（与前端渲染防御同语义）
-        full_content = strip_markdown_fence(full_content)
+        # 再剥掉偶发逸出的客套/元描述开场白（先剥围栏再剥开场白）
+        full_content = strip_summary_preamble(strip_markdown_fence(full_content))
 
         with get_sync_db_session() as session:
             # 对比模式下，摘要不设为活跃版本

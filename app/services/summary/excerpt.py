@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from app.services.summary.markdown_fence import strip_markdown_fence
+from app.services.summary.preamble import strip_summary_preamble
 
 # content 永久保留的配图占位锚点:{{IMAGE: t|d|k}} / {IMAGE: t|d|k} / 旧式 {{IMAGE: d}} / {IMAGE: d}
 _IMAGE_PLACEHOLDER_RE = re.compile(r"\{\{IMAGE:[^{}]*\}\}|\{IMAGE:[^{}]*\}")
@@ -24,6 +25,8 @@ def summary_excerpt(content: str | None, max_length: int = 80) -> str:
     if not content:
         return ""
     text = strip_markdown_fence(content) or ""
+    # 渲染端兜底:即使存量未清洗,列表卡 excerpt 也即时剥掉逸出的客套开场白
+    text = strip_summary_preamble(text)
     text = _IMAGE_PLACEHOLDER_RE.sub("", text)
     text = _MD_IMAGE_RE.sub("", text)
     text = _MD_LINK_RE.sub(r"\1", text)
