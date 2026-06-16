@@ -20,6 +20,7 @@ from app.prompts.manager import get_prompt_manager
 from app.services.asr.base import TranscriptSegment
 from app.services.llm.base import LLMService
 from app.services.summary.markdown_fence import strip_markdown_fence
+from app.services.summary.preamble import strip_summary_preamble
 from app.utils.transcript_processor import TranscriptProcessor
 
 logger = logging.getLogger(__name__)
@@ -292,4 +293,5 @@ async def _generate_single_summary(
     )
 
     # LLM 偶发把整段散文包进 ```markdown 围栏，落库前在源头剥掉（与前端渲染防御同语义）
-    return strip_markdown_fence(content)
+    # 再剥掉偶发逸出的客套/元描述开场白（先剥围栏再剥开场白）
+    return strip_summary_preamble(strip_markdown_fence(content))
