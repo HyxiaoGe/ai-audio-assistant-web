@@ -148,20 +148,60 @@ class _FakeRedis:
         return None
 
 
-def test_sync_subscriptions_invalid_grant_warns_without_traceback(monkeypatch, caplog) -> None:
-    """sync_youtube_subscriptions 同款止血:invalid_grant 走 WARNING 而非 logger.exception。"""
+def test_sync_subscriptions_invalid_grant_marks_reauth_and_notifies(monkeypatch, caplog) -> None:
+    """sync_youtube_subscriptions 与 sync_channel_videos 对齐:首次 invalid_grant 时
+    WARNING(不带 traceback)记录、标记 account.needs_reauth、发去重通知,且不打 ERROR。
+    订阅同步亦是 invalid_grant 的探测点(手动同步 / OAuth 回调后),不能只降级日志而漏掉
+    needs_reauth 标记与重新授权通知,否则两条探测路径的恢复行为不一致。"""
     account = _account(needs_reauth=False)
     monkeypatch.setattr(sync_youtube_subscriptions, "get_sync_redis_client", lambda: _FakeRedis())
     monkeypatch.setattr(sync_youtube_subscriptions, "get_sync_db_session", lambda: _FakeSession([account]))
     monkeypatch.setattr(sync_youtube_subscriptions, "_build_credentials", lambda _a: _RaisingCreds())
 
+    notified: dict[str, object] = {}
+
+    def _notify(_session: object, **kw: object) -> None:
+        notified.update(kw)
+
+    monkeypatch.setattr(sync_youtube_subscriptions.NotificationService, "notify", _notify)
+
     with caplog.at_level(logging.DEBUG):
         result = sync_youtube_subscriptions.sync_youtube_subscriptions.apply(kwargs={"user_id": "u1"}).get()
 
     assert result["status"] == "error"
+    assert result["needs_reauth"] is True
+    assert account.needs_reauth is True
+    assert notified.get("type") == sync_youtube_subscriptions.NotificationType.YOUTUBE_REAUTH_REQUIRED
+
     refresh_errors = [
         r for r in caplog.records if r.levelno >= logging.ERROR and "refresh token" in r.getMessage().lower()
     ]
     assert refresh_errors == [], "invalid_grant 不应再以 ERROR/traceback 记录"
     assert any(r.levelno == logging.WARNING and "refresh" in r.getMessage().lower() for r in caplog.records)
     _assert_warning_is_clean(caplog)
+
+
+def test_sync_subscriptions_invalid_grant_skips_notify_when_already_flagged(monkeypatch, caplog) -> None:
+    """账号已 needs_reauth 时再遇 invalid_grant:不重复 commit/发通知(去重),仍走 WARNING。"""
+    account = _account(needs_reauth=True)
+    session = _FakeSession([account])
+    monkeypatch.setattr(sync_youtube_subscriptions, "get_sync_redis_client", lambda: _FakeRedis())
+    monkeypatch.setattr(sync_youtube_subscriptions, "get_sync_db_session", lambda: session)
+    monkeypatch.setattr(sync_youtube_subscriptions, "_build_credentials", lambda _a: _RaisingCreds())
+
+    notify_calls = 0
+
+    def _notify(_session: object, **_kw: object) -> None:
+        nonlocal notify_calls
+        notify_calls += 1
+
+    monkeypatch.setattr(sync_youtube_subscriptions.NotificationService, "notify", _notify)
+
+    with caplog.at_level(logging.DEBUG):
+        result = sync_youtube_subscriptions.sync_youtube_subscriptions.apply(kwargs={"user_id": "u1"}).get()
+
+    assert result["status"] == "error"
+    assert result["needs_reauth"] is True
+    assert notify_calls == 0, "已标记 needs_reauth 不应重复发通知"
+    assert session.commits == 0, "已标记 needs_reauth 不应重复 commit"
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
