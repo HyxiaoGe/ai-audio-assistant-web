@@ -22,6 +22,7 @@ from app.models.account import Account
 from app.models.youtube_subscription import YouTubeSubscription
 from app.services.notifications.service import NotificationService
 from app.services.notifications.types import NotificationType
+from app.services.youtube.api_errors import QUOTA, RATE_LIMIT, classify_youtube_http_error
 from worker.db import get_sync_db_session
 from worker.redis_client import get_sync_redis_client, publish_user_notification_sync
 
@@ -159,6 +160,21 @@ def sync_youtube_subscriptions(
             try:
                 subscriptions = _fetch_all_subscriptions(credentials)
             except HttpError as e:
+                kind = classify_youtube_http_error(e)
+                if kind == QUOTA:
+                    # 配额耗尽:不可重试,warning 无 traceback 避免错误尖峰;等下个窗口/次日重置。
+                    logger.warning("YouTube quota exceeded fetching subscriptions for user %s; skipping", user_id)
+                    return {
+                        "status": "quota_exceeded",
+                        "synced_count": 0,
+                        "message": "YouTube API quota exceeded",
+                    }
+                if kind == RATE_LIMIT:
+                    # 瞬态限流/5xx:交给 Celery autoretry 退避重试。
+                    logger.warning(
+                        "YouTube rate-limited fetching subscriptions for user %s; retrying with backoff", user_id
+                    )
+                    raise
                 logger.exception(f"YouTube API error: {e}")
                 return {
                     "status": "error",

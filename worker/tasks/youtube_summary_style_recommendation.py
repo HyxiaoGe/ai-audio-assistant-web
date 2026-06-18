@@ -8,8 +8,8 @@ from typing import Any
 
 from celery import shared_task
 
-from app.db import async_session_factory
 from app.services.youtube.summary_style_recommendation import prewarm_summary_styles_for_videos
+from worker.db import worker_async_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ async def _prewarm(
     locale: str,
     limit: int,
 ) -> dict[str, int]:
-    async with async_session_factory() as session:
+    async with worker_async_session_factory() as session:
         return await prewarm_summary_styles_for_videos(
             session,
             user_id,
