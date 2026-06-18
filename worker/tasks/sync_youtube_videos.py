@@ -5,6 +5,7 @@ Syncs videos from subscribed channels to local database.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -23,12 +24,16 @@ from app.models.youtube_video import YouTubeVideo
 from app.services.notifications.service import NotificationService
 from app.services.notifications.types import NotificationType
 from worker.db import get_sync_db_session
-from worker.redis_client import publish_user_notification_sync
+from worker.redis_client import get_sync_redis_client, publish_user_notification_sync
 
 logger = logging.getLogger(__name__)
 
 # Provider name for YouTube OAuth account
 YOUTUBE_PROVIDER = "youtube"
+
+# 单频道同步去重锁的 TTL(秒),与 sync_channel_videos 的 soft_time_limit 对齐:
+# 进程崩溃未走到 finally 时,锁也会在任务最长存活时间后自动过期,不会永久挡住该频道。
+CHANNEL_SYNC_LOCK_DURATION = 300
 
 
 def _build_credentials(account: Account) -> Credentials:
@@ -148,6 +153,19 @@ def sync_channel_videos(
     """
     logger.info(f"Starting video sync for user {user_id}, channel {channel_id}")
 
+    # 去重锁:同一(用户,频道)的同步不得并发执行。check_scheduled_syncs 每小时按 next_sync_at
+    # 选取,若上一轮同步尚未跑完(next_sync_at 还没推进),下一轮会重复选中同一频道;手动同步
+    # 与定时同步也可能重叠。SET NX 抢锁,TTL 兜底进程崩溃,finally 正常释放。
+    redis_client = get_sync_redis_client()
+    lock_key = f"youtube_channel_sync_lock:{user_id}:{channel_id}"
+    if not redis_client.set(lock_key, "1", nx=True, ex=CHANNEL_SYNC_LOCK_DURATION):
+        logger.info(f"Channel {channel_id} sync already in progress for user {user_id}, skipping duplicate")
+        return {
+            "status": "skipped",
+            "reason": "sync_already_in_progress",
+            "synced_count": 0,
+        }
+
     try:
         with get_sync_db_session() as session:
             # Get YouTube account
@@ -232,8 +250,7 @@ def sync_channel_videos(
                         # 文案不带原始异常({e} 的 repr 含 'error' 子串),避免被宽匹配的日志
                         # 尖峰检测计入;invalid_grant 细节已在返回 dict 与 needs_reauth 中体现。
                         logger.warning(
-                            f"Token refresh rejected for user {user_id}: "
-                            "refresh token expired or revoked, needs reauth"
+                            f"Token refresh rejected for user {user_id}: refresh token expired or revoked, needs reauth"
                         )
                     else:
                         logger.exception(f"Failed to refresh token: {e}")
@@ -375,6 +392,11 @@ def sync_channel_videos(
             if not all_videos:
                 logger.info(f"No new videos to sync for channel {channel_id}")
                 subscription.videos_synced_at = now
+                # 即便没有新视频也要推进 next_sync_at,否则该频道会被 check_scheduled_syncs
+                # 每小时反复选中、无限重复空同步(详见 sync_scheduler.update_publish_stats 注释)。
+                from app.services.youtube.sync_scheduler import update_publish_stats
+
+                update_publish_stats(subscription, session)
                 session.commit()
                 return {
                     "status": "success",
@@ -530,6 +552,10 @@ def sync_channel_videos(
     except Exception as e:
         logger.exception(f"Unexpected error in sync task: {e}")
         raise  # Let Celery handle retry
+    finally:
+        # 始终释放锁(成功/跳过/异常重试前都会经过这里);多条提前返回路径无需各自删锁。
+        with contextlib.suppress(Exception):
+            redis_client.delete(lock_key)
 
 
 @shared_task(

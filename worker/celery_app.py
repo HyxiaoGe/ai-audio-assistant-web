@@ -29,25 +29,24 @@ celery_app.conf.accept_content = ["json"]
 celery_app.conf.timezone = "UTC"
 
 # Celery Beat 定时任务配置
+#
+# 切勿给任务加 options.queue —— worker 启动无 -Q,只消费默认队列(task_default_queue 未设
+# → celery 内建的 'celery')。历史上这里把 queue 钉成 'default',定时消息全发往一个没有
+# 消费者的队列、堆积成死信(实测 default 积压 ~4978),所有定时任务从未真正执行过。
+# 守卫见 tests/worker/test_beat_queue_routing.py(从 docker-compose worker 命令反推消费队列)。
 celery_app.conf.beat_schedule = {
     # ASR 配额预警检查 - 每小时执行一次
     "check-asr-quota-alerts": {
         "task": "worker.tasks.quota_alert.check_asr_quota_alerts",
         "schedule": crontab(minute=0),  # 每小时整点执行
-        "options": {"queue": "default"},
     },
-    # YouTube 视频同步 - 每天 UTC 3:00 执行
-    "sync-youtube-videos-daily": {
-        "task": "worker.tasks.sync_youtube_videos.sync_all_subscriptions_videos",
-        "schedule": crontab(hour=3, minute=0),  # 每天 UTC 3:00
-        "options": {"queue": "default"},
-        "kwargs": {"max_videos_per_channel": 20},
-    },
-    # YouTube 智能同步检查 - 每小时 :30 执行
+    # YouTube 智能同步检查 - 每小时 :30 执行(按各频道 next_sync_at 自适应触发,分批选取)。
+    # 这是 YouTube 视频同步的唯一定时入口:它会选中 next_sync_at 为 NULL(从未同步)或已到期的
+    # 频道,因此无需再叠加「每日全量同步」(后者忽略 next_sync_at、无批量上限,会在固定时刻把所有
+    # 频道一次性扇出造成惊群)。全量回填如有需要,可手动触发 sync_all_subscriptions_videos 任务。
     "check-youtube-scheduled-syncs": {
         "task": "worker.tasks.sync_youtube_videos.check_scheduled_syncs",
         "schedule": crontab(minute=30),  # 每小时 30 分执行
-        "options": {"queue": "default"},
     },
 }
 
