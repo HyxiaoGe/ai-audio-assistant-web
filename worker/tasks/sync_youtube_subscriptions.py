@@ -116,11 +116,25 @@ def sync_youtube_subscriptions(
                     logger.info(f"Token refreshed for user {user_id}")
 
                 except Exception as e:
-                    logger.exception(f"Failed to refresh token: {e}")
+                    # invalid_grant(refresh token 失效/吊销)是预期内、已处理的状态:
+                    # 用 warning 记录且不带 traceback,避免触发日志错误尖峰告警;
+                    # 其它未知异常仍按 ERROR + traceback 记录,以免吞掉真问题。
+                    error_str = str(e).lower()
+                    is_invalid_grant = "invalid_grant" in error_str or "token has been expired or revoked" in error_str
+                    if is_invalid_grant:
+                        # 文案不带原始异常({e} 的 repr 含 'error' 子串),避免被宽匹配的日志
+                        # 尖峰检测计入;invalid_grant 细节已在返回 dict 与 needs_reauth 中体现。
+                        logger.warning(
+                            f"Token refresh rejected for user {user_id}: "
+                            "refresh token expired or revoked, needs reauth"
+                        )
+                    else:
+                        logger.exception(f"Failed to refresh token: {e}")
                     return {
                         "status": "error",
                         "error": f"Token refresh failed: {e}",
                         "synced_count": 0,
+                        "needs_reauth": is_invalid_grant,
                     }
 
             # Fetch all subscriptions from YouTube
