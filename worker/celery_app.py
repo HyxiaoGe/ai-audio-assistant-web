@@ -7,7 +7,7 @@ from celery.schedules import crontab
 
 from app.config import settings
 from app.core.config_manager import ConfigManager
-from app.db import async_session_factory
+from worker.db import worker_async_session_factory
 
 
 def _get_redis_url() -> str:
@@ -50,7 +50,7 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-ConfigManager.configure_db(async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL)
+ConfigManager.configure_db(worker_async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL)
 if settings.CONFIG_CENTER_DB_ENABLED:
     try:
         loop = asyncio.get_running_loop()

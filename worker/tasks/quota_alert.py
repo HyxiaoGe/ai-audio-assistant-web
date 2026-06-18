@@ -10,8 +10,8 @@ import logging
 
 from celery import shared_task
 
-from app.db import async_session_factory
 from app.services.asr_quota_alert import process_all_quota_alerts
+from worker.db import worker_async_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ def check_asr_quota_alerts() -> dict:
     """
 
     async def _run() -> int:
-        async with async_session_factory() as session:
+        async with worker_async_session_factory() as session:
             return await process_all_quota_alerts(session)
 
     try:

@@ -23,6 +23,7 @@ from app.models.youtube_subscription import YouTubeSubscription
 from app.models.youtube_video import YouTubeVideo
 from app.services.notifications.service import NotificationService
 from app.services.notifications.types import NotificationType
+from app.services.youtube.api_errors import QUOTA, RATE_LIMIT, classify_youtube_http_error
 from worker.db import get_sync_db_session
 from worker.redis_client import get_sync_redis_client, publish_user_notification_sync
 
@@ -309,6 +310,24 @@ def sync_channel_videos(
                         session.commit()
 
                 except HttpError as e:
+                    kind = classify_youtube_http_error(e)
+                    if kind == QUOTA:
+                        # 配额耗尽：不可重试，不推进调度，等下个窗口/次日重置。warning 无 traceback 避免错误尖峰。
+                        logger.warning(
+                            "YouTube quota exceeded getting uploads playlist for channel %s; skipping", channel_id
+                        )
+                        return {
+                            "status": "quota_exceeded",
+                            "synced_count": 0,
+                            "message": "YouTube API quota exceeded",
+                        }
+                    if kind == RATE_LIMIT:
+                        # 瞬态限流/5xx：交给 Celery autoretry 退避重试。
+                        logger.warning(
+                            "YouTube rate-limited getting uploads playlist for channel %s; retrying with backoff",
+                            channel_id,
+                        )
+                        raise
                     logger.exception(f"YouTube API error getting uploads playlist: {e}")
                     return {
                         "status": "error",
@@ -340,6 +359,7 @@ def sync_channel_videos(
             all_videos: list[dict[str, Any]] = []
             page_token = None
             stop_fetching = False
+            quota_exceeded = False
 
             while len(all_videos) < max_videos and not stop_fetching:
                 try:
@@ -386,8 +406,34 @@ def sync_channel_videos(
                         break
 
                 except HttpError as e:
+                    kind = classify_youtube_http_error(e)
+                    if kind == QUOTA:
+                        # 配额耗尽:停止抓取并标记,避免后续把空结果伪装成「成功同步 0 条」并推进调度。
+                        logger.warning(
+                            "YouTube quota exceeded fetching playlist for channel %s; will retry next window",
+                            channel_id,
+                        )
+                        quota_exceeded = True
+                        break
+                    if kind == RATE_LIMIT:
+                        # 瞬态限流/5xx:交给 Celery autoretry 退避重试。
+                        logger.warning(
+                            "YouTube rate-limited fetching playlist for channel %s; retrying with backoff", channel_id
+                        )
+                        raise
                     logger.exception(f"YouTube API error fetching playlist: {e}")
                     break
+
+            if quota_exceeded and not all_videos:
+                # 纯配额失败:不标记 videos_synced_at、不推进 next_sync_at——否则会被当成「成功空同步」,
+                # 既污染发布频率统计/拖慢自适应调度,又让真有的新视频得等更久。让 check_scheduled_syncs
+                # 下个窗口(或次日太平洋 0 点配额重置后)重试。增量同步届时仍会从最新已缓存处补齐。
+                logger.warning("Channel %s sync aborted by quota exhaustion; not advancing schedule", channel_id)
+                return {
+                    "status": "quota_exceeded",
+                    "synced_count": 0,
+                    "message": "YouTube API quota exceeded",
+                }
 
             if not all_videos:
                 logger.info(f"No new videos to sync for channel {channel_id}")
@@ -431,7 +477,16 @@ def sync_channel_videos(
                         }
 
                 except HttpError as e:
-                    logger.exception(f"YouTube API error fetching video details: {e}")
+                    # 详情批次失败不影响已抓到的视频:仅记录、不重试(避免丢弃已得数据),下次同步补 stats。
+                    kind = classify_youtube_http_error(e)
+                    if kind in (QUOTA, RATE_LIMIT):
+                        logger.warning(
+                            "YouTube %s fetching video details for channel %s; upserting without stats",
+                            kind,
+                            channel_id,
+                        )
+                    else:
+                        logger.exception(f"YouTube API error fetching video details: {e}")
 
             # Upsert videos to database
             synced_count = 0
