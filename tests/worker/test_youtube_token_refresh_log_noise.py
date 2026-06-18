@@ -95,6 +95,7 @@ def test_sync_channel_videos_skips_when_account_needs_reauth(monkeypatch, caplog
     """needs_reauth 账号:返回 skipped,且绝不构建凭证/尝试刷新,也不打 ERROR。"""
     account = _account(needs_reauth=True)
     subscription = _subscription()
+    monkeypatch.setattr(sync_youtube_videos, "get_sync_redis_client", lambda: _FakeRedis())
     monkeypatch.setattr(sync_youtube_videos, "get_sync_db_session", lambda: _FakeSession([account, subscription]))
 
     def _must_not_build(*_a: object, **_k: object) -> object:
@@ -114,6 +115,7 @@ def test_sync_channel_videos_invalid_grant_warns_without_traceback(monkeypatch, 
     """首次 invalid_grant:WARNING 记录(无 traceback)、标记 needs_reauth、发去重通知,不打 ERROR。"""
     account = _account(needs_reauth=False)
     subscription = _subscription()
+    monkeypatch.setattr(sync_youtube_videos, "get_sync_redis_client", lambda: _FakeRedis())
     monkeypatch.setattr(sync_youtube_videos, "get_sync_db_session", lambda: _FakeSession([account, subscription]))
     monkeypatch.setattr(sync_youtube_videos, "_build_credentials", lambda _a: _RaisingCreds())
 

@@ -109,35 +109,38 @@ def update_publish_stats(
     )
     publish_times = [row[0] for row in result.all() if row[0]]
 
-    if len(publish_times) < 2:
-        # Not enough data to calculate interval
-        return
+    # Calculate average interval between videos (None if not enough data)
+    avg_interval: float | None = None
+    if len(publish_times) >= 2:
+        intervals = []
+        for i in range(len(publish_times) - 1):
+            time1 = publish_times[i]
+            time2 = publish_times[i + 1]
 
-    # Calculate average interval between videos
-    intervals = []
-    for i in range(len(publish_times) - 1):
-        time1 = publish_times[i]
-        time2 = publish_times[i + 1]
+            # Ensure timezone aware
+            if time1.tzinfo is None:
+                time1 = time1.replace(tzinfo=UTC)
+            if time2.tzinfo is None:
+                time2 = time2.replace(tzinfo=UTC)
 
-        # Ensure timezone aware
-        if time1.tzinfo is None:
-            time1 = time1.replace(tzinfo=UTC)
-        if time2.tzinfo is None:
-            time2 = time2.replace(tzinfo=UTC)
+            interval_hours = (time1 - time2).total_seconds() / 3600
+            if interval_hours > 0:
+                intervals.append(interval_hours)
 
-        interval_hours = (time1 - time2).total_seconds() / 3600
-        if interval_hours > 0:
-            intervals.append(interval_hours)
+        if intervals:
+            avg_interval = sum(intervals) / len(intervals)
 
-    if not intervals:
-        return
-
-    # Update subscription stats
+    # 关键不变量:无论发布历史是否充足,都必须推进 next_sync_at。历史不足时退而用默认间隔
+    # (calculate_next_sync_time(None, ...) → now + DEFAULT_SYNC_HOURS)兜底。
+    # 否则 next_sync_at 永远停在 NULL/旧值,check_scheduled_syncs 会每小时把该频道反复选中、
+    # 无限重复同步(稳态空同步从不推进调度,正是本次要修的第二个真 bug)。
     now = datetime.now(UTC)
-    subscription.avg_publish_interval_hours = sum(intervals) / len(intervals)
-    subscription.last_publish_at = publish_times[0]
+    if avg_interval is not None:
+        subscription.avg_publish_interval_hours = avg_interval
+    if publish_times:
+        subscription.last_publish_at = publish_times[0]
     subscription.next_sync_at = calculate_next_sync_time(
-        subscription.avg_publish_interval_hours,
+        avg_interval,
         subscription.last_publish_at,
         subscription.videos_synced_at,
         now,
