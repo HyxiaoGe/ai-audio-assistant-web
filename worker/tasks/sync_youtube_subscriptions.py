@@ -122,7 +122,12 @@ def sync_youtube_subscriptions(
                     error_str = str(e).lower()
                     is_invalid_grant = "invalid_grant" in error_str or "token has been expired or revoked" in error_str
                     if is_invalid_grant:
-                        logger.warning(f"Token refresh failed for user {user_id} (needs reauth): {e}")
+                        # 文案不带原始异常({e} 的 repr 含 'error' 子串),避免被宽匹配的日志
+                        # 尖峰检测计入;invalid_grant 细节已在返回 dict 与 needs_reauth 中体现。
+                        logger.warning(
+                            f"Token refresh rejected for user {user_id}: "
+                            "refresh token expired or revoked, needs reauth"
+                        )
                     else:
                         logger.exception(f"Failed to refresh token: {e}")
                     return {

@@ -8,8 +8,12 @@ invalid_grant(refresh token 失效/吊销)是预期内、已处理(转 BusinessE
 from __future__ import annotations
 
 import logging
+import re
 
 import pytest
+
+# 与 dev-ops-sentinel 旧版日志尖峰行过滤一致的宽匹配:降级后的 WARNING 文案绝不应命中。
+_NOISE_RE = re.compile(r"(?i)error|exception|traceback")
 
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
@@ -41,7 +45,14 @@ def test_refresh_invalid_grant_warns_without_traceback(monkeypatch, caplog) -> N
         r for r in caplog.records if r.levelno >= logging.ERROR and "refresh token" in r.getMessage().lower()
     ]
     assert refresh_errors == [], "invalid_grant 不应再以 ERROR/traceback 记录"
-    assert any(r.levelno == logging.WARNING and "refresh" in r.getMessage().lower() for r in caplog.records)
+    warns = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "refresh" in r.getMessage().lower()
+    ]
+    assert warns
+    offenders = [m for m in warns if _NOISE_RE.search(m)]
+    assert not offenders, f"降级后的 WARNING 不应含 error/exception/traceback 子串: {offenders}"
 
 
 def test_refresh_unknown_error_still_logs_exception(monkeypatch, caplog) -> None:

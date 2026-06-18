@@ -12,10 +12,26 @@
 from __future__ import annotations
 
 import logging
+import re
 import types
 from datetime import UTC, datetime, timedelta
 
 from worker.tasks import sync_youtube_subscriptions, sync_youtube_videos
+
+# 与 dev-ops-sentinel 旧版日志尖峰行过滤一致的宽匹配:降级后的 WARNING 文案绝不应命中,
+# 否则即便降为 WARNING,仍可能被(历史/被回退的)宽匹配检测计入而误报。
+_NOISE_RE = re.compile(r"(?i)error|exception|traceback")
+
+
+def _assert_warning_is_clean(caplog: object) -> None:
+    warns = [
+        r.getMessage()
+        for r in caplog.records  # type: ignore[attr-defined]
+        if r.levelno == logging.WARNING and "refresh" in r.getMessage().lower()
+    ]
+    assert warns, "应至少有一条 refresh 相关 WARNING"
+    offenders = [m for m in warns if _NOISE_RE.search(m)]
+    assert not offenders, f"降级后的 WARNING 不应含 error/exception/traceback 子串: {offenders}"
 
 
 class _Result:
@@ -121,6 +137,7 @@ def test_sync_channel_videos_invalid_grant_warns_without_traceback(monkeypatch, 
     ]
     assert refresh_errors == [], "invalid_grant 不应再以 ERROR/traceback 记录"
     assert any(r.levelno == logging.WARNING and "refresh" in r.getMessage().lower() for r in caplog.records)
+    _assert_warning_is_clean(caplog)
 
 
 class _FakeRedis:
@@ -147,3 +164,4 @@ def test_sync_subscriptions_invalid_grant_warns_without_traceback(monkeypatch, c
     ]
     assert refresh_errors == [], "invalid_grant 不应再以 ERROR/traceback 记录"
     assert any(r.levelno == logging.WARNING and "refresh" in r.getMessage().lower() for r in caplog.records)
+    _assert_warning_is_clean(caplog)

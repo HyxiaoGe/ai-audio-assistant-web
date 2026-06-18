@@ -155,7 +155,9 @@ class YouTubeOAuthService:
             # 其它未知异常仍按 ERROR + traceback 记录,以免吞掉真问题。
             error_str = str(e).lower()
             if "invalid_grant" in error_str or "token has been expired or revoked" in error_str:
-                logger.warning(f"Token refresh failed (needs reauth): {e}")
+                # 文案不带原始异常({e} 的 repr 含 'error' 子串),避免被宽匹配的日志尖峰检测计入;
+                # invalid_grant 细节经下方 BusinessError(reason=str(e)) 上抛给调用方。
+                logger.warning("Token refresh rejected: refresh token expired or revoked, needs reauth")
             else:
                 logger.exception(f"Failed to refresh token: {e}")
             raise BusinessError(
