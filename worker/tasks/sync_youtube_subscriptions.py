@@ -20,6 +20,8 @@ from sqlalchemy.dialects.postgresql import insert
 from app.config import settings
 from app.models.account import Account
 from app.models.youtube_subscription import YouTubeSubscription
+from app.services.notifications.service import NotificationService
+from app.services.notifications.types import NotificationType
 from worker.db import get_sync_db_session
 from worker.redis_client import get_sync_redis_client, publish_user_notification_sync
 
@@ -128,6 +130,22 @@ def sync_youtube_subscriptions(
                             f"Token refresh rejected for user {user_id}: "
                             "refresh token expired or revoked, needs reauth"
                         )
+                        # 与 sync_channel_videos 对齐:订阅同步同样是 invalid_grant 的探测点
+                        # (手动同步 / OAuth 回调后触发),标记 needs_reauth 并发重新授权通知,
+                        # 使两条探测路径在「发现失效后」的恢复行为一致;仅在未标记时执行,避免重复通知。
+                        if not account.needs_reauth:
+                            account.needs_reauth = True
+                            session.commit()
+                            logger.warning(f"Marked account for user {user_id} as needs_reauth=True")
+
+                            # reauth 升为持久化通知:notify 落库+推送;dedup_key 限每用户每天一条。
+                            NotificationService.notify(
+                                session,
+                                type=NotificationType.YOUTUBE_REAUTH_REQUIRED,
+                                user_id=user_id,
+                                params={"reason": "refresh_token_expired"},
+                                dedup_key=f"reauth:{user_id}:{datetime.now(UTC).date().isoformat()}",
+                            )
                     else:
                         logger.exception(f"Failed to refresh token: {e}")
                     return {
