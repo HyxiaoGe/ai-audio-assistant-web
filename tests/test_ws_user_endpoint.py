@@ -84,3 +84,24 @@ async def test_forward_pubsub_subscribes_via_bus_and_forwards(monkeypatch) -> No
     assert '{"kind":"notification","data":{"id":"n1"}}' in ws.sent
     assert pubsub.unsubscribed is True
     assert pubsub.closed is True
+
+
+class _DisconnectingWebSocket:
+    """鉴权握手阶段就断开的 WS 替身:receive_text 抛 WebSocketDisconnect。"""
+
+    headers: dict[str, str] = {}
+
+    async def receive_text(self) -> str:
+        from fastapi import WebSocketDisconnect
+
+        raise WebSocketDisconnect(code=1006)
+
+
+async def test_authenticate_in_band_returns_none_on_disconnect() -> None:
+    """客户端在带内鉴权期间断开(刷新/关页)应被吞掉,返回 (None, None),
+
+    而不是把 WebSocketDisconnect 抛成未捕获的 ASGI 异常刷错误日志。
+    """
+    user, error_code = await ws_module._authenticate_in_band(_DisconnectingWebSocket(), None, "zh", "trace-id")
+    assert user is None
+    assert error_code is None

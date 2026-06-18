@@ -150,7 +150,14 @@ class YouTubeOAuthService:
             return credentials.token, expires_at or datetime.now(UTC)
 
         except Exception as e:
-            logger.exception(f"Failed to refresh token: {e}")
+            # invalid_grant(refresh token 失效/吊销)是预期内、已转 BusinessError 的状态:
+            # 用 warning 记录且不带 traceback,避免触发日志错误尖峰告警;
+            # 其它未知异常仍按 ERROR + traceback 记录,以免吞掉真问题。
+            error_str = str(e).lower()
+            if "invalid_grant" in error_str or "token has been expired or revoked" in error_str:
+                logger.warning(f"Token refresh failed (needs reauth): {e}")
+            else:
+                logger.exception(f"Failed to refresh token: {e}")
             raise BusinessError(
                 ErrorCode.YOUTUBE_TOKEN_EXPIRED,
                 reason=str(e),

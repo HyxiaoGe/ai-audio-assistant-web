@@ -191,6 +191,17 @@ def sync_channel_videos(
                     "synced_count": 0,
                 }
 
+            # 账号已知需要重新授权(refresh token 失效/吊销)时直接跳过:再去刷新只会对
+            # 每个频道重复抛 invalid_grant 并打 ERROR+traceback,把日志刷成错误尖峰。
+            # 与 sync_all_subscriptions_videos 的 `Account.needs_reauth == False` 过滤保持一致。
+            if account.needs_reauth:
+                logger.info(f"Skipping channel {channel_id} sync: account for user {user_id} needs reauth")
+                return {
+                    "status": "skipped",
+                    "reason": "needs_reauth",
+                    "synced_count": 0,
+                }
+
             # Check if token needs refresh
             credentials = _build_credentials(account)
 
@@ -212,11 +223,17 @@ def sync_channel_videos(
                     logger.info(f"Token refreshed for user {user_id}")
 
                 except Exception as e:
-                    logger.exception(f"Failed to refresh token: {e}")
-
-                    # Check if this is an invalid_grant error (refresh token expired/revoked)
+                    # invalid_grant(refresh token 失效/吊销)是预期内、已处理的状态:
+                    # 用 warning 记录且不带 traceback,避免触发日志错误尖峰告警;
+                    # 其它未知异常仍按 ERROR + traceback 记录,以免吞掉真问题。
                     error_str = str(e).lower()
-                    if "invalid_grant" in error_str or "token has been expired or revoked" in error_str:
+                    is_invalid_grant = "invalid_grant" in error_str or "token has been expired or revoked" in error_str
+                    if is_invalid_grant:
+                        logger.warning(f"Token refresh failed for user {user_id} (needs reauth): {e}")
+                    else:
+                        logger.exception(f"Failed to refresh token: {e}")
+
+                    if is_invalid_grant:
                         # Only mark and notify if not already marked (avoid duplicate notifications)
                         if not account.needs_reauth:
                             account.needs_reauth = True
@@ -236,7 +253,7 @@ def sync_channel_videos(
                         "status": "error",
                         "error": f"Token refresh failed: {e}",
                         "synced_count": 0,
-                        "needs_reauth": "invalid_grant" in error_str,
+                        "needs_reauth": is_invalid_grant,
                     }
 
             # Build YouTube API client

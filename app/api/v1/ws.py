@@ -92,6 +92,10 @@ async def _authenticate_in_band(
         raw_message = await asyncio.wait_for(websocket.receive_text(), timeout=AUTH_TIMEOUT_SECONDS)
     except TimeoutError:
         return None, ErrorCode.AUTH_TOKEN_NOT_PROVIDED
+    except WebSocketDisconnect:
+        # 客户端在鉴权握手阶段就断开(刷新/关闭页面),属正常:返回 (None, None) 让调用方
+        # 静默结束,不再把 WebSocketDisconnect 抛成未捕获的 ASGI 异常刷错误日志。
+        return None, None
 
     try:
         message = json.loads(raw_message)
@@ -150,6 +154,9 @@ async def user_updates(websocket: WebSocket) -> None:
         if user is None:
             user, error_code = await _authenticate_in_band(websocket, session, locale, trace_id)
             if user is None:
+                if error_code is None:
+                    # 客户端在鉴权阶段已断开:静默返回,不再发错误也不再 close。
+                    return
                 if error_code == ErrorCode.AUTH_TOKEN_NOT_PROVIDED:
                     await websocket.close(code=CLOSE_CODE_AUTH_TIMEOUT)
                     return
