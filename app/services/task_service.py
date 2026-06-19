@@ -655,6 +655,10 @@ class TaskService:
             detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(task.options),
             is_public=bool(task.is_public),
             published_at=task.published_at,
+            asr_provider=task.asr_provider,
+            asr_engine=task.asr_engine,
+            asr_variant=task.asr_variant,
+            llm_provider=task.llm_provider,
         )
 
     @staticmethod
