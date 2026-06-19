@@ -78,6 +78,9 @@ class Task(BaseModel):
 
     asr_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # ASR 引擎/模型(如 tencent 16k_zh)与实际执行变体(file/file_fast),Task 级溯源;捕获见后续 PR。
+    asr_engine: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    asr_variant: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # 公开可见性(探索广场):管理员可把自己的 completed 任务设为公开,匿名可读。
     is_public: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)

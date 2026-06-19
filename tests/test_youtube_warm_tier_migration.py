@@ -52,7 +52,10 @@ def test_downgrade_sql_drops_warm_columns_and_index() -> None:
     assert "drop column is_warm" in sql
 
 
-def test_single_alembic_head_is_new_revision() -> None:
+def test_single_alembic_head_no_fork() -> None:
+    # warm-tier 已不是最新 head(其上有溯源字段迁移 c4d5e6f7a8b9),故此处只校验迁移链无分叉
+    # (单 head),不再 pin 具体 head 字符串——head pin 的 canary 留给 notification /
+    # summaries_images 两个测试,避免今后每加一条迁移都要改这里。
     env = {**os.environ, **_ENV}
     out = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -63,4 +66,3 @@ def test_single_alembic_head_is_new_revision() -> None:
     assert out.returncode == 0, out.stderr
     heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
     assert len(heads) == 1, f"alembic 出现多 head:{out.stdout}"
-    assert _NEW_REV in heads[0]

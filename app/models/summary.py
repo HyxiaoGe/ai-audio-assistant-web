@@ -31,6 +31,11 @@ class Summary(BaseRecord):
     model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 全链路溯源补全(算了却扔掉的那部分;捕获写入见后续 PR,老数据留 NULL 不回填)。
+    prompt_slug: Mapped[str | None] = mapped_column(String(100), nullable=True)  # PromptHub 定位键
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)  # LLM 真实输入 token
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)  # LLM 真实输出 token
+    quality_tier: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 转写质量分类 high/medium/low
     comparison_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Visual summary fields
