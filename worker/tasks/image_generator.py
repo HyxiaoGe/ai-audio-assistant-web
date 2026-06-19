@@ -344,6 +344,7 @@ def build_image_specs(
                 "url": None,
                 "alt": p.get("description") or _alt_from_placeholder(ph),
                 "model_id": None,
+                "provider": None,
                 "error": None,
             }
         )
@@ -383,6 +384,8 @@ def apply_image_result_to_summary(
         target["error"] = result.get("error") or "image generation failed"
     if result.get("model_id"):
         target["model_id"] = result.get("model_id")
+    if result.get("provider"):
+        target["provider"] = result.get("provider")
     flag_modified(summary, "images")
     session.commit()
     return target
@@ -537,6 +540,7 @@ async def generate_single_image(
         {"placeholder": "...", "url": "...", "status": "success|failed"}
     """
     model_id = None
+    provider = None
     try:
         # 1. 获取提示词管理器
         prompt_manager = get_prompt_manager()
@@ -598,6 +602,7 @@ async def generate_single_image(
             "url": image_url,
             "status": "success",
             "model_id": model_id,
+            "provider": provider,
         }
 
     except TimeoutError:
@@ -608,6 +613,7 @@ async def generate_single_image(
             "status": "failed",
             "error": "timeout",
             "model_id": model_id,
+            "provider": provider,
         }
     except Exception as e:
         logger.warning(f"Image generation failed for '{item['description']}': {e}")
@@ -617,6 +623,7 @@ async def generate_single_image(
             "status": "failed",
             "error": str(e),
             "model_id": model_id,
+            "provider": provider,
         }
 
 
