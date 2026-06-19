@@ -30,6 +30,10 @@ class SummaryItem(BaseModel):
     model_used: str | None = None
     prompt_version: str | None = None
     token_count: int | None = None
+    # 溯源(非敏感):命中的 PromptHub slug 与转写质量分级,供前端展示徽章;NULL 不显示。
+    # 注意:真实 input/output_tokens 刻意不在此暴露(成本/token 仅管理员端点,见 token-usage)。
+    prompt_slug: str | None = None
+    quality_tier: str | None = None
     created_at: datetime
     # Visual summary fields
     visual_format: str | None = None
@@ -43,6 +47,29 @@ class SummaryListResponse(BaseModel):
     task_id: str
     total: int
     items: list[SummaryItem]
+
+
+class SummaryTokenUsageItem(BaseModel):
+    """单条摘要的真实 token 用量(管理员专属)。"""
+
+    summary_type: str
+    model_used: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    token_count: int | None = None
+
+
+class SummaryTokenUsageResponse(BaseModel):
+    """某任务各摘要的 token 用量汇总(管理员专属)。
+
+    成本/token 不进普通用户响应(防暴露成本结构 / 间接泄 prompt 长度),仅经管理员端点透出。
+    """
+
+    task_id: str
+    total: int
+    total_input_tokens: int
+    total_output_tokens: int
+    items: list[SummaryTokenUsageItem]
 
 
 class SummaryRegenerateRequest(BaseModel):

@@ -108,6 +108,11 @@ class TaskDetailResponse(BaseModel):
     # 公开可见性(探索广场);默认值兜底使未触及该特性的旧构造点零改动
     is_public: bool = False
     published_at: datetime | None = None
+    # 全链路溯源:本次转写/摘要由哪个 provider/引擎/变体支持。NULL=未捕获(旧任务),前端不显示徽章。
+    asr_provider: str | None = None
+    asr_engine: str | None = None
+    asr_variant: str | None = None
+    llm_provider: str | None = None
 
     @staticmethod
     def detected_summary_style_from_options(options: dict | None) -> str | None:

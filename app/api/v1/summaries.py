@@ -10,7 +10,15 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, MediaPrincipal, get_current_user, get_db, get_media_principal, get_stream_user
+from app.api.deps import (
+    CurrentUser,
+    MediaPrincipal,
+    get_admin_user,
+    get_current_user,
+    get_db,
+    get_media_principal,
+    get_stream_user,
+)
 from app.api.v1.media import assert_owns_media_key, assert_public_media_access, serve_media_object
 from app.config import settings
 from app.core.exceptions import BusinessError
@@ -26,6 +34,8 @@ from app.schemas.summary import (
     SummaryItem,
     SummaryListResponse,
     SummaryRegenerateRequest,
+    SummaryTokenUsageItem,
+    SummaryTokenUsageResponse,
 )
 from app.services.media_url import build_media_download_url
 
@@ -61,11 +71,34 @@ def _to_summary_item(summary: Summary, image_url: str | None) -> SummaryItem:
         model_used=summary.model_used,
         prompt_version=summary.prompt_version,
         token_count=summary.token_count,
+        prompt_slug=summary.prompt_slug,
+        quality_tier=summary.quality_tier,
         created_at=summary.created_at,
         visual_format=summary.visual_format,
         image_url=image_url,
         image_model_used=summary.image_model_used,
         images=images,
+    )
+
+
+def _build_token_usage_response(task_id: str, summaries: list[Summary]) -> SummaryTokenUsageResponse:
+    """把活跃摘要的真实 token 用量汇总成管理员响应(纯函数,便于单测)。"""
+    items = [
+        SummaryTokenUsageItem(
+            summary_type=s.summary_type,
+            model_used=s.model_used,
+            input_tokens=s.input_tokens,
+            output_tokens=s.output_tokens,
+            token_count=s.token_count,
+        )
+        for s in summaries
+    ]
+    return SummaryTokenUsageResponse(
+        task_id=task_id,
+        total=len(items),
+        total_input_tokens=sum(i.input_tokens or 0 for i in items),
+        total_output_tokens=sum(i.output_tokens or 0 for i in items),
+        items=items,
     )
 
 
@@ -100,6 +133,27 @@ async def get_summaries(
         items.append(_to_summary_item(summary, image_url))
 
     response = SummaryListResponse(task_id=task_id, total=len(items), items=items)
+    return success(data=jsonable_encoder(response))
+
+
+@router.get("/{task_id}/token-usage")
+async def get_summary_token_usage(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    _admin: CurrentUser = Depends(get_admin_user),
+) -> JSONResponse:
+    """管理员专属:某任务各摘要的真实 LLM token 用量(input/output)。
+
+    成本/token 不进普通用户响应(防暴露成本结构 / 间接泄 prompt 长度);PR5 已把真实用量落到
+    Summary.input_tokens/output_tokens,本端点据此读出,经 get_admin_user 网关仅管理员可见。
+    """
+    summary_stmt = (
+        select(Summary)
+        .where(Summary.task_id == task_id, Summary.is_active.is_(True))
+        .order_by(Summary.summary_type, Summary.version.desc())
+    )
+    summaries = (await db.execute(summary_stmt)).scalars().all()
+    response = _build_token_usage_response(task_id, list(summaries))
     return success(data=jsonable_encoder(response))
 
 
