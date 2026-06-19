@@ -6,7 +6,7 @@ original_content;配图项不含 model_id/error。与私有 schema 物理隔离,
 
 PublicYouTubeInfo 仅透出 YouTube 公开元数据(视频 ID/标题/封面/时长/频道名等),
 不含任何用户绑定字段(user_id/subscription_id/last_synced_at/账号凭据)。
-封面 URL 由 video_id 推算(YouTube 标准格式),无需调 API。
+封面 thumbnail_url 是同源代理相对路径(由 video_id 拼出),无需调 API。
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ class PublicYouTubeInfo(BaseModel):
 
     安全叙事:
     - 透出:video_id/title/thumbnail_url/duration_seconds/channel_id/channel_title
-      均为 YouTube 公开内容,封面 URL 由 video_id 推算(i.ytimg.com 标准格式)。
+      均为 YouTube 公开内容,thumbnail_url 是同源代理相对路径(由 video_id 拼出,后端代抓 i.ytimg.com)。
     - 裁掉(私有/无来源):user_id/subscription_id/last_synced_at/access_token/
       refresh_token/description(未缓存)/view_count/like_count/comment_count(未缓存)/
       channel_thumbnail(未缓存)。公开端点无用户上下文,只从 source_url 提取 video_id。
@@ -35,6 +35,18 @@ class PublicYouTubeInfo(BaseModel):
     channel_title: str | None = None
 
 
+class PublicOwner(BaseModel):
+    """公开内容的发布者展示身份——仅 name + avatar_url 两个展示用字段。
+
+    绝不含 user_id 等内部标识(用 is_owner 布尔做归属判断,见 PublicTaskListItem.is_owner)。
+    数据来自发布时本地捕获的 UserProfile.display_name/avatar_url;未捕获则整体为 None。
+    avatar_url 是 Google/GitHub 图床原始 URL,前端经同源头像代理加载。
+    """
+
+    name: str | None = None
+    avatar_url: str | None = None
+
+
 class PublicTaskListItem(BaseModel):
     id: str
     title: str | None
@@ -43,8 +55,11 @@ class PublicTaskListItem(BaseModel):
     detected_language: str | None
     detected_summary_style: str | None = None
     published_at: datetime | None
-    cover_url: str | None = None  # 首张 ready 摘要配图的 OSS 直链(无则 None);封面统一用配图,不用 YouTube 缩略图
+    cover_url: str | None = None  # 封面:YouTube 任务=同源代理缩略图直链,上传任务=首张 ready 配图 OSS 直链;无则 None
+    cover_fallback_url: str | None = None  # 封面回落:YouTube 任务的 AI 配图(主封面加载失败时前端切它);无则 None
     excerpt: str | None = None  # active overview 摘要正文前 ~80 字(剥 markdown);无则 None
+    owner: PublicOwner | None = None  # 发布者展示身份(name+avatar);未捕获则 None,前端不渲染
+    is_owner: bool = False  # 当前请求者(带 token 时)是否为本任务 owner;匿名恒 False。前端据此跳私有详情
 
 
 class PublicTaskDetailResponse(BaseModel):
@@ -64,6 +79,8 @@ class PublicTaskDetailResponse(BaseModel):
     published_at: datetime | None
     created_at: datetime
     youtube_info: PublicYouTubeInfo | None = None
+    owner: PublicOwner | None = None  # 发布者展示身份(name+avatar);未捕获则 None
+    is_owner: bool = False  # 当前请求者是否为本任务 owner;匿名恒 False
 
 
 class PublicTranscriptItem(BaseModel):

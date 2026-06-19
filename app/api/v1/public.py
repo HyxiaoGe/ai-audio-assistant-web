@@ -9,17 +9,18 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db
+from app.api.deps import CurrentUser, get_db, get_public_viewer
 from app.config import settings
 from app.core.rate_limit import rate_limit_by_ip
 from app.core.response import success
 from app.core.security import SCOPE_MEDIA, issue_scoped_token
+from app.core.youtube_thumbnail import YouTubeThumbnailError, fetch_thumbnail
 from app.models.summary import Summary
 from app.models.transcript import Transcript
 from app.schemas.common import PageResponse
@@ -51,8 +52,8 @@ _rate_limit = rate_limit_by_ip(limit=settings.RATE_LIMIT_PUBLIC_PER_MIN, scope="
 _PUBLIC_CACHE_CONTROL = "public, max-age=60, s-maxage=60, stale-while-revalidate=60"
 
 
-def _cacheable(resp: JSONResponse) -> JSONResponse:
-    """只给「业务成功(code==0)」响应贴边缘缓存头。
+def _cacheable(resp: JSONResponse, *, personalized: bool = False) -> JSONResponse:
+    """只给「业务成功(code==0)且非个性化」响应贴边缘缓存头。
 
     本项目错误信封是 HTTP 200(TASK_NOT_FOUND/限流/DB 错全走异常处理器返回
     200+错误 code),绝不能让错误信封被边缘缓存——否则刚公开的任务会在 PoP 上缓存
@@ -60,8 +61,12 @@ def _cacheable(resp: JSONResponse) -> JSONResponse:
     对象上;任何异常在 return 前 raise,走 app/main.py 的异常处理器重新构造响应
     (error() 不带本头)。注意 FastAPI 对「路由直接返回 Response」不会合并注入的
     response 参数头(fastapi/routing.py raw_response 分支),所以必须贴在这里。
+
+    personalized=True(带 token 的请求,响应含随观看者变化的 is_owner)时绝不贴缓存头——
+    否则某 owner 的 is_owner=True 会被边缘缓存后回给匿名用户(归属误判 + 隐私泄露)。
     """
-    resp.headers["Cache-Control"] = _PUBLIC_CACHE_CONTROL
+    if not personalized:
+        resp.headers["Cache-Control"] = _PUBLIC_CACHE_CONTROL
     return resp
 
 
@@ -70,23 +75,53 @@ async def list_public_tasks(
     db: AsyncSession = Depends(get_db),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=50),
+    viewer: CurrentUser | None = Depends(get_public_viewer),
     _rl: None = Depends(_rate_limit),
 ) -> JSONResponse:
-    """公开任务列表(仅 is_public+completed+未删),按发布时间倒序分页。"""
-    items, total = await TaskService.list_public_tasks(db, page, page_size)
+    """公开任务列表(仅 is_public+completed+未删),按发布时间倒序分页。
+
+    带合法 token 时透出 viewer_id 供计算 is_owner(本人公开内容前端跳私有详情);匿名恒 False。
+    注意:is_owner 随观看者变化,不能进边缘缓存——见 _cacheable(带 token 时跳过缓存头)。
+    """
+    viewer_id = viewer.id if viewer else None
+    items, total = await TaskService.list_public_tasks(db, page, page_size, viewer_id=viewer_id)
     response = PageResponse[PublicTaskListItem](items=items, total=total, page=page, page_size=page_size)
-    return _cacheable(success(data=jsonable_encoder(response)))
+    return _cacheable(success(data=jsonable_encoder(response)), personalized=viewer_id is not None)
 
 
 @router.get("/tasks/{task_id}")
 async def get_public_task_detail(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    viewer: CurrentUser | None = Depends(get_public_viewer),
     _rl: None = Depends(_rate_limit),
 ) -> JSONResponse:
-    """公开任务详情(白名单字段;非公开/不存在/未完成一律 TASK_NOT_FOUND)。"""
-    detail = await TaskService.get_public_task_detail(db, task_id)
-    return _cacheable(success(data=jsonable_encoder(detail)))
+    """公开任务详情(白名单字段;非公开/不存在/未完成一律 TASK_NOT_FOUND)。
+
+    带合法 token 时透出 viewer_id 供计算 is_owner;匿名恒 False。is_owner 个性化时跳过边缘缓存。
+    """
+    viewer_id = viewer.id if viewer else None
+    detail = await TaskService.get_public_task_detail(db, task_id, viewer_id=viewer_id)
+    return _cacheable(success(data=jsonable_encoder(detail)), personalized=viewer_id is not None)
+
+
+@router.get("/youtube-thumbnail/{video_id}")
+def get_youtube_thumbnail(video_id: str) -> Response:
+    """同源代理 YouTube 缩略图(匿名;探索广场封面卡用)。
+
+    绕开国内直连 i.ytimg.com 慢/被墙。无需鉴权——缩略图本身公开,浏览器 ``<img>`` 也不带 Bearer。
+    安全边界在 ``youtube_thumbnail`` 内(video_id 严格正则 + 服务端固定 host 拼 URL + 不跟随
+    重定向 + 体积/类型限制),无 SSRF 面。强缓存一周,从每浏览器收敛到一次服务端抓取。
+    """
+    try:
+        body, content_type = fetch_thumbnail(video_id)
+    except YouTubeThumbnailError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return Response(
+        content=body,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
 
 
 @router.get("/tasks/{task_id}/transcripts")

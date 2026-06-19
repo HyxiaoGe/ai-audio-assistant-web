@@ -56,7 +56,10 @@ def test_downgrade_sql_drops_provenance_columns() -> None:
     assert "drop column quality_tier" in sql
 
 
-def test_single_alembic_head_is_new_revision() -> None:
+def test_single_alembic_head_no_fork() -> None:
+    # a0b1c2d3e4f5 已不是最新 head(其上有发布者身份字段迁移 b1c2d3e4f5a6),故此处只校验
+    # 迁移链无分叉(单 head),不再 pin 具体 head 字符串——head pin 的 canary 留给 notification /
+    # summaries_images 两处。
     env = {**os.environ, **_ENV}
     out = subprocess.run(
         [sys.executable, "-m", "alembic", "heads"],
@@ -67,4 +70,3 @@ def test_single_alembic_head_is_new_revision() -> None:
     assert out.returncode == 0, out.stderr
     heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
     assert len(heads) == 1, f"alembic 出现多 head:{out.stdout}"
-    assert _NEW_REV in heads[0]

@@ -80,15 +80,27 @@ class TestUserProfileModel:
         assert "app_settings" in cols
         assert "status" in cols
 
-    def test_no_identity_columns(self):
+    def test_no_authoritative_identity_columns(self):
+        """权威身份(登录态实时读取)仍归 auth-service,本地 profile 不得镜像这些字段。
+
+        例外:display_name/avatar_url 是「公开任务发布时」的展示快照(见下),非权威身份——
+        audio 后端拿不到任意用户的 name/avatar,只能在握有 owner token 时回源 auth-service
+        捕获一份用于探索广场展示。故它们刻意在表上,但 email/phone/locale/timezone/settings
+        这些 auth-service 权威字段一律不得本地化。
+        """
         cols = {c.name for c in UserProfile.__table__.columns}
         assert "email" not in cols
         assert "name" not in cols
-        assert "avatar_url" not in cols
         assert "phone" not in cols
         assert "locale" not in cols
         assert "timezone" not in cols
         assert "settings" not in cols
+
+    def test_publisher_display_snapshot_columns(self):
+        """发布者展示快照字段(公开内容「由谁公开」)刻意存在于本地 profile。"""
+        cols = {c.name for c in UserProfile.__table__.columns}
+        assert "display_name" in cols
+        assert "avatar_url" in cols
 
 
 # ── App preferences (local layer only) ──

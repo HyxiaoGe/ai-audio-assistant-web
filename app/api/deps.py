@@ -79,6 +79,23 @@ async def get_current_user_optional(
     return await get_current_user(db, authorization)
 
 
+async def get_public_viewer(
+    db: AsyncSession = Depends(get_db),
+    authorization: str | None = Header(default=None),
+) -> CurrentUser | None:
+    """公开探索端点的「可选观看者」:用于计算 is_owner(归属跳转),无任何授权语义。
+
+    有合法登录态则解析出 CurrentUser;无 token / token 无效 / 过期一律回落匿名 None——坏 token
+    绝不能打断匿名浏览(与 get_current_user_optional「坏 token propagate」刻意不同)。
+    """
+    if not authorization:
+        return None
+    try:
+        return await get_current_user(db, authorization)
+    except BusinessError:
+        return None
+
+
 async def get_current_user_from_query(
     db: AsyncSession = Depends(get_db),
     token: str | None = Query(default=None, description="JWT token"),
@@ -94,9 +111,7 @@ async def get_current_user_from_query(
     return await _resolve_user(db, token)
 
 
-def _scoped_user(
-    token: str, *, expected_scope: str, resource: dict[str, str] | None = None
-) -> CurrentUser:
+def _scoped_user(token: str, *, expected_scope: str, resource: dict[str, str] | None = None) -> CurrentUser:
     """Authenticate a short-lived scoped ticket carried in ``?token=``.
 
     Raises ``AUTH_TOKEN_EXPIRED`` / ``AUTH_TOKEN_INVALID`` directly. The legacy
@@ -166,9 +181,7 @@ async def get_media_principal(
         if not isinstance(resource, dict) or not isinstance(resource.get("public_task"), str):
             raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
         public_task_id = resource["public_task"]
-    return MediaPrincipal(
-        user=CurrentUser(id=str(claims["sub"]), email=""), public_task_id=public_task_id
-    )
+    return MediaPrincipal(user=CurrentUser(id=str(claims["sub"]), email=""), public_task_id=public_task_id)
 
 
 async def get_stream_user(

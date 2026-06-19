@@ -19,15 +19,18 @@ from app.api.deps import CurrentUser, is_admin_user
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.registry import ServiceRegistry
+from app.core.youtube_thumbnail import public_thumbnail_path
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
-from app.schemas.public import PublicTaskDetailResponse, PublicTaskListItem, PublicYouTubeInfo
+from app.models.user import UserProfile
+from app.schemas.public import PublicOwner, PublicTaskDetailResponse, PublicTaskListItem, PublicYouTubeInfo
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem, TaskVisibilityResponse
 from app.services.asr_quota_service import check_any_provider_available
 from app.services.media_url import build_media_download_url, build_presigned_media_url
 from app.services.summary.excerpt import summary_excerpt
 from app.services.summary.public_image import first_ready_image_url, public_summary_image_url
+from app.services.user_preferences import fetch_auth_identity
 
 logger = logging.getLogger(__name__)
 
@@ -416,7 +419,9 @@ class TaskService:
         return task
 
     @staticmethod
-    async def list_public_tasks(db: AsyncSession, page: int, page_size: int) -> tuple[list[PublicTaskListItem], int]:
+    async def list_public_tasks(
+        db: AsyncSession, page: int, page_size: int, viewer_id: str | None = None
+    ) -> tuple[list[PublicTaskListItem], int]:
         base_query = select(Task).where(
             Task.is_public.is_(True),
             Task.status == "completed",
@@ -431,22 +436,56 @@ class TaskService:
 
         # 本页任务的封面/摘录:一次批量 IN 查 active overview 摘要(防 N+1),内存按 task_id 归并。
         enrichment = await TaskService._public_list_enrichment(db, [str(row.id) for row in rows])
+        # 本页发布者身份:一次批量 IN 查 UserProfile(防 N+1),按 user_id 归并。
+        owners = await TaskService._load_public_owners(db, list({str(row.user_id) for row in rows}))
 
-        items = [
-            PublicTaskListItem(
-                id=str(row.id),
-                title=row.title,
-                source_type=row.source_type,
-                duration_seconds=row.duration_seconds,
-                detected_language=row.detected_language,
-                detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(row.options),
-                published_at=row.published_at,
-                cover_url=enrichment.get(str(row.id), (None, None))[0],
-                excerpt=enrichment.get(str(row.id), (None, None))[1],
+        items = []
+        for row in rows:
+            ai_cover, excerpt = enrichment.get(str(row.id), (None, None))
+            cover_url, cover_fallback_url = TaskService._resolve_public_cover(row, ai_cover)
+            items.append(
+                PublicTaskListItem(
+                    id=str(row.id),
+                    title=row.title,
+                    source_type=row.source_type,
+                    duration_seconds=row.duration_seconds,
+                    detected_language=row.detected_language,
+                    detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(row.options),
+                    published_at=row.published_at,
+                    cover_url=cover_url,
+                    cover_fallback_url=cover_fallback_url,
+                    excerpt=excerpt,
+                    owner=owners.get(str(row.user_id)),
+                    is_owner=viewer_id is not None and str(row.user_id) == viewer_id,
+                )
             )
-            for row in rows
-        ]
         return items, total
+
+    @staticmethod
+    def _resolve_public_cover(task: Task, ai_image_url: str | None) -> tuple[str | None, str | None]:
+        """探索封面决策 → (cover_url, cover_fallback_url)。
+
+        YouTube 任务:封面用同源代理缩略图(绕开国内直连 i.ytimg.com 慢/被墙),AI 配图作回落
+        (前端主封面加载失败时切它)。其余(上传)任务:封面=AI 配图,无 YouTube 缩略图可代理故无回落。
+        """
+        if task.source_type == "youtube" and task.source_url:
+            video_id = TaskService._extract_youtube_video_id(task.source_url)
+            if video_id:
+                return public_thumbnail_path(video_id), ai_image_url
+        return ai_image_url, None
+
+    @staticmethod
+    async def _load_public_owners(db: AsyncSession, user_ids: list[str]) -> dict[str, PublicOwner]:
+        """{user_id: PublicOwner}——一次批量 IN 查 UserProfile。仅有 display_name 的才算可展示发布者。
+
+        老数据 / 未捕获(display_name 为空)的不进结果 → 对应任务 owner=None,前端不渲染发布者。
+        """
+        if not user_ids:
+            return {}
+        profiles = (await db.execute(select(UserProfile).where(UserProfile.id.in_(user_ids)))).scalars().all()
+        return {
+            str(p.id): PublicOwner(name=p.display_name, avatar_url=p.avatar_url) for p in profiles if p.display_name
+        }
 
     @staticmethod
     async def _public_list_enrichment(
@@ -484,15 +523,16 @@ class TaskService:
     def _build_public_youtube_info(task: Task) -> PublicYouTubeInfo | None:
         """从公开可访问信息构建 youtube_info,不依赖用户账号或 YouTube API。
 
-        video_id 从 source_url 提取;缩略图 URL 由 video_id 推算(YouTube 标准格式,
-        无需鉴权);channel/统计等无来源的字段置 None。
+        video_id 从 source_url 提取;缩略图走同源代理相对路径(由 video_id 拼出,后端代抓
+        i.ytimg.com);channel/统计等无来源的字段置 None。
         """
         if task.source_type != "youtube" or not task.source_url:
             return None
         video_id = TaskService._extract_youtube_video_id(task.source_url)
         if not video_id:
             return None
-        thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+        # 缩略图走同源代理(绕开国内直连 i.ytimg.com 慢/被墙),相对路径避免 CORS。
+        thumbnail_url = public_thumbnail_path(video_id)
         return PublicYouTubeInfo(
             video_id=video_id,
             title=task.title,
@@ -503,7 +543,9 @@ class TaskService:
         )
 
     @staticmethod
-    async def get_public_task_detail(db: AsyncSession, task_id: str) -> PublicTaskDetailResponse:
+    async def get_public_task_detail(
+        db: AsyncSession, task_id: str, viewer_id: str | None = None
+    ) -> PublicTaskDetailResponse:
         task = await TaskService.get_public_task(db, task_id)
         audio_url = None
         audio_direct_url = None
@@ -515,6 +557,7 @@ class TaskService:
             # 签发失败置 None 不抛错,前端优先直链、失败回落 audio_url 代理路径。
             audio_direct_url = await build_presigned_media_url(task.source_key, _PUBLIC_AUDIO_PRESIGN_EXPIRES)
         youtube_info = TaskService._build_public_youtube_info(task)
+        owner = (await TaskService._load_public_owners(db, [str(task.user_id)])).get(str(task.user_id))
         return PublicTaskDetailResponse(
             id=str(task.id),
             title=task.title,
@@ -528,11 +571,13 @@ class TaskService:
             published_at=task.published_at,
             created_at=task.created_at,
             youtube_info=youtube_info,
+            owner=owner,
+            is_owner=viewer_id is not None and str(task.user_id) == viewer_id,
         )
 
     @staticmethod
     async def update_task_visibility(
-        db: AsyncSession, user: CurrentUser, task_id: str, is_public: bool
+        db: AsyncSession, user: CurrentUser, task_id: str, is_public: bool, token: str | None = None
     ) -> TaskVisibilityResponse:
         """管理员把「自己的」任务设为公开/取消公开。
 
@@ -540,6 +585,9 @@ class TaskService:
         - 仅 completed 可公开(处理中/失败任务对外无完整内容);
         - 幂等:已公开再公开不刷新 published_at;取消公开清空 published_at,
           下次重新公开拿新发布时间(探索页按其倒序)。
+        - 公开时(握有发布者 token)捕获其 name/avatar 落本地 UserProfile,供匿名探索端点展示
+          「内容由谁公开」;捕获 best-effort,失败不阻断公开(见 _capture_publisher_identity)。
+          每次 publish 都重捕一次 → 管理员改了头像/名字,重新点公开即可刷新快照。
         """
         task = (
             await db.execute(
@@ -558,11 +606,32 @@ class TaskService:
             if not task.is_public:
                 task.is_public = True
                 task.published_at = datetime.now(UTC)
+            await TaskService._capture_publisher_identity(db, user.id, token)
         else:
             task.is_public = False
             task.published_at = None
         await db.commit()
         return TaskVisibilityResponse(id=str(task.id), is_public=task.is_public, published_at=task.published_at)
+
+    @staticmethod
+    async def _capture_publisher_identity(db: AsyncSession, user_id: str, token: str | None) -> None:
+        """公开任务时,用发布者 token 回源 auth-service 抓 name/avatar,upsert 到 UserProfile。
+
+        与发布同一事务提交(本函数只改 session、不 commit):仅 fetch 这一步可能失败,已被
+        fetch_auth_identity 吞成 (None, None) → 无身份则直接返回不动 profile,发布照常提交。
+        无 token(非常规调用路径)直接跳过。
+        """
+        if not token:
+            return
+        name, avatar_url = await fetch_auth_identity(token)
+        if name is None and avatar_url is None:
+            return
+        profile = await db.get(UserProfile, UUID(user_id))
+        if profile is None:
+            profile = UserProfile(id=UUID(user_id))
+            db.add(profile)
+        profile.display_name = name
+        profile.avatar_url = avatar_url
 
     @staticmethod
     async def get_status_counts(db: AsyncSession, user: CurrentUser) -> dict[str, int]:
