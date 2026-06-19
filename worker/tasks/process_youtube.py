@@ -33,11 +33,10 @@ from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import TranscriptSegment, WordTimestamp
 from app.services.asr_quota_service import record_usage_sync
+from app.services.llm.base import LLMService
 from app.services.notifications.service import NotificationService
 from app.services.notifications.types import NotificationType
 from app.services.rag import ingest_task_chunks_sync
-from app.services.summary.markdown_fence import strip_markdown_fence
-from app.services.summary.preamble import strip_summary_preamble
 from app.services.summary.style_catalog import normalize_content_style
 from app.services.summary.style_resolution import (
     is_auto_style,
@@ -55,6 +54,7 @@ from worker.tasks.image_generator import (
     build_image_specs,
     is_auto_images_enabled,
 )
+from worker.tasks.summary_generator import _generate_single_summary
 
 logger = logging.getLogger("worker.process_youtube")
 
@@ -221,6 +221,26 @@ def _effective_asr_variant(transcribe: Any, asr_variant: str) -> str:
     if "asr_variant" in inspect.signature(transcribe).parameters:
         return asr_variant
     return "file"
+
+
+def _apply_asr_provenance(
+    task: Task,
+    asr_service: Any,
+    asr_provider: str,
+    asr_variant: str,
+) -> None:
+    """把这次实跑的 ASR provider/变体/引擎写回 Task(溯源），与 process_audio 同口径。
+
+    engine_for_variant 与 transcribe 内部选择同源，确保记录==实际；无引擎概念的 provider
+    (aliyun/volcengine)返回 None → asr_engine 列留 NULL。getattr 兜底非 ASRService 的测试替身。
+    此前 process_youtube 只写 asr_provider，漏了 asr_variant/asr_engine（YouTube 任务恒 NULL）。
+    """
+    task.asr_provider = asr_provider
+    task.asr_variant = asr_variant
+    _engine_for = getattr(asr_service, "engine_for_variant", None)
+    task.asr_engine = _engine_for(asr_variant) if callable(_engine_for) else None
+    if isinstance(task.options, dict):
+        task.options["asr_variant"] = asr_variant
 
 
 def _segments_from_transcripts(transcripts: list[Transcript]) -> list[TranscriptSegment]:
@@ -770,6 +790,42 @@ def _mark_failed(session: Session, task: Task, error: BusinessError, request_id:
         )
 
 
+async def _summarize_one(
+    task: Task,
+    summary_type: str,
+    full_text: str,
+    content_style: str,
+    llm_service: LLMService,
+) -> Summary:
+    """生成单条摘要并带上 prompt 溯源(slug/真版本)+真实 token 用量，与 process_audio 同口径。
+
+    复用 summary_generator._generate_single_summary（已内含剥围栏/开场白 + 返回 prompt metadata），
+    取代此前 process_youtube 自有的裸 llm_service.summarize()（丢弃用量、不带 slug/version，
+    且把 content_style 当 variable 而非样式选择键）。
+    """
+    content, meta = await _generate_single_summary(
+        text=full_text,
+        summary_type=summary_type,
+        content_style=content_style,
+        quality_notice="",
+        llm_service=llm_service,
+    )
+    return Summary(
+        task_id=task.id,
+        summary_type=summary_type,
+        version=1,
+        is_active=True,
+        content=content,
+        model_used=llm_service.model_name,
+        prompt_slug=meta.get("slug"),
+        prompt_version=meta.get("version"),
+        input_tokens=meta.get("input_tokens"),
+        output_tokens=meta.get("output_tokens"),
+        # 真实 output token 优先；provider 未透出用量时回落字符数近似(向后兼容)。
+        token_count=meta.get("output_tokens") or len(content),
+    )
+
+
 def _init_overview_images(summary: Summary, content_style: str | None) -> bool:
     """为 overview summary 初始化 images=[{status:"pending"}…] 并保留 content 占位锚点。
 
@@ -1222,9 +1278,7 @@ def _process_youtube(
                 # 钉死 provider 按 file_fast 多收（D5-variant）。
                 asr_variant = _effective_asr_variant(asr_service.transcribe, asr_variant)
                 if asr_provider:
-                    task.asr_provider = asr_provider
-                    if isinstance(task.options, dict):
-                        task.options["asr_variant"] = asr_variant
+                    _apply_asr_provenance(task, asr_service, asr_provider, asr_variant)
                     session.commit()
                 provider_name = asr_service.provider or "unknown"
 
@@ -1574,7 +1628,7 @@ def _process_youtube(
                         },
                     )
                     try:
-                        content = asyncio.run(llm_service.summarize(full_text, summary_type, content_style))
+                        summary = asyncio.run(_summarize_one(task, summary_type, full_text, content_style, llm_service))
                     except Exception:
                         if llm_provider:
                             llm_usages.append(
@@ -1591,18 +1645,15 @@ def _process_youtube(
                             session.add_all(llm_usages)
                             session.commit()
                         raise
-                    # LLM 偶发把整段散文包进 ```markdown 围栏，落库前在源头剥掉（与前端渲染防御同语义）
-                    # 再剥掉偶发逸出的客套/元描述开场白（先剥围栏再剥开场白）
-                    content = strip_summary_preamble(strip_markdown_fence(content))
                     logger.info(
                         "Task %s: Generated %s summary (%d characters)",
                         task_id,
                         summary_type,
-                        len(content),
+                        len(summary.content),
                         extra={
                             "task_id": task_id,
                             "summary_type": summary_type,
-                            "content_length": len(content),
+                            "content_length": len(summary.content),
                         },
                     )
                     if llm_provider:
@@ -1617,18 +1668,7 @@ def _process_youtube(
                                 status="success",
                             )
                         )
-                    summaries.append(
-                        Summary(
-                            task_id=task.id,
-                            summary_type=summary_type,
-                            version=1,
-                            is_active=True,
-                            content=content,
-                            model_used=llm_service.model_name,
-                            prompt_version=None,
-                            token_count=None,
-                        )
-                    )
+                    summaries.append(summary)
                 session.add_all(summaries)
                 if llm_usages:
                     session.add_all(llm_usages)
