@@ -4,7 +4,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.sql.dml import Insert
 
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
@@ -27,15 +28,35 @@ class _ScalarResult:
         return self._value
 
 
+class _RowcountResult:
+    """INSERT … ON CONFLICT DO NOTHING 的执行结果:rowcount=1 表示插入成功,0 表示命中冲突未插入。"""
+
+    def __init__(self, rowcount: int) -> None:
+        self.rowcount = rowcount
+
+
 class _FakeSession:
-    def __init__(self, *results: Any, commit_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *results: Any,
+        commit_error: Exception | None = None,
+        insert_rowcounts: list[int] | None = None,
+    ) -> None:
         self._results = list(results)
         self._commit_error = commit_error
+        # 每次 INSERT 执行返回的 rowcount(按序消费);耗尽后默认 1(插入成功)。
+        self._insert_rowcounts = list(insert_rowcounts or [])
         self.added: list[Any] = []
         self.committed = False
         self.rolled_back = False
 
-    async def execute(self, query: object) -> _ScalarResult:
+    async def execute(self, query: object) -> Any:
+        if isinstance(query, Insert):
+            # 还原 INSERT 的列值,使断言仍可读 added[0].style 等字段(与旧 db.add 行为对齐)。
+            params = dict(query.compile(dialect=postgresql.dialect()).params)
+            self.added.append(YouTubeSummaryStyleRecommendation(**params))
+            rowcount = self._insert_rowcounts.pop(0) if self._insert_rowcounts else 1
+            return _RowcountResult(rowcount)
         if not self._results:
             raise AssertionError(f"Unexpected query: {query}")
         return _ScalarResult(self._results.pop(0))
@@ -208,12 +229,15 @@ async def test_recommend_summary_style_for_video_returns_concurrent_cached_resul
         confidence=0.88,
         reason="Concurrent cached recommendation",
     )
+    # 并发首算:本请求算完插入时另一请求已抢先插入。ON CONFLICT DO NOTHING 让冲突在语句内消解
+    # (rowcount==0、不抛 IntegrityError、PG 不记 duplicate key ERROR → 不触发飞书告警),随后回读
+    # 赢家那条返回。
     session = _FakeSession(
         video,
         subscription,
-        None,
-        cached,
-        commit_error=IntegrityError("insert", {}, Exception("duplicate key")),
+        None,  # 首次缓存未命中
+        cached,  # ON CONFLICT 后回读到赢家
+        insert_rowcounts=[0],  # 插入命中冲突 → 0 行
     )
     llm = _FakeLLM('{"style":"tutorial","confidence":0.84,"reason":"The metadata is clearly instructional."}')
 
@@ -228,7 +252,7 @@ async def test_recommend_summary_style_for_video_returns_concurrent_cached_resul
     assert result.style == "tutorial"
     assert result.reason == "Concurrent cached recommendation"
     assert result.cached is True
-    assert session.rolled_back is True
+    assert session.rolled_back is False  # ON CONFLICT 路径无需回滚
 
 
 @pytest.mark.asyncio
