@@ -258,3 +258,74 @@ def test_publish_image_ready_global_envelope(monkeypatch) -> None:
     assert env["status"] == "ready"
     assert env["url"].endswith("h.png")
     assert env["model_id"] == "gemini-3-pro-image-preview"
+
+
+# ===== 溯源 PR2:配图 provider 捕获 =====
+
+
+def test_build_image_specs_seeds_provider_none() -> None:
+    # 与 model_id 一样,pending 槽预埋 provider 键(初值 None),供生成后回写;
+    # 保证 JSONB 每项始终带 provider 键,前端/读取侧无需兜底缺键。
+    content = "正文一\n\n{{IMAGE: infographic | 小米战略 | 关键文字}}\n\n正文二"
+    _new_content, specs = ig.build_image_specs(content, "review")
+    assert len(specs) == 1
+    assert "provider" in specs[0]
+    assert specs[0]["provider"] is None
+
+
+def test_apply_image_result_persists_provider(monkeypatch) -> None:
+    # result 带 provider 时,镜像 model_id 的回写逻辑落库到对应项。
+    monkeypatch.setattr(ig, "flag_modified", lambda obj, attr: None)
+    images = [
+        {
+            "placeholder": "{{IMAGE: a | x | y}}",
+            "status": "pending",
+            "url": None,
+            "alt": "x",
+            "model_id": None,
+            "provider": None,
+            "error": None,
+        }
+    ]
+    summary = _FakeSummary(images)
+    session = _FakeSession(summary)
+    result = {
+        "placeholder": "{{IMAGE: a | x | y}}",
+        "status": "success",
+        "url": "/api/v1/summaries/images/u/t/h.webp",
+        "model_id": "doubao-seedream-4-5",
+        "provider": "image_service",
+    }
+    updated = ig.apply_image_result_to_summary(session, "sum-1", result)
+    assert updated["provider"] == "image_service"
+    assert summary.images[0]["provider"] == "image_service"
+
+
+async def test_generate_single_image_returns_resolved_provider_on_failure(monkeypatch) -> None:
+    # provider 在调用生图服务之前已解析(line ~562),即便后续生成失败,
+    # 返回的 result 也应带上已解析的 provider/model_id,这样 apply 能把「谁/用什么尝试过」落库。
+    class _FakePM:
+        def get_image_config(self, content_style):
+            return {"default_type": "infographic", "aspect_ratio": "16:9"}
+
+        def get_image_prompt(self, **kwargs):
+            return "the prompt"
+
+    class _BoomFactory:
+        @staticmethod
+        async def get_service(*a, **k):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(ig, "get_prompt_manager", lambda: _FakePM())
+    monkeypatch.setattr(
+        ig,
+        "get_auto_images_config",
+        lambda: {"image_model": {"provider": "image_service", "model_id": "doubao-seedream-4-5"}},
+    )
+    monkeypatch.setattr(ig, "SmartFactory", _BoomFactory)
+
+    item = {"placeholder": "{{IMAGE: a | x | y}}", "description": "x", "key_texts": []}
+    result = await ig.generate_single_image(item, "u", "t", content_style="general", locale="zh-CN", timeout=5)
+    assert result["status"] == "failed"
+    assert result["provider"] == "image_service"
+    assert result["model_id"] == "doubao-seedream-4-5"
