@@ -17,6 +17,7 @@ class SummaryImageItem(BaseModel):
     url: str | None = None
     alt: str = ""
     model_id: str | None = None
+    provider: str | None = None  # 生图 provider(如 image_service);JSONB 加 key,无需迁移
     error: str | None = None
 
 
