@@ -48,8 +48,17 @@ class YouTubeSubscription(BaseRecord):
 
     # Channel visibility and sync control
     is_hidden: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
+    # sync_enabled 是「用户手动开关」(PATCH settings 可写);sync_channel_videos 见其为 false 会 skip。
     sync_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"), nullable=False)
     is_starred: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
+
+    # Tier 2 懒加载:系统管理的冷/热位(独立于用户的 sync_enabled)。
+    # is_warm=false=冷(懒加载,不周期同步/不预热);用户真有行为(打开/转写/星标)才提级转热。
+    # 调度真正资格 = is_warm AND sync_enabled AND NOT needs_reauth。冷频道仍保持 sync_enabled=true,
+    # 故点开时的按需拉取不会被 sync_channel_videos 的 sync_enabled 守卫 skip。
+    is_warm: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
+    # 最近一次真实用户行为(打开/转写/星标)时间,供将来降级/观测用。
+    last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Auto-transcription settings
     auto_transcribe: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
@@ -84,5 +93,11 @@ class YouTubeSubscription(BaseRecord):
             "idx_youtube_subscriptions_next_sync",
             "next_sync_at",
             postgresql_where=text("sync_enabled = true"),
+        ),
+        # Tier 2 调度热路径:check_scheduled_syncs 将来按 (is_warm AND sync_enabled) 选行。
+        Index(
+            "idx_youtube_subscriptions_warm",
+            "next_sync_at",
+            postgresql_where=text("is_warm = true AND sync_enabled = true"),
         ),
     )
