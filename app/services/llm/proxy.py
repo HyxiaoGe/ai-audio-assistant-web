@@ -32,6 +32,25 @@ from app.services.llm.base import LLMService
 logger = logging.getLogger(__name__)
 
 
+def _normalize_usage(raw: object) -> dict[str, int | None] | None:
+    """把 OpenAI 兼容响应里的 usage 块归一为 {input_tokens, output_tokens, total_tokens}。
+
+    上游字段名是 prompt_tokens / completion_tokens / total_tokens；两者皆缺则视为无用量
+    （返回 None），调用方据此把 Summary 的 token 列留 NULL，而不是落入伪造值。
+    """
+    if not isinstance(raw, dict):
+        return None
+    prompt_tokens = raw.get("prompt_tokens")
+    completion_tokens = raw.get("completion_tokens")
+    if prompt_tokens is None and completion_tokens is None:
+        return None
+    return {
+        "input_tokens": prompt_tokens,
+        "output_tokens": completion_tokens,
+        "total_tokens": raw.get("total_tokens"),
+    }
+
+
 @register_service(
     "llm",
     "proxy",
@@ -98,12 +117,15 @@ class ProxyLLMService(LLMService):
         exceptions=(httpx.TimeoutException, httpx.NetworkError),
     )
     @monitor("llm", "proxy")
-    async def _request_chat_completion(self, payload: dict) -> str:
-        """实际的 HTTP 调用与解析。
+    async def _request_chat_completion(self, payload: dict) -> tuple[str, dict[str, int | None] | None]:
+        """实际的 HTTP 调用与解析，返回 (content, usage)。
 
         故意放行底层 httpx 异常（不在此层包成 BusinessError），以便外层 @retry 能识别
         TimeoutException / NetworkError 并真正重试瞬时故障；HTTPStatusError(4xx/5xx)
         不在重试白名单内，会直接上抛交由调用方映射。
+
+        usage 从上游响应解析并随返回值带出（不写实例状态）——代理实例被 SmartFactory 跨任务
+        缓存复用，写实例可变状态会在并发摘要间串号。
         """
         async with httpx.AsyncClient(base_url=self._base_url, timeout=120.0) as client:
             response = await client.post(
@@ -119,14 +141,15 @@ class ProxyLLMService(LLMService):
                     ErrorCode.AI_SUMMARY_GENERATION_FAILED,
                     reason="LiteLLM Proxy returned empty content",
                 )
-            return content
+            return content, _normalize_usage(result.get("usage"))
 
     @_circuit_breaker.protected
-    async def _guarded_call(self, payload: dict) -> str:
+    async def _guarded_call(self, payload: dict) -> tuple[str, dict[str, int | None] | None]:
         """在熔断器保护下完成调用，并把底层 httpx 异常映射为对外的 BusinessError。
 
         重试由 _request_chat_completion 内部完成；重试耗尽后上抛的原始 httpx 异常
         在此映射为 BusinessError，并由熔断器按 expected_exception 计入失败计数。
+        透传 (content, usage)。
         """
         try:
             return await self._request_chat_completion(payload)
@@ -165,8 +188,8 @@ class ProxyLLMService(LLMService):
                 reason=f"LiteLLM Proxy network error: {exc}",
             ) from exc
 
-    async def _call_api(self, payload: dict) -> str:
-        """非流式调用入口：熔断器打开时快速失败，并把熔断异常映射为 BusinessError。"""
+    async def _call_api(self, payload: dict) -> tuple[str, dict[str, int | None] | None]:
+        """非流式调用入口：熔断器打开时快速失败，并把熔断异常映射为 BusinessError。返回 (content, usage)。"""
         try:
             return await self._guarded_call(payload)
         except CircuitBreakerOpenError as exc:
@@ -289,7 +312,8 @@ class ProxyLLMService(LLMService):
             "max_tokens": prompt_config["model_params"].get("max_tokens", self._max_tokens),
             "temperature": prompt_config["model_params"].get("temperature", 0.7),
         }
-        return await self._call_api(payload)
+        content, _usage = await self._call_api(payload)
+        return content
 
     @monitor("llm", "proxy")
     async def summarize_stream(
@@ -322,6 +346,25 @@ class ProxyLLMService(LLMService):
         async for chunk in self._stream_api(payload):
             yield chunk
 
+    def _build_generate_payload(
+        self,
+        prompt: str,
+        system_message: str | None,
+        temperature: float | None,
+        max_tokens: int | None,
+    ) -> dict:
+        """构造 generate / generate_with_usage 共用的 chat 请求体（单一来源，避免漂移）。"""
+        messages: list[dict[str, str]] = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
+        return {
+            "model": self._model,
+            "messages": messages,
+            "max_tokens": max_tokens or self._max_tokens,
+            "temperature": temperature or 0.7,
+        }
+
     @monitor("llm", "proxy")
     async def generate(
         self,
@@ -331,17 +374,25 @@ class ProxyLLMService(LLMService):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> str:
-        messages: list[dict[str, str]] = []
-        if system_message:
-            messages.append({"role": "system", "content": system_message})
-        messages.append({"role": "user", "content": prompt})
+        payload = self._build_generate_payload(prompt, system_message, temperature, max_tokens)
+        content, _usage = await self._call_api(payload)
+        return content
 
-        payload = {
-            "model": self._model,
-            "messages": messages,
-            "max_tokens": max_tokens or self._max_tokens,
-            "temperature": temperature or 0.7,
-        }
+    @monitor("llm", "proxy")
+    async def generate_with_usage(
+        self,
+        prompt: str,
+        system_message: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> tuple[str, dict[str, int | None] | None]:
+        """同 generate，但额外返回上游真实 token 用量 {input_tokens, output_tokens, total_tokens}。
+
+        响应无 usage 块时返回 (content, None)。供摘要/章节路径落库真实 token，取代 token_count
+        旧的字符数近似。
+        """
+        payload = self._build_generate_payload(prompt, system_message, temperature, max_tokens)
         return await self._call_api(payload)
 
     @monitor("llm", "proxy")
@@ -355,7 +406,8 @@ class ProxyLLMService(LLMService):
             "max_tokens": kwargs.get("max_tokens", self._max_tokens),
             "temperature": kwargs.get("temperature", 0.7),
         }
-        return await self._call_api(payload)
+        content, _usage = await self._call_api(payload)
+        return content
 
     @monitor("llm", "proxy")
     async def chat_stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:

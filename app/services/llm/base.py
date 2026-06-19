@@ -99,6 +99,29 @@ class LLMService(ABC):
         """
         raise NotImplementedError
 
+    async def generate_with_usage(
+        self,
+        prompt: str,
+        system_message: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> tuple[str, dict[str, int | None] | None]:
+        """同 generate，但额外返回真实 token 用量 {input_tokens, output_tokens, total_tokens}。
+
+        默认实现：转调 generate 并返回 (text, None) —— 无法拿到用量的 provider 无需覆写，
+        调用方据 None 把 Summary 的 token 列留 NULL，不落伪造值。能拿到 usage 的 provider
+        （如 LiteLLM Proxy）覆写本方法返回真实用量。
+        """
+        content = await self.generate(
+            prompt,
+            system_message=system_message,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs,
+        )
+        return content, None
+
     @abstractmethod
     async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
         """通用对话接口（非流式）
