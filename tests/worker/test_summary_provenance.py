@@ -43,13 +43,14 @@ class _FakeLLM:
     provider = "proxy"
     model_name = "chat-default"
 
-    async def generate(self, prompt, system_message=None, temperature=0.7, max_tokens=1500):
-        return "这是生成的摘要正文内容"
+    # PR5 起 summary_generator 经 generate_with_usage 取内容+用量;此处用量返回 None。
+    async def generate_with_usage(self, prompt, system_message=None, temperature=0.7, max_tokens=1500):
+        return "这是生成的摘要正文内容", None
 
 
 class _FakeLLMChapters(_FakeLLM):
-    async def generate(self, prompt, system_message=None, temperature=0.3, max_tokens=1500):
-        return '{"total_chapters": 2, "chapters": [{"title": "一"}, {"title": "二"}]}'
+    async def generate_with_usage(self, prompt, system_message=None, temperature=0.3, max_tokens=1500):
+        return '{"total_chapters": 2, "chapters": [{"title": "一"}, {"title": "二"}]}', None
 
 
 async def test_generate_single_summary_returns_prompt_metadata(monkeypatch) -> None:

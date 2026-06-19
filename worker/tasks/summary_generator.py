@@ -26,6 +26,22 @@ from app.utils.transcript_processor import TranscriptProcessor
 logger = logging.getLogger(__name__)
 
 
+def _merge_prompt_and_usage(
+    prompt_meta: dict[str, Any] | None,
+    usage: dict[str, int | None] | None,
+) -> dict[str, Any]:
+    """把 prompt 溯源元数据(slug/version)与 LLM 真实 token 用量合并为单个落库 metadata。
+
+    usage 为 None(provider 未透出用量)时不写 token 键 → Summary 的 token 列留 NULL,
+    不落伪造值;调用方仍可从同一 dict 取 slug/version。
+    """
+    meta: dict[str, Any] = dict(prompt_meta or {})
+    if usage:
+        meta["input_tokens"] = usage.get("input_tokens")
+        meta["output_tokens"] = usage.get("output_tokens")
+    return meta
+
+
 async def generate_summaries_with_quality_awareness(
     task_id: str,
     segments: list[TranscriptSegment],
@@ -128,7 +144,10 @@ async def generate_summaries_with_quality_awareness(
                 model_used=llm_service.model_name,
                 prompt_slug=chapters_meta.get("slug"),
                 prompt_version=chapters_meta.get("version"),
-                token_count=len(json.dumps(chapters_data)),
+                input_tokens=chapters_meta.get("input_tokens"),
+                output_tokens=chapters_meta.get("output_tokens"),
+                # 真实 output token 优先；provider 未透出用量时回落字符数近似(向后兼容)。
+                token_count=chapters_meta.get("output_tokens") or len(json.dumps(chapters_data)),
             )
             session.add(chapters_summary)
 
@@ -170,7 +189,10 @@ async def generate_summaries_with_quality_awareness(
                 model_used=llm_service.model_name,
                 prompt_slug=prompt_meta.get("slug"),
                 prompt_version=prompt_meta.get("version"),
-                token_count=len(content),
+                input_tokens=prompt_meta.get("input_tokens"),
+                output_tokens=prompt_meta.get("output_tokens"),
+                # 真实 output token 优先；provider 未透出用量时回落字符数近似(向后兼容)。
+                token_count=prompt_meta.get("output_tokens") or len(content),
             )
             summaries.append(summary)
 
@@ -229,8 +251,8 @@ async def _generate_chapters(
         content_style=content_style,
     )
 
-    # 调用LLM进行章节划分
-    segmentation_result = await llm_service.generate(
+    # 调用LLM进行章节划分，并取回真实 token 用量
+    segmentation_result, usage = await llm_service.generate_with_usage(
         prompt=prompt_config["user_prompt"],
         system_message=prompt_config["system"],
         temperature=prompt_config["model_params"].get("temperature", 0.3),
@@ -255,8 +277,8 @@ async def _generate_chapters(
     if "total_chapters" not in chapters_data or "chapters" not in chapters_data:
         raise ValueError(f"Invalid chapter segmentation format for task {task_id}")
 
-    # 同摘要路径:连同 prompt 溯源元数据(slug + 真版本)返回,供章节 Summary 落库。
-    return chapters_data, prompt_config.get("metadata") or {}
+    # 同摘要路径:连同 prompt 溯源元数据(slug + 真版本)与真实 token 用量返回,供章节 Summary 落库。
+    return chapters_data, _merge_prompt_and_usage(prompt_config.get("metadata"), usage)
 
 
 async def _generate_single_summary(
@@ -287,8 +309,8 @@ async def _generate_single_summary(
         content_style=content_style,
     )
 
-    # 调用LLM生成摘要
-    content = await llm_service.generate(
+    # 调用LLM生成摘要，并取回真实 token 用量
+    content, usage = await llm_service.generate_with_usage(
         prompt=prompt_config["user_prompt"],
         system_message=prompt_config["system"],
         temperature=prompt_config["model_params"].get("temperature", 0.7),
@@ -298,6 +320,6 @@ async def _generate_single_summary(
     # LLM 偶发把整段散文包进 ```markdown 围栏，落库前在源头剥掉（与前端渲染防御同语义）
     # 再剥掉偶发逸出的客套/元描述开场白（先剥围栏再剥开场白）
     cleaned = strip_summary_preamble(strip_markdown_fence(content))
-    # 一并返回 prompt 溯源元数据(命中的 PromptHub slug + 真实版本),供调用方落库,
-    # 取代此前硬编码的 prompt_version="v1.2.0"。
-    return cleaned, prompt_config.get("metadata") or {}
+    # 一并返回 prompt 溯源元数据(命中的 PromptHub slug + 真实版本)与真实 token 用量,
+    # 供调用方落库,取代此前硬编码的 prompt_version="v1.2.0" 与字符数近似的 token_count。
+    return cleaned, _merge_prompt_and_usage(prompt_config.get("metadata"), usage)
