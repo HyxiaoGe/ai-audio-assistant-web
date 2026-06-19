@@ -8,7 +8,7 @@ import logging
 from dataclasses import dataclass
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -242,8 +242,12 @@ async def recommend_summary_style_for_video(
         duration_seconds=video.duration_seconds,
         locale=locale,
     )
-    db.add(
-        YouTubeSummaryStyleRecommendation(
+    # 并发预热 + 同步 GET 可能对同一 (user,video,metadata_hash,algorithm_version) 同时首算并插入。
+    # 用 ON CONFLICT DO NOTHING 让冲突在语句内消解:避免 PG 记录 duplicate key ERROR(会被推送到飞书
+    # 告警)、也省掉原先 IntegrityError 捕获 + 回滚那套。输家(rowcount==0)回读赢家结果返回。
+    insert_stmt = (
+        pg_insert(YouTubeSummaryStyleRecommendation)
+        .values(
             user_id=user_id,
             video_id=video_id,
             metadata_hash=metadata_hash,
@@ -252,11 +256,11 @@ async def recommend_summary_style_for_video(
             confidence=recommendation.confidence,
             reason=recommendation.reason,
         )
+        .on_conflict_do_nothing(constraint="uk_youtube_style_recommendation_cache")
     )
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
+    result = await db.execute(insert_stmt)
+    await db.commit()
+    if result.rowcount == 0:
         cached = await _get_cached_recommendation(
             db,
             user_id=user_id,
@@ -270,7 +274,6 @@ async def recommend_summary_style_for_video(
                 reason=cached.reason,
                 cached=True,
             )
-        raise
     return recommendation
 
 
