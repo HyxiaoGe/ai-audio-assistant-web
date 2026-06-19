@@ -110,7 +110,7 @@ async def generate_summaries_with_quality_awareness(
 
     if len(preprocessed_text) > 2000:
         try:
-            chapters_data = await _generate_chapters(
+            chapters_data, chapters_meta = await _generate_chapters(
                 task_id=task_id,
                 text=preprocessed_text,
                 content_style=content_style,
@@ -126,7 +126,8 @@ async def generate_summaries_with_quality_awareness(
                 is_active=True,
                 content=json.dumps(chapters_data, ensure_ascii=False),
                 model_used=llm_service.model_name,
-                prompt_version="v1.2.0",
+                prompt_slug=chapters_meta.get("slug"),
+                prompt_version=chapters_meta.get("version"),
                 token_count=len(json.dumps(chapters_data)),
             )
             session.add(chapters_summary)
@@ -152,7 +153,7 @@ async def generate_summaries_with_quality_awareness(
         logger.info(f"Task {task_id}: Generating {summary_type} summary (style: {content_style})")
 
         try:
-            content = await _generate_single_summary(
+            content, prompt_meta = await _generate_single_summary(
                 text=preprocessed_text,
                 summary_type=summary_type,
                 content_style=content_style,
@@ -167,7 +168,8 @@ async def generate_summaries_with_quality_awareness(
                 is_active=True,
                 content=content,
                 model_used=llm_service.model_name,
-                prompt_version="v1.2.0",
+                prompt_slug=prompt_meta.get("slug"),
+                prompt_version=prompt_meta.get("version"),
                 token_count=len(content),
             )
             summaries.append(summary)
@@ -205,7 +207,7 @@ async def _generate_chapters(
     content_style: str,
     quality_notice: str,
     llm_service: LLMService,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """生成章节划分
 
     Args:
@@ -253,7 +255,8 @@ async def _generate_chapters(
     if "total_chapters" not in chapters_data or "chapters" not in chapters_data:
         raise ValueError(f"Invalid chapter segmentation format for task {task_id}")
 
-    return chapters_data
+    # 同摘要路径:连同 prompt 溯源元数据(slug + 真版本)返回,供章节 Summary 落库。
+    return chapters_data, prompt_config.get("metadata") or {}
 
 
 async def _generate_single_summary(
@@ -262,7 +265,7 @@ async def _generate_single_summary(
     content_style: str,
     quality_notice: str,
     llm_service: LLMService,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     """生成单个摘要
 
     Args:
@@ -294,4 +297,7 @@ async def _generate_single_summary(
 
     # LLM 偶发把整段散文包进 ```markdown 围栏，落库前在源头剥掉（与前端渲染防御同语义）
     # 再剥掉偶发逸出的客套/元描述开场白（先剥围栏再剥开场白）
-    return strip_summary_preamble(strip_markdown_fence(content))
+    cleaned = strip_summary_preamble(strip_markdown_fence(content))
+    # 一并返回 prompt 溯源元数据(命中的 PromptHub slug + 真实版本),供调用方落库,
+    # 取代此前硬编码的 prompt_version="v1.2.0"。
+    return cleaned, prompt_config.get("metadata") or {}
