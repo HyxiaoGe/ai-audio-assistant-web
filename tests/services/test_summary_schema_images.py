@@ -21,7 +21,17 @@ def test_summary_image_item_shape() -> None:
         error=None,
     )
     dumped = item.model_dump()
-    assert set(dumped) == {"placeholder", "status", "url", "alt", "model_id", "error"}
+    # provider 为 PR1(纯 schema 地基)新增的配图溯源字段(JSONB 加 key,无迁移),
+    # 形状守卫须随 schema 一并更新,否则锁死旧字段集致 CI 红。
+    assert set(dumped) == {
+        "placeholder",
+        "status",
+        "url",
+        "alt",
+        "model_id",
+        "provider",
+        "error",
+    }
     assert dumped["status"] == "pending"
 
 
