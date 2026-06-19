@@ -489,3 +489,82 @@ def test_extract_youtube_info_retries_transient_then_resolves(monkeypatch: pytes
     assert title == "Hello"
     assert direct_url == "https://cdn.example/direct.m4a"
     assert _FakeYDL._calls["n"] == 2  # 1 次瞬时失败 + 1 次成功
+
+
+# ============================================================
+# 溯源:YouTube 摄入路径与 process_audio 同口径地写回 ASR 与摘要溯源。
+# 此前 process_youtube 自带平行实现,加溯源时只改了共享/audio 侧,漏了 youtube ——
+# 实测 YouTube 任务 asr_variant/asr_engine 恒 NULL、summary 的 slug/version/token 全 NULL。
+# ============================================================
+
+
+class _EngineAsrSvc:
+    """有引擎概念的 ASR provider(如 tencent),engine_for_variant 把变体映射到具体引擎。"""
+
+    provider = "tencent"
+
+    def engine_for_variant(self, variant: str) -> str:
+        return "16k_zh_fast" if variant == "file_fast" else "16k_zh"
+
+
+class _EnginelessAsrSvc:
+    """无引擎概念的 ASR provider(如 aliyun/volcengine):没有 engine_for_variant。"""
+
+    provider = "aliyun"
+
+
+def test_apply_asr_provenance_records_provider_variant_engine() -> None:
+    task = _task()
+    task.options = {}
+    process_youtube._apply_asr_provenance(task, _EngineAsrSvc(), "tencent", "file_fast")
+    assert task.asr_provider == "tencent"
+    assert task.asr_variant == "file_fast"
+    assert task.asr_engine == "16k_zh_fast"  # engine_for_variant 同源记录实际引擎
+    assert task.options["asr_variant"] == "file_fast"
+
+
+def test_apply_asr_provenance_engineless_provider_sets_variant_keeps_engine_none() -> None:
+    """这正是线上 bug 的实锤:无引擎 provider 也必须写回 asr_variant(归一后的 file),
+    engine 列因 provider 无引擎概念留 NULL —— 而旧 youtube 路径连 asr_variant 都不写。"""
+    task = _task()
+    task.options = {}
+    process_youtube._apply_asr_provenance(task, _EnginelessAsrSvc(), "aliyun", "file")
+    assert task.asr_provider == "aliyun"
+    assert task.asr_variant == "file"  # 旧路径恒 None,这里必须是 "file"
+    assert task.asr_engine is None  # aliyun 无引擎概念,列留 NULL(与 audio 路径同口径)
+
+
+async def test_summarize_one_carries_prompt_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """YouTube 摘要改走共享 _generate_single_summary,Summary 必须带 slug/version/真实 token。"""
+
+    async def _fake_generate_single_summary(
+        *, text: str, summary_type: str, content_style: str, quality_notice: str, llm_service: Any
+    ) -> tuple[str, dict[str, Any]]:
+        return "生成的摘要正文内容", {
+            "slug": f"summary-{summary_type}-zh",
+            "version": "1.9.0",
+            "input_tokens": 12,
+            "output_tokens": 34,
+        }
+
+    monkeypatch.setattr(process_youtube, "_generate_single_summary", _fake_generate_single_summary)
+
+    class _LLM:
+        provider = "proxy"
+        model_name = "deepseek-reasoner"
+
+    summary = await process_youtube._summarize_one(
+        task=_task(),
+        summary_type="overview",
+        full_text="转写文本",
+        content_style="meeting",
+        llm_service=_LLM(),
+    )
+    assert summary.summary_type == "overview"
+    assert summary.content == "生成的摘要正文内容"
+    assert summary.model_used == "deepseek-reasoner"
+    assert summary.prompt_slug == "summary-overview-zh"
+    assert summary.prompt_version == "1.9.0"
+    assert summary.input_tokens == 12
+    assert summary.output_tokens == 34
+    assert summary.token_count == 34  # 真实 output token 优先于字符数近似
