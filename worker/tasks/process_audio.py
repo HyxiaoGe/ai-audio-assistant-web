@@ -911,6 +911,12 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                 asr_variant = _effective_asr_variant(asr_service.transcribe, asr_variant)
                 if asr_provider:
                     task.asr_provider = asr_provider
+                    # Task 级溯源:记录这次实跑的变体与具体引擎/模型（如 tencent 16k_zh）。
+                    # engine_for_variant 与 transcribe 内部选择同源,确保记录==实际。无引擎概念的
+                    # provider 返回 None → 列留 NULL。getattr 兜底非 ASRService 的测试替身。
+                    task.asr_variant = asr_variant
+                    _engine_for = getattr(asr_service, "engine_for_variant", None)
+                    task.asr_engine = _engine_for(asr_variant) if callable(_engine_for) else None
                     if isinstance(task.options, dict):
                         task.options["asr_variant"] = asr_variant
                     await _commit(session)

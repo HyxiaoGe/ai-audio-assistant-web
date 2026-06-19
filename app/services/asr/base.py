@@ -181,3 +181,18 @@ class ASRService(ABC):
             NotImplementedError: 暂未实现（骨架方法）
         """
         raise NotImplementedError("成本估算功能待实现")
+
+    def engine_for_variant(self, asr_variant: str | None = None) -> str | None:
+        """该 provider 在指定变体下实际使用的引擎/模型标识（如 tencent 的 16k_zh）。
+
+        用于 Task 级溯源：记录这次转写背后的具体引擎，而不仅是 provider 名。基类默认返回
+        None —— 没有「引擎/模型」概念（或未配置）的 provider 不必覆写，溯源列留 NULL，
+        前端遇 NULL 不显示徽章。具备引擎概念的 provider 覆写本方法，按 variant 返回真实引擎。
+
+        Args:
+            asr_variant: 服务变体（file=标准版, file_fast=极速版）
+
+        Returns:
+            引擎/模型标识，未知或不适用时返回 None
+        """
+        return None

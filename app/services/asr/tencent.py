@@ -98,6 +98,16 @@ class TencentASRService(ASRService):
         self._max_wait = max_wait
         self._source_type = source_type
 
+    def engine_for_variant(self, asr_variant: str | None = None) -> str | None:
+        """腾讯云在该变体下实际使用的 EngineModelType（如 16k_zh / 极速版方言引擎）。
+
+        与 _create_task / _transcribe_flash 内的引擎选择保持同一来源，确保「记录的引擎」
+        与「实际发给腾讯的引擎」一致，避免溯源漂移。
+        """
+        if asr_variant == "file_fast" and self._engine_model_type_file_fast:
+            return self._engine_model_type_file_fast
+        return self._engine_model_type
+
     def _resolve_speaker_settings(
         self,
         enable_speaker_diarization: bool | None,
@@ -167,10 +177,7 @@ class TencentASRService(ASRService):
         enable_speaker_diarization: bool | None = None,
         asr_variant: str | None = None,
     ) -> str:
-        if asr_variant == "file_fast" and self._engine_model_type_file_fast:
-            engine_model_type = self._engine_model_type_file_fast
-        else:
-            engine_model_type = self._engine_model_type
+        engine_model_type = self.engine_for_variant(asr_variant)
         channel_num = self._channel_num
         source_type = self._source_type
         res_text_format = self._res_text_format
@@ -229,7 +236,7 @@ class TencentASRService(ASRService):
         params = {
             "secretid": self._secret_id,
             "timestamp": timestamp,
-            "engine_type": self._engine_model_type_file_fast or self._engine_model_type,
+            "engine_type": self.engine_for_variant("file_fast"),
             "voice_format": voice_format,
             "word_info": word_info,
             "speaker_diarization": int(speaker_dia),
