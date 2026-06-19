@@ -98,6 +98,30 @@ async def _get_auth_preferences(token: str) -> dict[str, object]:
     return {"locale": "zh", "timezone": "Asia/Shanghai"}
 
 
+async def fetch_auth_identity(token: str) -> tuple[str | None, str | None]:
+    """从 auth-service /auth/userinfo 取当前 token 持有者的 (name, avatar_url)。
+
+    用于「公开任务时捕获发布者身份」:audio 后端没有任意用户的 name/avatar,只能在握有用户
+    token 时回源 auth-service。任何失败(网络/非 200/解析)都静默回落 (None, None)——发布者
+    身份是锦上添花,绝不能阻断公开动作。走 LAN 内部基址避免公网隧道。
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{settings.resolved_auth_service_internal_url}/auth/userinfo",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                name = data.get("name")
+                avatar_url = data.get("avatar_url")
+                return (name if isinstance(name, str) else None, avatar_url if isinstance(avatar_url, str) else None)
+    except Exception as exc:
+        logger.warning("Failed to fetch auth identity: %s", exc)
+    return None, None
+
+
 async def _update_auth_preferences(token: str, locale: str | None, timezone: str | None) -> None:
     """Update UI preferences on auth-service."""
     payload: dict[str, str] = {}

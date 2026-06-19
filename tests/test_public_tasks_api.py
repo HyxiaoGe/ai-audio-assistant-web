@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from httpx import ASGITransport
 from sqlalchemy.dialects import postgresql
 
-from app.api.deps import get_db
+from app.api.deps import CurrentUser, get_db, get_public_viewer
 from app.api.v1 import public as public_module
 from app.config import settings
 from app.core.exceptions import BusinessError
@@ -23,6 +23,7 @@ from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
 from app.models.transcript import Transcript
+from app.models.user import UserProfile
 
 _OWNER_ID = "11111111-1111-1111-1111-111111111111"
 _TASK_ID = "22222222-2222-2222-2222-222222222222"
@@ -91,10 +92,12 @@ class _FakeSession:
         tasks: list[Task] | None = None,
         transcripts: list[Transcript] | None = None,
         summaries: list[Summary] | None = None,
+        profiles: list[UserProfile] | None = None,
     ) -> None:
         self.tasks = tasks or []
         self.transcripts = transcripts or []
         self.summaries = summaries or []
+        self.profiles = profiles or []
         self.committed = 0
 
     async def commit(self) -> None:
@@ -149,12 +152,25 @@ class _FakeSession:
             if "summary_type = 'overview'" in sql:
                 rows = [r for r in rows if r.summary_type == "overview"]
             return _FakeResult(rows=rows)
+        if "from user_profiles" in sql:
+            if "user_profiles.id in (" in sql:
+                inside = sql.split("user_profiles.id in (", 1)[1].split(")", 1)[0]
+                wanted_set = {self._normalize_uuid(tok.strip().strip("'")) for tok in inside.split(",") if tok.strip()}
+                rows = [p for p in self.profiles if self._normalize_uuid(str(p.id)) in wanted_set]
+            else:
+                wanted_raw = sql.split("user_profiles.id =")[1].strip().split()[0].strip("'")
+                wanted = self._normalize_uuid(wanted_raw)
+                rows = [p for p in self.profiles if self._normalize_uuid(str(p.id)) == wanted]
+            return _FakeResult(rows=rows, one=rows[0] if rows else None)
         rows = self._filter_tasks(sql)
         rows.sort(key=lambda t: t.published_at or _EPOCH, reverse=True)
         return _FakeResult(rows=rows, one=rows[0] if rows else None)
 
 
-def _make_app(session: _FakeSession) -> FastAPI:
+_NO_VIEWER_OVERRIDE = object()
+
+
+def _make_app(session: _FakeSession, viewer: Any = _NO_VIEWER_OVERRIDE) -> FastAPI:
     app = FastAPI()
     app.include_router(public_module.router)
 
@@ -166,7 +182,14 @@ def _make_app(session: _FakeSession) -> FastAPI:
         yield session
 
     app.dependency_overrides[get_db] = _db
+    # 默认不覆盖 → 真依赖在无 Authorization 头时回落匿名 None;显式传 viewer 模拟登录态观看者。
+    if viewer is not _NO_VIEWER_OVERRIDE:
+        app.dependency_overrides[get_public_viewer] = lambda: viewer
     return app
+
+
+def _viewer(user_id: str) -> CurrentUser:
+    return CurrentUser(id=user_id, email="viewer@test")
 
 
 def _client(app: FastAPI) -> httpx.AsyncClient:
@@ -320,6 +343,58 @@ async def test_list_ignores_non_overview_summary(monkeypatch: pytest.MonkeyPatch
     item = body["data"]["items"][0]
     assert item["cover_url"] is None
     assert item["excerpt"] is None
+
+
+def _make_profile(*, user_id: str = _OWNER_ID, name: str | None = "发布者甲", avatar: str | None = None) -> UserProfile:
+    p = UserProfile(id=user_id)
+    p.display_name = name
+    p.avatar_url = avatar
+    return p
+
+
+async def test_list_item_includes_owner_when_profile_present() -> None:
+    """发布者本地资料已捕获:列表项带 owner{name, avatar_url}。"""
+    session = _FakeSession(
+        tasks=[_make_task()],
+        profiles=[_make_profile(name="发布者甲", avatar="https://lh3.googleusercontent.com/a/x")],
+    )
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["owner"] == {"name": "发布者甲", "avatar_url": "https://lh3.googleusercontent.com/a/x"}
+    # owner 仅透出展示用字段,绝不带 user_id 等内部标识
+    assert "user_id" not in item
+
+
+async def test_list_item_owner_none_without_profile() -> None:
+    """发布者资料未捕获(老数据 NULL):owner 为 null,前端不渲染发布者。"""
+    session = _FakeSession(tasks=[_make_task()])  # 无 profiles
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    assert body["data"]["items"][0]["owner"] is None
+
+
+async def test_list_item_owner_none_when_display_name_missing() -> None:
+    """profile 存在但 display_name 为空(只有头像没名字):不展示 owner。"""
+    session = _FakeSession(
+        tasks=[_make_task()],
+        profiles=[_make_profile(name=None, avatar="https://lh3.googleusercontent.com/a/x")],
+    )
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    assert body["data"]["items"][0]["owner"] is None
+
+
+async def test_detail_includes_owner() -> None:
+    """公开详情也带 owner{name, avatar_url}。"""
+    session = _FakeSession(tasks=[_make_task()], profiles=[_make_profile(name="发布者甲")])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
+    assert body["code"] == 0
+    assert body["data"]["owner"] == {"name": "发布者甲", "avatar_url": None}
 
 
 async def test_list_rejects_oversize_page_size() -> None:
@@ -500,8 +575,8 @@ async def test_youtube_task_detail_contains_youtube_info() -> None:
     assert yi is not None, "youtube_info 应在公开详情中出现"
     assert yi["video_id"] == _YOUTUBE_VIDEO_ID
     assert yi["title"] == "Never Gonna Give You Up"
-    # 缩略图 URL 由 video_id 推算（YouTube 标准格式）
-    assert yi["thumbnail_url"] == f"https://i.ytimg.com/vi/{_YOUTUBE_VIDEO_ID}/hqdefault.jpg"
+    # 缩略图 URL 走同源代理(绕开国内直连 i.ytimg.com 慢/被墙),相对路径
+    assert yi["thumbnail_url"] == f"/api/v1/public/youtube-thumbnail/{_YOUTUBE_VIDEO_ID}"
     assert yi["duration_seconds"] == 212
     # source_url 透出，供前端嵌入播放器
     assert data.get("source_url") == _YOUTUBE_URL
@@ -559,6 +634,93 @@ async def test_youtube_task_without_valid_video_id_has_null_youtube_info() -> No
         body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
     assert body["code"] == 0
     assert body["data"].get("youtube_info") is None
+
+
+# ===== 探索封面:YouTube 缩略图同源代理优先,AI 配图回落 =====
+
+
+async def test_list_youtube_cover_is_proxy_with_ai_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """YouTube 任务列表项:cover_url=同源代理缩略图,cover_fallback_url=AI 配图直链。"""
+    _install_fake_oss(monkeypatch)
+    session = _FakeSession(tasks=[_make_youtube_task()], summaries=[_make_image_summary()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["cover_url"] == f"/api/v1/public/youtube-thumbnail/{_YOUTUBE_VIDEO_ID}"
+    assert item["cover_fallback_url"] and "img.webp" in item["cover_fallback_url"]
+
+
+async def test_list_youtube_cover_proxy_without_ai_image() -> None:
+    """YouTube 任务无 AI 配图:cover_url 仍是同源代理缩略图,cover_fallback_url=None。"""
+    session = _FakeSession(tasks=[_make_youtube_task()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["cover_url"] == f"/api/v1/public/youtube-thumbnail/{_YOUTUBE_VIDEO_ID}"
+    assert item["cover_fallback_url"] is None
+
+
+async def test_list_upload_cover_is_ai_no_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """上传任务:cover_url=AI 配图直链,cover_fallback_url=None(无 YouTube 缩略图可代理)。"""
+    _install_fake_oss(monkeypatch)
+    session = _FakeSession(tasks=[_make_task()], summaries=[_make_image_summary()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["cover_url"] and "img.webp" in item["cover_url"]
+    assert item["cover_fallback_url"] is None
+
+
+# ===== is_owner:归属判断(带 token 时本人公开内容跳私有详情) =====
+
+
+async def test_list_is_owner_true_for_owner_viewer() -> None:
+    """登录态观看者是本任务 owner:列表项 is_owner=True。"""
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session, viewer=_viewer(_OWNER_ID))) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    assert body["data"]["items"][0]["is_owner"] is True
+
+
+async def test_list_is_owner_false_for_other_viewer() -> None:
+    """登录态观看者非 owner:列表项 is_owner=False。"""
+    session = _FakeSession(tasks=[_make_task()])
+    other = "99999999-9999-9999-9999-999999999999"
+    async with _client(_make_app(session, viewer=_viewer(other))) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    assert body["data"]["items"][0]["is_owner"] is False
+
+
+async def test_list_is_owner_false_anonymous() -> None:
+    """匿名(无 token):列表项 is_owner 恒 False。"""
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get("/public/tasks")).json()
+    assert body["code"] == 0
+    assert body["data"]["items"][0]["is_owner"] is False
+
+
+async def test_detail_is_owner_true_for_owner_viewer() -> None:
+    """登录态观看者是 owner:详情 is_owner=True。"""
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session, viewer=_viewer(_OWNER_ID))) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
+    assert body["code"] == 0
+    assert body["data"]["is_owner"] is True
+
+
+async def test_detail_is_owner_false_anonymous() -> None:
+    """匿名详情:is_owner 恒 False。"""
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session)) as client:
+        body = (await client.get(f"/public/tasks/{_TASK_ID}")).json()
+    assert body["code"] == 0
+    assert body["data"]["is_owner"] is False
 
 
 # ===== 公开媒体 OSS 直链(绕开隧道) =====
@@ -701,6 +863,17 @@ async def test_public_get_success_responses_have_cache_control() -> None:
             resp = await client.get(path)
             assert resp.json()["code"] == 0, path
             assert resp.headers.get("cache-control") == _CACHE_CONTROL, path
+
+
+async def test_public_personalized_responses_skip_cache_control() -> None:
+    """带 token(viewer)的列表/详情含个性化 is_owner,绝不贴边缘缓存头——
+    否则某 owner 的 is_owner=True 被缓存后回给匿名用户(归属误判 + 隐私泄露)。"""
+    session = _FakeSession(tasks=[_make_task()])
+    async with _client(_make_app(session, viewer=_viewer(_OWNER_ID))) as client:
+        for path in ("/public/tasks", f"/public/tasks/{_TASK_ID}"):
+            resp = await client.get(path)
+            assert resp.json()["code"] == 0, path
+            assert "cache-control" not in resp.headers, path
 
 
 async def test_public_not_found_envelope_has_no_cache_control() -> None:

@@ -21,6 +21,10 @@ class UserProfile(BaseModel):
     app_settings: Mapped[dict[str, object]] = mapped_column(
         JSONB, default=dict, server_default=text("'{}'::jsonb"), nullable=False
     )
+    # 发布者身份(探索广场展示):发布任务时从 /auth/userinfo 捕获,快照式。NULL=未捕获→不展示。
+    # name/avatar 由 auth-service 管理,这里只做本地缓存以支撑匿名公开端点的展示需求。
+    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     # Relationships
     notifications: Mapped[list[Notification]] = relationship(

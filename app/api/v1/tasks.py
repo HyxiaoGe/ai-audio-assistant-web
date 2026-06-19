@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from app.api.deps import CurrentUser, get_admin_user, get_current_user, get_db
 from app.config import settings
 from app.core.rate_limit import rate_limit
 from app.core.response import success
+from app.core.security import extract_bearer_token
 from app.schemas.common import PageResponse
 from app.schemas.task import (
     TaskBatchDeleteRequest,
@@ -26,9 +27,7 @@ router = APIRouter(prefix="/tasks")
 # 列表筛选可接受的 status 取值：聚合关键字 "processing" + 终态 + 全部"处理中"子状态。
 # 派生自单一事实源 PROCESSING_STATUSES，避免与 list_tasks 的伞形筛选漂移（曾漏 polishing
 # 导致润色中的任务用 ?status=polishing 被静默回退为 "all"）。非白名单值一律回退 "all"。
-_LIST_STATUS_FILTERS: frozenset[str] = frozenset(
-    {"all", "processing", "completed", "failed", *PROCESSING_STATUSES}
-)
+_LIST_STATUS_FILTERS: frozenset[str] = frozenset({"all", "processing", "completed", "failed", *PROCESSING_STATUSES})
 
 
 @router.post("")
@@ -97,9 +96,14 @@ async def update_task_visibility(
     data: TaskVisibilityUpdateRequest,
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_admin_user),
+    authorization: str | None = Header(default=None),
 ) -> JSONResponse:
-    """管理员把自己的已完成任务设为公开/取消公开(探索广场可见性开关)。"""
-    result = await TaskService.update_task_visibility(db, user, task_id, data.is_public)
+    """管理员把自己的已完成任务设为公开/取消公开(探索广场可见性开关)。
+
+    透传 token 给 service:公开时用它回源 auth-service 捕获发布者 name/avatar(展示「由谁公开」)。
+    """
+    token = extract_bearer_token(authorization) if authorization else None
+    result = await TaskService.update_task_visibility(db, user, task_id, data.is_public, token=token)
     return success(data=jsonable_encoder(result))
 
 
