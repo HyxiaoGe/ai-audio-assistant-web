@@ -563,26 +563,12 @@ def sync_channel_videos(
             publish_user_notification_sync(user_id, notification)
 
             new_video_ids = [v["video_id"] for v in all_videos if v.get("video_id")]
-            if synced_count > 0 and new_video_ids:
-                try:
-                    from worker.tasks.youtube_summary_style_recommendation import (
-                        prewarm_youtube_summary_style_recommendations,
-                    )
 
-                    prewarm_youtube_summary_style_recommendations.delay(
-                        user_id=user_id,
-                        video_ids=new_video_ids[:20],
-                        locale="zh",
-                        limit=20,
-                        request_id=request_id,
-                    )
-                    logger.info(
-                        "Queued summary style recommendation prewarm for %s videos from channel %s",
-                        min(len(new_video_ids), 20),
-                        channel_id,
-                    )
-                except Exception:
-                    logger.exception("Failed to queue summary style recommendation prewarm")
+            # 不在后台同步里投机预热摘要风格推荐:绝大多数新同步的视频用户永远不会打开,
+            # 为每条都算一遍纯属浪费(且曾是 prewarm 突发导致 asyncpg 跨事件循环报错的源头)。
+            # 预热已收敛到「用户真看到的集合」——前端加载 feed 时对实际渲染的 video_id 调
+            # POST /youtube/videos/summary-style-recommendations/prewarm,单个打开走 GET 按需。
+            # 守卫见 tests/worker/test_youtube_sync_prewarm_convergence.py。
 
             # Trigger auto-transcription for new videos if enabled
             if synced_count > 0 and subscription.auto_transcribe and new_video_ids:
