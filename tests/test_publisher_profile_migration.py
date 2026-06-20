@@ -58,4 +58,5 @@ def test_single_alembic_head_is_new_revision() -> None:
     assert out.returncode == 0, out.stderr
     heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
     assert len(heads) == 1, f"alembic 出现多 head:{out.stdout}"
-    assert _NEW_REV in heads[0]
+    # head 已随新迁移前移至转写 FTS jiebacfg c1d2e3f4a5b6(本迁移 _NEW_REV 是其 down_revision)。
+    assert "c1d2e3f4a5b6" in heads[0]

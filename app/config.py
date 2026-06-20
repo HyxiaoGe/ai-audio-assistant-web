@@ -170,7 +170,10 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = Field(default=None)
     OPENAI_BASE_URL: str | None = Field(default="https://api.openai.com/v1")
 
-    RAG_EMBEDDING_ENABLED: bool = Field(default=True)
+    # 默认关闭:embedding 读端 100% 不存在(无任何检索/搜索消费 RagChunk),且写端在 dev
+    # 大半失败,纯浪费延迟+日志+垃圾 usage 行。全文搜索改走 pg_jieba FTS(见 transcript_search)。
+    # 待真正建成语义检索(pgvector + 语义 /search)再开。
+    RAG_EMBEDDING_ENABLED: bool = Field(default=False)
     RAG_EMBEDDING_PROVIDER: str | None = Field(default="openrouter")
     RAG_EMBEDDING_MODEL: str | None = Field(default="text-embedding-3-small")
     RAG_EMBEDDING_DIM: int | None = Field(default=1536)
@@ -220,6 +223,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_SUMMARY_COMPARE_PER_MIN: int = Field(default=10)
     RATE_LIMIT_YOUTUBE_SYNC_PER_MIN: int = Field(default=10)
     RATE_LIMIT_PUBLIC_PER_MIN: int = Field(default=60)  # 公开探索端点,按 IP
+    RATE_LIMIT_TASK_SEARCH_PER_MIN: int = Field(default=30)  # 转写全文搜索(FTS 查询有成本)
 
     # PromptHub
     PROMPTHUB_BASE_URL: str | None = Field(default=None)

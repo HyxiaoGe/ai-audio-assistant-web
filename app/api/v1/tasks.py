@@ -17,9 +17,11 @@ from app.schemas.task import (
     TaskCreateResponse,
     TaskDetailResponse,
     TaskListItem,
+    TaskSearchResponse,
     TaskStatusCountsResponse,
     TaskVisibilityUpdateRequest,
 )
+from app.services import transcript_search
 from app.services.task_service import PROCESSING_STATUSES, TaskService
 
 router = APIRouter(prefix="/tasks")
@@ -77,6 +79,22 @@ async def get_task_status_counts(
     """
     counts = await TaskService.get_status_counts(db, user)
     return success(data=jsonable_encoder(TaskStatusCountsResponse(**counts)))
+
+
+@router.get("/search")
+async def search_transcripts(
+    q: str = Query(..., min_length=1, max_length=200, description="搜索词(中文经 pg_jieba 分词)"),
+    limit: int = Query(default=20, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+    _rl: None = Depends(rate_limit(limit=settings.RATE_LIMIT_TASK_SEARCH_PER_MIN, scope="task_search")),
+) -> JSONResponse:
+    """转写全文搜索(jiebacfg 中文分词 FTS),仅限本人任务,返回命中段 + 时间戳。
+
+    注意:路由须声明在 ``/{task_id}`` 之前,否则会被动态段捕获(同 ``/status-counts``)。
+    """
+    hits = await transcript_search.search(db, user.id, q, limit)
+    return success(data=jsonable_encoder(TaskSearchResponse(query=q.strip(), hits=hits)))
 
 
 @router.get("/{task_id}")
