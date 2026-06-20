@@ -51,8 +51,9 @@ class _FakeSession:
         return _FakeResult(self.rows)
 
 
-def _hit_row(*, task_id: str, title: str, snippet: str, start_time: float, rank: float) -> SimpleNamespace:
-    return SimpleNamespace(task_id=task_id, title=title, snippet=snippet, start_time=start_time, rank=rank)
+def _hit_row(*, task_id: str, title: str, content: str, start_time: float, rank: float) -> SimpleNamespace:
+    # DB 现在返回原始 content 整段;高亮在应用层做(见下方 build_search_statement 不再用 ts_headline)。
+    return SimpleNamespace(task_id=task_id, title=title, content=content, start_time=start_time, rank=rank)
 
 
 def _make_app(session: _FakeSession) -> FastAPI:
@@ -84,8 +85,11 @@ def test_search_statement_uses_jieba_fts_and_scopes_user() -> None:
     assert "to_tsvector('jiebacfg'" in sql
     assert "websearch_to_tsquery('jiebacfg'" in sql
     assert "@@" in sql
-    # 片段高亮 + 相关性排序
-    assert "ts_headline" in sql
+    # 返回原始整段 content(短句),高亮在应用层做;弃用 ts_headline(pg_jieba 1.1.1
+    # 字节偏移 bug 会删掉命中的中文 token 而非高亮,实证 '库克' 被删空)。
+    assert "ts_headline" not in sql
+    assert "transcripts.content" in sql
+    # 相关性排序
     assert "ts_rank" in sql
     assert "order by" in sql and "desc" in sql
     # 跨用户隔离 + 软删过滤(转写无软删列,经 join 按任务的 user_id + deleted_at 过滤)
@@ -98,10 +102,11 @@ def test_search_statement_uses_jieba_fts_and_scopes_user() -> None:
 
 
 async def test_search_returns_ranked_hits() -> None:
+    # DB 返回原始整段 content;端点须在映射时按查询词应用 <mark> 高亮。
     session = _FakeSession(
         rows=[
-            _hit_row(task_id=_TASK_A, title="爬长城", snippet="去<mark>长城</mark>", start_time=12.5, rank=0.9),
-            _hit_row(task_id=_TASK_B, title="另一个", snippet="<mark>长城</mark>很长", start_time=3.0, rank=0.4),
+            _hit_row(task_id=_TASK_A, title="爬长城", content="去长城玩", start_time=12.5, rank=0.9),
+            _hit_row(task_id=_TASK_B, title="另一个", content="长城很长", start_time=3.0, rank=0.4),
         ]
     )
     async with _client(_make_app(session)) as client:
@@ -110,13 +115,15 @@ async def test_search_returns_ranked_hits() -> None:
     assert body["data"]["query"] == "长城"
     hits = body["data"]["hits"]
     assert [h["task_id"] for h in hits] == [_TASK_A, _TASK_B]
-    assert hits[0]["snippet"] == "去<mark>长城</mark>"
+    # 高亮在应用层(_highlight)对原始 content 应用,而非依赖 DB 的 ts_headline
+    assert hits[0]["snippet"] == "去<mark>长城</mark>玩"
+    assert hits[1]["snippet"] == "<mark>长城</mark>很长"
     assert hits[0]["start_time"] == 12.5
     assert hits[0]["title"] == "爬长城"
 
 
 async def test_blank_query_returns_no_hits_without_db_call() -> None:
-    session = _FakeSession(rows=[_hit_row(task_id=_TASK_A, title="x", snippet="y", start_time=1.0, rank=0.1)])
+    session = _FakeSession(rows=[_hit_row(task_id=_TASK_A, title="x", content="y", start_time=1.0, rank=0.1)])
     async with _client(_make_app(session)) as client:
         body = (await client.get("/tasks/search", params={"q": "   "})).json()
     assert body["code"] == 0
