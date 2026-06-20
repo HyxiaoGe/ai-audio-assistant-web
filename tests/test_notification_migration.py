@@ -17,17 +17,12 @@ from types import ModuleType
 # 本仓的 alembic/ 迁移目录不是可导入包（site-packages 的 alembic 库会遮蔽它，
 # 其下并无 versions 子模块），故按文件路径直接加载迁移模块，而非 import_module。
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "alembic"
-    / "versions"
-    / "9a1b2c3d4e5f_notification_refactor_schema.py"
+    Path(__file__).resolve().parent.parent / "alembic" / "versions" / "9a1b2c3d4e5f_notification_refactor_schema.py"
 )
 
 
 def _load_migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "notification_refactor_schema", _MIGRATION_PATH
-    )
+    spec = importlib.util.spec_from_file_location("notification_refactor_schema", _MIGRATION_PATH)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -148,7 +143,7 @@ def test_single_alembic_head_is_new_revision() -> None:
     )
     assert out.returncode == 0, out.stderr
     heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
-    # 必须恰好单 head（否则说明迁移链分叉）。head 随新迁移前移:发布者身份字段
-    # b1c2d3e4f5a6（down_revision=溯源字段 a0b1c2d3e4f5），故当前 head 为它。
+    # 必须恰好单 head（否则说明迁移链分叉）。head 随新迁移前移:转写 FTS 切 jiebacfg
+    # c1d2e3f4a5b6（down_revision=发布者身份字段 b1c2d3e4f5a6），故当前 head 为它。
     assert len(heads) == 1, f"alembic 出现多 head：{out.stdout}"
-    assert "b1c2d3e4f5a6" in heads[0]
+    assert "c1d2e3f4a5b6" in heads[0]

@@ -149,3 +149,18 @@ class TaskBatchDeleteRequest(BaseModel):
         if len(v) > 50:
             raise ValueError("Cannot delete more than 50 tasks at once")
         return v
+
+
+class TaskSearchHit(BaseModel):
+    """转写全文搜索命中:某任务里命中的一段转写 + 可跳转的时间戳。"""
+
+    task_id: str
+    title: str | None = None
+    snippet: str  # 含 <mark> 高亮的片段
+    start_time: float  # 命中段起始秒,前端用于跳播
+    rank: float
+
+
+class TaskSearchResponse(BaseModel):
+    query: str
+    hits: list[TaskSearchHit]
