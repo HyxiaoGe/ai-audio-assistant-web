@@ -220,11 +220,12 @@ Storage Providers (`app/services/storage/`):
 - Cost tracking and reporting
 - API: `/api/v1/asr-quotas`
 
-**RAG (Retrieval-Augmented Generation)** (`app/services/rag/`):
-- Semantic chunking of transcripts
-- Vector embeddings for intelligent search
-- Context retrieval for enhanced summaries
-- Models: `RagChunk` for storing embedded content
+**Transcript Search — full-text / keyword (the LIVE search mechanism)** (`app/services/transcript_search.py`):
+- `GET /api/v1/tasks/search` — **lexical full-text search** over `Transcript.content` via PostgreSQL `tsvector @@ websearch_to_tsquery('jiebacfg', ...)` with pg_jieba 中文分词, `ts_rank` ordering, GIN index `idx_transcripts_fts`, application-layer `<mark>` highlight. Keyword/字面 matching only — no embeddings, no LLM, near-zero cost.
+
+**RAG / Semantic Search — intentionally DISABLED, a deliberate non-goal** (`app/services/rag/`, model `RagChunk`):
+- The embedding pipeline (`ingest_task_chunks_*`, `rag_chunk.embedding` stored as `ARRAY(Float)`) is **gated off by `RAG_EMBEDDING_ENABLED=False`** and has **no read/retrieval path** — nothing ever queries the vectors. It was a half-built feature that wrote embeddings nobody read.
+- **Decision: semantic/vector search is NOT pursued for this product.** For a transcription-assistant use case it adds no real value over keyword FTS and is pure cost (per-task embedding compute + vector storage). **Default to the full-text search above; do NOT revive RAG or wire up semantic search without an explicit product decision** (which would also require `ARRAY(Float)` → `vector(N)` + HNSW, since the current column can't do efficient nearest-neighbor).
 
 **Statistics & Analytics** (`app/api/v1/stats.py`):
 - Task completion rates and processing times
