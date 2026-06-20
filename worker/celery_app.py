@@ -28,6 +28,25 @@ celery_app.conf.result_serializer = "json"
 celery_app.conf.accept_content = ["json"]
 celery_app.conf.timezone = "UTC"
 
+# --- 任务硬超时全局兜底 ---
+# per-task 的 time_limit/soft_time_limit 会覆盖这里;本兜底只为漏配硬超时的任务
+# (quota_alert / cleanup_task / regenerate_summary 等当前都没有任何 time_limit)兜一个绝对上限,
+# 防止某个任务卡死后无限占用 worker。须高于最长的 per-task soft(sync_all_subscriptions_videos
+# 的 soft=3600),否则会把合法的长任务提前杀掉。
+celery_app.conf.task_soft_time_limit = 3900
+celery_app.conf.task_time_limit = 4200
+
+# --- worker 可靠性 ---
+# 单队列里长 ASR(~30min)与短 summary/image 任务混跑:
+#   prefetch=1            —— 公平分发,避免一个长任务把预取的短任务全堵在队头;
+#   acks_late + reject_on_worker_lost —— 被 OOM-SIGKILL 的任务消息会重投(autoretry_for 抓不到
+#                          SIGKILL,否则任务静默消失);asr_idempotency 已让整任务重跑幂等,重投安全;
+#   max_tasks_per_child   —— 回收 prefork 子进程,约束 ffmpeg/transcript 的内存蠕变(对抗 1g 上限)。
+celery_app.conf.worker_prefetch_multiplier = 1
+celery_app.conf.task_acks_late = True
+celery_app.conf.task_reject_on_worker_lost = True
+celery_app.conf.worker_max_tasks_per_child = 100
+
 # Celery Beat 定时任务配置
 #
 # 切勿给任务加 options.queue —— worker 启动无 -Q,只消费默认队列(task_default_queue 未设
