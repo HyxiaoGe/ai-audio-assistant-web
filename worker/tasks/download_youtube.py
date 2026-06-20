@@ -69,7 +69,7 @@ def _download(url: str) -> str:
     bind=True,
     max_retries=3,
     soft_time_limit=1800,
-    hard_time_limit=2000,
+    time_limit=2000,  # 硬超时(进程级强杀,不可被 except 吞);曾误用 hard_time_limit 被静默忽略 → 无硬上限
     autoretry_for=(Exception,),
     retry_backoff=True,
 )
