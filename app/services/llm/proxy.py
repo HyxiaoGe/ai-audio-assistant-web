@@ -81,7 +81,12 @@ class ProxyLLMService(LLMService):
         ),
     )
 
-    def __init__(self, config: object | None = None, model_id: str | None = None) -> None:
+    def __init__(
+        self,
+        config: object | None = None,
+        model_id: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
         from app.services.config_utils import get_config_value
 
         base_url = get_config_value(config, "base_url", settings.LITELLM_BASE_URL)
@@ -96,6 +101,34 @@ class ProxyLLMService(LLMService):
         self._api_key = api_key
         self._model = model
         self._max_tokens = max_tokens
+        # 成本归因:LiteLLM 按请求体 user 字段累计 end-user spend(GET /customer/info 据此)。
+        # 带 user_id 的实例在 SmartFactory force_new=True、不进缓存、不跨用户复用,存实例状态安全。
+        self._end_user_id = user_id
+
+    def _apply_attribution(
+        self,
+        payload: dict,
+        *,
+        task_id: str | None = None,
+        summary_type: str | None = None,
+    ) -> dict:
+        """给 payload 注入成本归因标签(单一来源,避免各 payload 漂移)。
+
+        - ``user``:LiteLLM 据此把 spend 归到该 end-user/customer(仅在有 user_id 时写,
+          不污染匿名/系统调用的旧契约);
+        - ``metadata``:task_id/summary_type 供 LiteLLM 日志下钻,随调用带出、不存实例状态。
+        """
+        if self._end_user_id:
+            payload["user"] = self._end_user_id
+        metadata: dict[str, str] = {}
+        if task_id:
+            metadata["task_id"] = task_id
+        if summary_type:
+            metadata["summary_type"] = summary_type
+        if metadata:
+            metadata["app"] = "audio"
+            payload["metadata"] = metadata
+        return payload
 
     @property
     def model_name(self) -> str:
@@ -312,6 +345,7 @@ class ProxyLLMService(LLMService):
             "max_tokens": prompt_config["model_params"].get("max_tokens", self._max_tokens),
             "temperature": prompt_config["model_params"].get("temperature", 0.7),
         }
+        self._apply_attribution(payload, summary_type=summary_type)
         content, _usage = await self._call_api(payload)
         return content
 
@@ -343,6 +377,7 @@ class ProxyLLMService(LLMService):
             "max_tokens": prompt_config["model_params"].get("max_tokens", self._max_tokens),
             "temperature": prompt_config["model_params"].get("temperature", 0.7),
         }
+        self._apply_attribution(payload, summary_type=summary_type)
         async for chunk in self._stream_api(payload):
             yield chunk
 
@@ -352,18 +387,22 @@ class ProxyLLMService(LLMService):
         system_message: str | None,
         temperature: float | None,
         max_tokens: int | None,
+        *,
+        task_id: str | None = None,
+        summary_type: str | None = None,
     ) -> dict:
         """构造 generate / generate_with_usage 共用的 chat 请求体（单一来源，避免漂移）。"""
         messages: list[dict[str, str]] = []
         if system_message:
             messages.append({"role": "system", "content": system_message})
         messages.append({"role": "user", "content": prompt})
-        return {
+        payload = {
             "model": self._model,
             "messages": messages,
             "max_tokens": max_tokens or self._max_tokens,
             "temperature": temperature or 0.7,
         }
+        return self._apply_attribution(payload, task_id=task_id, summary_type=summary_type)
 
     @monitor("llm", "proxy")
     async def generate(
@@ -374,7 +413,14 @@ class ProxyLLMService(LLMService):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> str:
-        payload = self._build_generate_payload(prompt, system_message, temperature, max_tokens)
+        payload = self._build_generate_payload(
+            prompt,
+            system_message,
+            temperature,
+            max_tokens,
+            task_id=kwargs.get("task_id"),
+            summary_type=kwargs.get("summary_type"),
+        )
         content, _usage = await self._call_api(payload)
         return content
 
@@ -392,7 +438,14 @@ class ProxyLLMService(LLMService):
         响应无 usage 块时返回 (content, None)。供摘要/章节路径落库真实 token，取代 token_count
         旧的字符数近似。
         """
-        payload = self._build_generate_payload(prompt, system_message, temperature, max_tokens)
+        payload = self._build_generate_payload(
+            prompt,
+            system_message,
+            temperature,
+            max_tokens,
+            task_id=kwargs.get("task_id"),
+            summary_type=kwargs.get("summary_type"),
+        )
         return await self._call_api(payload)
 
     @monitor("llm", "proxy")
@@ -406,6 +459,7 @@ class ProxyLLMService(LLMService):
             "max_tokens": kwargs.get("max_tokens", self._max_tokens),
             "temperature": kwargs.get("temperature", 0.7),
         }
+        self._apply_attribution(payload, task_id=kwargs.get("task_id"), summary_type=kwargs.get("summary_type"))
         content, _usage = await self._call_api(payload)
         return content
 
@@ -420,6 +474,7 @@ class ProxyLLMService(LLMService):
             "max_tokens": kwargs.get("max_tokens", self._max_tokens),
             "temperature": kwargs.get("temperature", 0.7),
         }
+        self._apply_attribution(payload, task_id=kwargs.get("task_id"), summary_type=kwargs.get("summary_type"))
         async for chunk in self._stream_api(payload):
             yield chunk
 

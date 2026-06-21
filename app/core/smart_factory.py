@@ -323,6 +323,7 @@ class SmartFactory:
             force_new=config is not None or user_id is not None or model_id is not None,
             model_id=model_id,
             config=config,
+            user_id=user_id,
         )
         if not service:
             raise ValueError(f"Service {service_type}:{provider} not found in registry")
