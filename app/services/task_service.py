@@ -241,7 +241,13 @@ class TaskService:
             raise BusinessError(ErrorCode.UNSUPPORTED_YOUTUBE_URL_FORMAT)
 
     @staticmethod
-    async def create_task(db: AsyncSession, user: CurrentUser, data: TaskCreateRequest, trace_id: str | None) -> Task:
+    async def create_task(
+        db: AsyncSession,
+        user: CurrentUser,
+        data: TaskCreateRequest,
+        trace_id: str | None,
+        token: str | None = None,
+    ) -> Task:
         if data.source_type not in {"upload", "youtube"}:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_type")
 
@@ -354,6 +360,10 @@ class TaskService:
                 args=[task.id],
                 kwargs={"request_id": trace_id},
             )
+
+        # 顺带把创建者 name/avatar 快照进 UserProfile,供管理员成本看板按用户展示(不再「未命名用户」)。
+        # best-effort、绝不阻断建任务:任务此刻已 commit,捕获失败不回退任务。
+        await TaskService._capture_creator_identity(db, str(user.id), token)
         return task
 
     @staticmethod
@@ -633,6 +643,37 @@ class TaskService:
             db.add(profile)
         profile.display_name = name
         profile.avatar_url = avatar_url
+
+    @staticmethod
+    async def _capture_creator_identity(db: AsyncSession, user_id: str, token: str | None) -> None:
+        """建任务时把创建者 name/avatar 快照进 UserProfile —— 让管理员成本看板不再出现「未命名用户」。
+
+        与发布捕获 _capture_publisher_identity 同源(都靠持有者本人 token 调 /auth/userinfo),触发点改为
+        「创建任务」:成本看板的用户集(有 ASR/配图用量者)⊆ 创建过任务的用户,故此处覆盖即可全量上名字。
+        profile 必存(get_current_user 登录即建,见 deps._resolve_user),此处通常只 UPDATE。
+        best-effort 且独立提交:已有 display_name 则跳过(不重复调 auth-service、不覆盖快照);无 token、
+        抓取失败或 DB 异常一律吞掉并回滚,绝不阻断已 commit 的建任务。
+        """
+        if not token:
+            return
+        try:
+            profile = await db.get(UserProfile, UUID(user_id))
+            if profile is not None and profile.display_name:
+                return  # 已有名字:无需再调 auth-service,也不覆盖既有快照
+            name, avatar_url = await fetch_auth_identity(token)
+            if name is None and avatar_url is None:
+                return
+            if profile is None:  # 理论不会发生(登录即建),防御式兜底
+                profile = UserProfile(id=UUID(user_id))
+                db.add(profile)
+            if name is not None:
+                profile.display_name = name
+            if avatar_url is not None:
+                profile.avatar_url = avatar_url
+            await db.commit()
+        except Exception:
+            # 身份捕获是 best-effort:任何异常(DB/网络)都不得拖垮已 commit 的建任务。
+            await db.rollback()
 
     @staticmethod
     async def get_status_counts(db: AsyncSession, user: CurrentUser) -> dict[str, int]:

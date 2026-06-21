@@ -38,10 +38,13 @@ async def create_task(
     data: TaskCreateRequest,
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
+    authorization: str | None = Header(default=None),
     _rl: None = Depends(rate_limit(limit=settings.RATE_LIMIT_TASK_CREATE_PER_MIN, scope="task_create")),
 ) -> JSONResponse:
     trace_id = getattr(request.state, "trace_id", None)
-    task = await TaskService.create_task(db, user, data, trace_id)
+    # 透传 token:首个任务时用它回源 auth-service 快照创建者 name/avatar(成本看板按用户展示)。
+    token = extract_bearer_token(authorization) if authorization else None
+    task = await TaskService.create_task(db, user, data, trace_id, token=token)
     response = TaskCreateResponse(
         id=task.id,
         status=task.status,
