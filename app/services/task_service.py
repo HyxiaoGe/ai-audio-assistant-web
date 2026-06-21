@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import ipaddress
 import logging
@@ -808,8 +809,12 @@ class TaskService:
                     client_secret=settings.GOOGLE_CLIENT_SECRET,
                 )
 
-                data_service = YouTubeDataService(credentials)
-                video_info = data_service.get_video_full_info(video_id)
+                def _fetch_video_info() -> dict | None:
+                    # YouTubeDataService(build()) 可能拉 discovery doc,get_video_full_info
+                    # 是阻塞跨境往返;一并 offload 出事件循环,避免单 worker 下卡住所有并发
+                    return YouTubeDataService(credentials).get_video_full_info(video_id)
+
+                video_info = await asyncio.to_thread(_fetch_video_info)
 
                 if video_info:
                     return YouTubeVideoInfo(
