@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import secrets
@@ -182,21 +183,22 @@ async def oauth_callback(
         oauth_service = YouTubeOAuthService()
         subscription_service = YouTubeSubscriptionService()
 
-        # Exchange code for tokens
-        access_token, refresh_token, expires_at = oauth_service.exchange_code(code)
+        # Exchange code for tokens(阻塞 httpx 往返,offload 出事件循环)
+        access_token, refresh_token, expires_at = await asyncio.to_thread(oauth_service.exchange_code, code)
 
         # Build credentials and try to get channel info (optional)
-        credentials = oauth_service.build_credentials(
+        credentials = oauth_service.build_credentials(  # 纯本地,无网络
             access_token=access_token,
             refresh_token=refresh_token,
             expires_at=expires_at,
         )
-        data_service = YouTubeDataService(credentials)
+        # YouTubeDataService(build()) 可能拉 discovery doc,offload
+        data_service = await asyncio.to_thread(YouTubeDataService, credentials)
 
         # Channel is optional - user may have subscriptions without a channel
         channel_id = None
         try:
-            channel_info = data_service.get_my_channel()
+            channel_info = await asyncio.to_thread(data_service.get_my_channel)
             channel_id = channel_info["id"]
         except BusinessError as e:
             if e.code == ErrorCode.YOUTUBE_API_ERROR:
