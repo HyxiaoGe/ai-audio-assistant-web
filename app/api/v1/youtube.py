@@ -18,6 +18,7 @@ from app.api.deps import CurrentUser, get_current_user, get_db
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.rate_limit import rate_limit
+from app.core.redis import get_redis_client
 from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
@@ -60,21 +61,43 @@ VIDEO_SYNC_THRESHOLD_HOURS = 6
 
 router = APIRouter(prefix="/youtube", tags=["youtube"])
 
-# In-memory state storage (in production, use Redis)
-# Format: {state: user_id}
-_oauth_states: dict[str, str] = {}
+# OAuth state(CSRF 防护)存 Redis,不能用进程内 dict:
+# 多 worker 进程各存各的 → 授权请求与回调可能落在不同进程 → 合法回调被误判 invalid_state;
+# 且 dict 无 TTL、重启即丢、用不掉的 state 永久残留(内存泄漏)。Redis 带 TTL + 一次性 getdel
+# 解决以上全部。state 是 CSRF 校验,**fail-closed**:Redis 故障时宁可拒绝,绝不放行。
+_OAUTH_STATE_KEY_PREFIX = "yt_oauth_state:"
+_OAUTH_STATE_TTL_SECONDS = 600  # OAuth 往返窗口(10 分钟足够,过期自动清理)
 
 
-def _generate_state(user_id: str) -> str:
-    """Generate a secure state token and store the mapping."""
+async def _generate_state(user_id: str) -> str:
+    """生成不可猜的 state 并写入 Redis(带 TTL)。
+
+    fail-closed:写不进 Redis 就抛错——给不出能在回调里被校验的 state,不如当场失败,
+    避免把用户导向一个注定 invalid_state 的授权流。
+    """
     state = secrets.token_urlsafe(32)
-    _oauth_states[state] = user_id
+    try:
+        await get_redis_client().set(f"{_OAUTH_STATE_KEY_PREFIX}{state}", user_id, ex=_OAUTH_STATE_TTL_SECONDS)
+    except Exception as exc:
+        logger.error("Failed to persist OAuth state to Redis (fail-closed): %s", exc)
+        raise BusinessError(
+            ErrorCode.YOUTUBE_OAUTH_FAILED,
+            reason="OAuth state store unavailable",
+        ) from exc
     return state
 
 
-def _verify_state(state: str) -> str | None:
-    """Verify state and return user_id, then remove it."""
-    return _oauth_states.pop(state, None)
+async def _verify_state(state: str) -> str | None:
+    """校验 state 并返回 user_id,随即删除(一次性,防重放)。
+
+    fail-closed:Redis 故障当作无效 state(返回 None)——绝不接受无法校验的 state,
+    否则等于 CSRF 防护被关闭。
+    """
+    try:
+        return await get_redis_client().getdel(f"{_OAUTH_STATE_KEY_PREFIX}{state}")
+    except Exception as exc:
+        logger.error("Failed to verify OAuth state via Redis (fail-closed, rejecting): %s", exc)
+        return None
 
 
 async def _trigger_video_sync_if_needed(
@@ -152,7 +175,7 @@ async def get_auth_url(
         )
 
     # Generate state for CSRF protection
-    state = _generate_state(user.id)
+    state = await _generate_state(user.id)
 
     auth_url = oauth_service.generate_auth_url(state=state)
 
@@ -173,7 +196,7 @@ async def oauth_callback(
     It exchanges the code for tokens, saves them, and redirects to frontend.
     """
     # Verify state
-    user_id = _verify_state(state)
+    user_id = await _verify_state(state)
     if not user_id:
         logger.warning(f"Invalid state in callback: {state[:20]}...")
         # Redirect to frontend with error
