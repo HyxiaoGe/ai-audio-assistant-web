@@ -1,6 +1,11 @@
-"""监控告警系统。
+"""服务指标收集（@monitor 装饰器）。
 
-提供指标收集、告警规则检测与通知能力，支持装饰器自动上报。
+仅保留进程内的调用计数/时延收集。历史上这里还有一套 bespoke 告警机器
+(AlertManager 内存规则 + NotificationManager + 从未实例化的 no-op WebhookNotifier +
+MonitoringSystem 的 daemon 告警循环),已在 P3-2 拆除:它们是死代码(Webhook 从不发 HTTP、
+指标内存即丢、worker 进程根本不启循环),且与既有运维栈(Kuma / Feishu / dev-ops-sentinel)
+重复。运维告警统一走那套外部栈,不在应用内重造。需要 /metrics 导出时再单独评估(prometheus
+multiprocess + worker exporter 是独立基础设施任务)。
 """
 
 from __future__ import annotations
@@ -9,24 +14,13 @@ import inspect
 import logging
 import threading
 import time
-from abc import ABC, abstractmethod
 from collections import deque
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from functools import wraps
 
 logger = logging.getLogger("app.core.monitoring")
-
-
-class AlertLevel(StrEnum):
-    """告警级别"""
-
-    DEBUG = "debug"
-    INFO = "info"
-    WARNING = "warning"
-    CRITICAL = "critical"
 
 
 class MetricType(StrEnum):
@@ -45,9 +39,6 @@ class MonitoringConfig:
     enabled: bool = True
     collect_interval: int = 10
     metrics_retention: int = 3600
-    enable_alerts: bool = True
-    alert_check_interval: int = 30
-    alert_cooldown: int = 300
     max_metrics_per_service: int = 1000
     enable_percentiles: bool = True
 
@@ -112,36 +103,6 @@ def _percentile(sorted_values: list[float], percentile: float) -> float:
     return sorted_values[index]
 
 
-@dataclass
-class AlertRule:
-    """告警规则"""
-
-    rule_id: str
-    name: str
-    condition: Callable[[ServiceMetrics], bool]
-    level: AlertLevel
-    message_template: str
-    enabled: bool = True
-    cooldown: int = 300
-    last_triggered: datetime | None = None
-
-
-@dataclass
-class Alert:
-    """告警实例"""
-
-    alert_id: str
-    rule_id: str
-    service_type: str
-    service_name: str
-    level: AlertLevel
-    message: str
-    timestamp: datetime
-    metrics: ServiceMetrics
-    resolved: bool = False
-    resolved_at: datetime | None = None
-
-
 class MetricsCollector:
     """指标收集器（线程安全）"""
 
@@ -188,171 +149,6 @@ class MetricsCollector:
         key = f"{service_type}:{service_name}"
         with self._lock:
             self._metrics.pop(key, None)
-
-
-class AlertManager:
-    """告警管理器（线程安全）"""
-
-    def __init__(self, config: MonitoringConfig):
-        self.config = config
-        self._rules: dict[str, AlertRule] = {}
-        self._active_alerts: list[Alert] = []
-        self._alert_history: deque[Alert] = deque(maxlen=1000)
-        self._lock = threading.Lock()
-        self._register_default_rules()
-
-    def _register_default_rules(self) -> None:
-        self.add_rule(
-            AlertRule(
-                rule_id="high_error_rate",
-                name="服务错误率过高",
-                condition=lambda m: m.error_rate > 0.05,
-                level=AlertLevel.WARNING,
-                message_template=("服务 {service_type}:{service_name} 错误率过高: {error_rate:.2%}"),
-                cooldown=self.config.alert_cooldown,
-            )
-        )
-        self.add_rule(
-            AlertRule(
-                rule_id="slow_response",
-                name="响应时间过长",
-                condition=lambda m: m.avg_response_time > 5.0,
-                level=AlertLevel.WARNING,
-                message_template=("服务 {service_type}:{service_name} 响应时间过长: {avg_response_time:.2f}s"),
-                cooldown=self.config.alert_cooldown,
-            )
-        )
-        self.add_rule(
-            AlertRule(
-                rule_id="high_p99_latency",
-                name="P99延迟过高",
-                condition=lambda m: m.p99_response_time > 10.0,
-                level=AlertLevel.WARNING,
-                message_template=("服务 {service_type}:{service_name} P99延迟过高: {p99_response_time:.2f}s"),
-                cooldown=self.config.alert_cooldown,
-            )
-        )
-
-    def add_rule(self, rule: AlertRule) -> None:
-        with self._lock:
-            self._rules[rule.rule_id] = rule
-
-    def check_rules(self, metrics: ServiceMetrics) -> list[Alert]:
-        triggered_alerts: list[Alert] = []
-        with self._lock:
-            for rule in self._rules.values():
-                if not rule.enabled:
-                    continue
-
-                if rule.last_triggered:
-                    elapsed = (datetime.now() - rule.last_triggered).total_seconds()
-                    if elapsed < rule.cooldown:
-                        continue
-
-                try:
-                    if rule.condition(metrics):
-                        alert = self._create_alert(rule, metrics)
-                        triggered_alerts.append(alert)
-                        rule.last_triggered = datetime.now()
-                except Exception as exc:
-                    logger.error("告警规则检查失败: %s, 错误: %s", rule.rule_id, exc)
-
-        return triggered_alerts
-
-    def _create_alert(self, rule: AlertRule, metrics: ServiceMetrics) -> Alert:
-        message = rule.message_template.format(
-            service_type=metrics.service_type,
-            service_name=metrics.service_name,
-            error_rate=metrics.error_rate,
-            success_rate=metrics.success_rate,
-            avg_response_time=metrics.avg_response_time,
-            max_response_time=metrics.max_response_time,
-            p95_response_time=metrics.p95_response_time,
-            p99_response_time=metrics.p99_response_time,
-            total_calls=metrics.total_calls,
-        )
-
-        alert = Alert(
-            alert_id=f"{rule.rule_id}_{datetime.now().timestamp()}",
-            rule_id=rule.rule_id,
-            service_type=metrics.service_type,
-            service_name=metrics.service_name,
-            level=rule.level,
-            message=message,
-            timestamp=datetime.now(),
-            metrics=metrics,
-        )
-
-        self._active_alerts.append(alert)
-        self._alert_history.append(alert)
-        return alert
-
-    def get_active_alerts(self) -> list[Alert]:
-        with self._lock:
-            return [alert for alert in self._active_alerts if not alert.resolved]
-
-    def resolve_alert(self, alert_id: str) -> None:
-        with self._lock:
-            for alert in self._active_alerts:
-                if alert.alert_id == alert_id:
-                    alert.resolved = True
-                    alert.resolved_at = datetime.now()
-
-
-class NotifierInterface(ABC):
-    """通知器接口"""
-
-    @abstractmethod
-    def send(self, alert: Alert) -> None:
-        """发送告警通知"""
-
-
-class LogNotifier(NotifierInterface):
-    """日志通知器"""
-
-    def send(self, alert: Alert) -> None:
-        log_func = {
-            AlertLevel.DEBUG: logger.debug,
-            AlertLevel.INFO: logger.info,
-            AlertLevel.WARNING: logger.warning,
-            AlertLevel.CRITICAL: logger.critical,
-        }.get(alert.level, logger.info)
-
-        log_func(
-            "[ALERT] %s - %s (服务: %s:%s)",
-            alert.level.upper(),
-            alert.message,
-            alert.service_type,
-            alert.service_name,
-        )
-
-
-class WebhookNotifier(NotifierInterface):
-    """Webhook 通知器"""
-
-    def __init__(self, webhook_url: str):
-        self.webhook_url = webhook_url
-
-    def send(self, alert: Alert) -> None:
-        logger.info("发送 Webhook 通知到 %s: %s", self.webhook_url, alert.message)
-
-
-class NotificationManager:
-    """通知管理器"""
-
-    def __init__(self) -> None:
-        self._notifiers: list[NotifierInterface] = []
-        self.register_notifier(LogNotifier())
-
-    def register_notifier(self, notifier: NotifierInterface) -> None:
-        self._notifiers.append(notifier)
-
-    def send_notification(self, alert: Alert) -> None:
-        for notifier in self._notifiers:
-            try:
-                notifier.send(alert)
-            except Exception as exc:
-                logger.error("发送通知失败: %s", exc)
 
 
 def monitor(service_type: str, service_name: str):
@@ -438,7 +234,13 @@ def monitor(service_type: str, service_name: str):
 
 
 class MonitoringSystem:
-    """监控系统（单例模式）"""
+    """监控系统（单例）。
+
+    仅持有进程内的 @monitor 计数器(self.collector)。bespoke 告警 daemon 循环已拆除(P3-2)。
+    start()/stop() 保留为无操作 seam,使 app/main.py 的 startup/shutdown 与 SmartFactory 的
+    _register_monitoring 既有 wiring 无需改动(同 smart_factory._wrap_fault_tolerance 的
+    "保留接缝、掏空实现" 处理)。
+    """
 
     _instance: MonitoringSystem | None = None
     _lock = threading.Lock()
@@ -449,10 +251,6 @@ class MonitoringSystem:
 
         self.config = config
         self.collector = MetricsCollector(config)
-        self.alert_manager = AlertManager(config)
-        self.notification_manager = NotificationManager()
-        self._running = False
-        self._monitor_thread: threading.Thread | None = None
 
     @classmethod
     def get_instance(cls, config: MonitoringConfig | None = None) -> MonitoringSystem:
@@ -463,34 +261,7 @@ class MonitoringSystem:
         return cls._instance
 
     def start(self) -> None:
-        if not self.config.enabled:
-            logger.info("监控系统已禁用")
-            return
-
-        if self._running:
-            return
-
-        self._running = True
-        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        self._monitor_thread.start()
-        logger.info("监控系统已启动")
+        """无操作 seam（历史上启动告警 daemon 循环;现已拆除,告警走 Kuma/Feishu）。"""
 
     def stop(self) -> None:
-        self._running = False
-        if self._monitor_thread:
-            self._monitor_thread.join(timeout=5)
-        logger.info("监控系统已停止")
-
-    def _monitor_loop(self) -> None:
-        while self._running:
-            try:
-                if self.config.enable_alerts:
-                    all_metrics = self.collector.get_all_metrics()
-                    for metrics in all_metrics.values():
-                        alerts = self.alert_manager.check_rules(metrics)
-                        for alert in alerts:
-                            self.notification_manager.send_notification(alert)
-            except Exception as exc:
-                logger.error("监控循环异常: %s", exc)
-
-            time.sleep(self.config.alert_check_interval)
+        """无操作 seam。"""

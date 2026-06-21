@@ -22,6 +22,7 @@ from app.config import settings
 from app.core.asr_scheduler import ASRScheduler, TaskFeatures
 from app.core.config_manager import ConfigManager
 from app.core.exceptions import BusinessError
+from app.core.logging_config import task_trace_context
 from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
 from app.core.task_stages import StageType
@@ -1776,4 +1777,5 @@ def process_youtube(
         task_id: 任务ID
         request_id: 请求追踪ID
     """
-    _process_youtube(task_id, request_id)
+    with task_trace_context(request_id):
+        _process_youtube(task_id, request_id)

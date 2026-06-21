@@ -24,6 +24,7 @@ from app.core.asr_scheduler import ASRScheduler, TaskFeatures
 from app.core.config_manager import ConfigManager
 from app.core.cost_optimizer import cost_tracker
 from app.core.exceptions import BusinessError
+from app.core.logging_config import task_trace_context
 from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
@@ -1267,4 +1268,5 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
     retry_backoff=True,
 )
 def process_audio(self, task_id: str, request_id: str | None = None) -> None:
-    asyncio.run(_process_task(task_id, request_id))
+    with task_trace_context(request_id):
+        asyncio.run(_process_task(task_id, request_id))

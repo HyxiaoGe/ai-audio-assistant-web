@@ -93,7 +93,10 @@ async def test_oauth_callback_offloads_blocking_calls(monkeypatch: pytest.Monkey
         async def save_youtube_account(self, **_kw: Any) -> None:
             return None
 
-    monkeypatch.setattr(youtube_module, "_verify_state", lambda _s: "user-1")
+    async def _ok_state(_s: str) -> str:  # _verify_state 现为 async(Redis 化,P3-6)
+        return "user-1"
+
+    monkeypatch.setattr(youtube_module, "_verify_state", _ok_state)
     monkeypatch.setattr(youtube_module, "YouTubeOAuthService", _StubOAuth)
     monkeypatch.setattr(youtube_module, "YouTubeDataService", _StubData)
     monkeypatch.setattr(youtube_module, "YouTubeSubscriptionService", _StubSub)

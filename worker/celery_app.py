@@ -4,10 +4,24 @@ import asyncio
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import after_setup_logger, worker_process_init
 
 from app.config import settings
 from app.core.config_manager import ConfigManager
+from app.core.logging_config import configure_logging
 from worker.db import worker_async_session_factory
+
+
+@after_setup_logger.connect
+def _setup_trace_logging(*args, **kwargs) -> None:
+    """给 Celery 配好的 logger 补挂 TraceIdFilter + trace_id Formatter(幂等)。"""
+    configure_logging()
+
+
+@worker_process_init.connect
+def _setup_trace_logging_per_child(*args, **kwargs) -> None:
+    """prefork 子进程启动时再配一次(每个子进程独立的 logging 状态);configure_logging 幂等。"""
+    configure_logging()
 
 
 def _get_redis_url() -> str:

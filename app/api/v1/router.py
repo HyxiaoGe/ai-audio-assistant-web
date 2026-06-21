@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     asr_quotas,
     asr_usage,
+    client_errors,
     config_center,
     health,
     llm,
@@ -23,6 +24,7 @@ from app.api.v1 import (
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(asr_quotas.router)
 api_router.include_router(asr_usage.router)
+api_router.include_router(client_errors.router)
 api_router.include_router(config_center.router)
 api_router.include_router(health.router)
 api_router.include_router(llm.router)

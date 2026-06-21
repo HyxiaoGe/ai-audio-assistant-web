@@ -82,9 +82,10 @@ async def test_redis_failure_fails_open(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _patch_redis(monkeypatch, _BrokenRedis())
-    with caplog.at_level(logging.WARNING, logger="app.core.rate_limit"):
+    rate_limit._failopen_logged_scopes.clear()
+    with caplog.at_level(logging.ERROR, logger="app.core.rate_limit"):
         await rate_limit._check("k", limit=1, window_seconds=60)  # no raise
-    assert "rate_limit check skipped" in caplog.text
+    assert "fail-open" in caplog.text
 
 
 async def test_dependency_factory(monkeypatch: pytest.MonkeyPatch) -> None:

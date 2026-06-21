@@ -44,6 +44,8 @@ from app.services.task_service import TaskService
 router = APIRouter(prefix="/public", tags=["public"])
 
 _rate_limit = rate_limit_by_ip(limit=settings.RATE_LIMIT_PUBLIC_PER_MIN, scope="public_read")
+# 缩略图代理单独一档(更宽),与 public_read 分桶,避免封面抓取挤占探索浏览的限流预算。
+_thumbnail_rate_limit = rate_limit_by_ip(limit=settings.RATE_LIMIT_THUMBNAIL_PROXY_PER_MIN, scope="thumbnail_proxy")
 
 # 公开 GET 成功路径的边缘缓存头(CF Cache Rule 在 dashboard 侧配,这里做 origin 准备)。
 # 取舍(用户已拍板):取消公开后,文本(标题/转写/摘要)在命中过的边缘 PoP 残留
@@ -106,12 +108,18 @@ async def get_public_task_detail(
 
 
 @router.get("/youtube-thumbnail/{video_id}")
-def get_youtube_thumbnail(video_id: str) -> Response:
+def get_youtube_thumbnail(
+    video_id: str,
+    _rl: None = Depends(_thumbnail_rate_limit),
+) -> Response:
     """同源代理 YouTube 缩略图(匿名;探索广场封面卡用)。
 
     绕开国内直连 i.ytimg.com 慢/被墙。无需鉴权——缩略图本身公开,浏览器 ``<img>`` 也不带 Bearer。
     安全边界在 ``youtube_thumbnail`` 内(video_id 严格正则 + 服务端固定 host 拼 URL + 不跟随
     重定向 + 体积/类型限制),无 SSRF 面。强缓存一周,从每浏览器收敛到一次服务端抓取。
+
+    按 IP 限流(``thumbnail_proxy`` 桶)+ 负缓存(见 youtube_thumbnail):匿名同步出网端点,
+    不设防可被枚举式刷成出网放大器 / 线程池饿死。限流在抓取前短路,负缓存挡住重复失败 id。
     """
     try:
         body, content_type = fetch_thumbnail(video_id)

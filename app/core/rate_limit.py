@@ -13,11 +13,21 @@ from collections.abc import Awaitable, Callable
 from fastapi import Depends, Request
 
 from app.api.deps import CurrentUser, get_current_user, get_current_user_from_query
+from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.redis import get_redis_client
 from app.i18n.codes import ErrorCode
 
 logger = logging.getLogger("app.core.rate_limit")
+
+# fail-open 已记过 ERROR 的 scope(每进程每 scope 只记一次,避免 Redis 持续抖动时刷屏)。
+_failopen_logged_scopes: set[str] = set()
+
+
+def _scope_of(key: str) -> str:
+    # key 形如 rl:{scope}:... ;取第二段作 scope 用于 log-once
+    parts = key.split(":", 2)
+    return parts[1] if len(parts) >= 2 else key
 
 
 async def _check(key: str, limit: int, window_seconds: int) -> None:
@@ -30,10 +40,39 @@ async def _check(key: str, limit: int, window_seconds: int) -> None:
     except BusinessError:
         raise
     except Exception as exc:  # fail-open：Redis 故障不应把真实流量打成 500
-        logger.warning("rate_limit check skipped (redis error) key=%s: %s", key, exc)
+        scope = _scope_of(key)
+        if scope not in _failopen_logged_scopes:
+            _failopen_logged_scopes.add(scope)
+            # ERROR(非 warning)以便被既有 Kuma/Feishu 日志扫描栈捕获;每 scope 只记一次
+            logger.error("rate_limit fail-open (redis error) scope=%s key=%s: %s", scope, key, exc)
         return
     if count > limit:
         raise BusinessError(ErrorCode.RATE_LIMIT_EXCEEDED, retry_after=str(window_seconds))
+
+
+def _client_ip(request: Request) -> str:
+    """解析可信的客户端 IP(给匿名按 IP 限流用)。
+
+    优先级:
+    1. CF-Connecting-IP —— cloudflared 是 *.seanfield.org 唯一公网入口,该头由 Cloudflare 边缘
+       设置、客户端无法经 CF 伪造,是唯一可从仓内确证可信的来源。
+    2. X-Forwarded-For 从右数第 N 跳 —— 仅当显式配置 RATE_LIMIT_TRUSTED_PROXY_HOPS=N>0(默认 0
+       即完全不信任 XFF)。最左 token 客户端可伪造、最右跳数取决于不在仓里的 nginx 配置;猜错
+       会把所有匿名请求塌进同一个桶 = 自我 DoS,故默认关闭,只有读过 live nginx 配置才设。
+    3. socket 地址(request.client.host)—— 粗但永不信任攻击者提供的字节。
+    """
+    cf_ip = request.headers.get("cf-connecting-ip", "").strip()
+    if cf_ip:
+        return cf_ip
+
+    hops = settings.RATE_LIMIT_TRUSTED_PROXY_HOPS
+    if hops > 0:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+        if len(parts) >= hops:
+            return parts[-hops]
+
+    return request.client.host if request.client else "unknown"
 
 
 def rate_limit(*, limit: int, window_seconds: int = 60, scope: str) -> Callable[..., Awaitable[None]]:
@@ -68,16 +107,12 @@ def rate_limit_query(
 def rate_limit_by_ip(*, limit: int, window_seconds: int = 60, scope: str) -> Callable[..., Awaitable[None]]:
     """匿名公开端点按客户端 IP 固定窗口限流(无 user 可依)。
 
-    经 nginx/cloudflared 反代,直连 socket 是代理地址,故优先取 X-Forwarded-For
-    第一跳,无则回退 request.client.host。XFF 可伪造,这里只做滥用阻尼非安全边界;
-    Redis 故障同样 fail-open。
+    IP 解析见 _client_ip:优先 CF-Connecting-IP(不可伪造),XFF 默认不信任(防伪造绕过预算),
+    回落 socket 地址。Redis 故障同样 fail-open。
     """
 
     async def _dep(request: Request) -> None:
-        forwarded = request.headers.get("x-forwarded-for", "")
-        client_ip = forwarded.split(",")[0].strip() if forwarded else ""
-        if not client_ip:
-            client_ip = request.client.host if request.client else "unknown"
+        client_ip = _client_ip(request)
         bucket = int(time.time() // window_seconds)
         await _check(f"rl:{scope}:ip:{client_ip}:{bucket}", limit, window_seconds)
 
