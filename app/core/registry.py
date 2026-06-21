@@ -158,6 +158,7 @@ class ServiceRegistry:
         force_new: bool = False,
         model_id: str | None = None,
         config: Any | None = None,
+        user_id: str | None = None,
     ) -> Any:
         """获取服务实例（单例模式）
 
@@ -210,6 +211,9 @@ class ServiceRegistry:
                         kwargs["model_id"] = model_id
                     if "config" in sig.parameters and config is not None:
                         kwargs["config"] = config
+                    # 成本归因:仅当服务 __init__ 接受 user_id 时注入(ASR/image_service 不受影响)
+                    if "user_id" in sig.parameters and user_id:
+                        kwargs["user_id"] = user_id
                     instance = service_class(**kwargs)
 
                     # 如果不是强制创建，则缓存实例

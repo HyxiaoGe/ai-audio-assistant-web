@@ -108,13 +108,17 @@ async def generate_summaries_with_quality_awareness(
             f"(confidence: {quality.avg_confidence:.2f}), using premium model"
         )
         try:
-            llm_service: LLMService = await SmartFactory.get_service("llm", provider="proxy", model_id="chat-premium")
+            llm_service: LLMService = await SmartFactory.get_service(
+                "llm", provider="proxy", model_id="chat-premium", user_id=user_id
+            )
         except Exception as e:
             logger.warning(f"Task {task_id}: Failed to get premium model, fallback to standard: {e}")
-            llm_service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
+            llm_service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id, user_id=user_id)
     else:
         # 正常质量：使用用户指定或自动选择的服务
-        llm_service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id)
+        # 成本归因:带上 user_id,让 ProxyLLMService 给 LiteLLM 请求体打 end-user 标签(GET
+        # /customer/info 据此把这条 audio 主摘要的花费拆到具体用户);与 youtube/regenerate 对齐。
+        llm_service = await SmartFactory.get_service("llm", provider=provider, model_id=model_id, user_id=user_id)
 
     logger.info(
         f"Task {task_id}: Using LLM service - provider: {llm_service.provider}, model: {llm_service.model_name}"
