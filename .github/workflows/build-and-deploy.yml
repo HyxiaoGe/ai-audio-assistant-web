@@ -169,15 +169,19 @@ jobs:
           docker rm -f ai-audio-assistant-web-api ai-audio-assistant-web-worker ai-audio-assistant-web-beat 2>/dev/null || true
           docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d
 
-      - name: Verify health
+      - name: Verify readiness
         run: |
+          # 探 /readiness(Postgres/Redis/Celery 全活才 200 "ready";任一挂 → 503)。
+          # 真 smoke test:此前 curl /health 静态 stub,依赖全挂也绿。
           for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8088/api/v1/health | grep -q '"status":"ok"'; then
+            if curl -fsS http://127.0.0.1:8088/api/v1/readiness | grep -q '"status":"ready"'; then
               exit 0
             fi
             sleep 2
           done
 
+          echo "readiness 未就绪,最后一次响应:"
+          curl -sS http://127.0.0.1:8088/api/v1/readiness || true
           docker logs --tail=120 ai-audio-assistant-web-api || true
           exit 1
 
