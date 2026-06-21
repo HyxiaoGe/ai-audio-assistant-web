@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from app.core import youtube_thumbnail
+from app.i18n.codes import ErrorCode
 
 
 def _make_response(content: bytes = b"img", content_type: str = "image/jpeg") -> MagicMock:
@@ -45,6 +46,7 @@ class TestIsValidVideoId:
 class TestFetchThumbnail:
     def setup_method(self) -> None:
         youtube_thumbnail._cache.clear()
+        youtube_thumbnail._negative_cache.clear()
 
     def test_invalid_id_raises_400(self) -> None:
         with pytest.raises(youtube_thumbnail.YouTubeThumbnailError) as exc:
@@ -81,10 +83,48 @@ class TestFetchThumbnail:
             youtube_thumbnail.fetch_thumbnail("dQw4w9WgXcQ")
         assert exc.value.status_code == 502
 
+    @patch("app.core.youtube_thumbnail.httpx.get", side_effect=httpx.HTTPError("boom"))
+    def test_failed_fetch_is_negatively_cached(self, mock_get: MagicMock) -> None:
+        # 负缓存:对不存在/抓取失败的 id,短时间内重复请求不应反复打 i.ytimg.com
+        # (否则枚举不存在的 11 位 id = 无上限的同步出网抓取 = 线程池饿死)。
+        with pytest.raises(youtube_thumbnail.YouTubeThumbnailError):
+            youtube_thumbnail.fetch_thumbnail("dQw4w9WgXcQ")
+        with pytest.raises(youtube_thumbnail.YouTubeThumbnailError):
+            youtube_thumbnail.fetch_thumbnail("dQw4w9WgXcQ")
+        mock_get.assert_called_once()  # 第二次走负缓存,未再出网
+
+    @patch("app.core.youtube_thumbnail.httpx.get")
+    def test_negative_cache_expires_and_allows_retry(self, mock_get: MagicMock) -> None:
+        # TTL 过后允许重试:失败不是永久判决(上游抖动恢复后应能再次成功)。
+        mock_get.side_effect = [
+            httpx.HTTPError("boom"),
+            _make_response(content=b"OK", content_type="image/jpeg"),
+        ]
+        with pytest.raises(youtube_thumbnail.YouTubeThumbnailError):
+            youtube_thumbnail.fetch_thumbnail("dQw4w9WgXcQ", now=1000.0)
+        body, _ = youtube_thumbnail.fetch_thumbnail(
+            "dQw4w9WgXcQ", now=1000.0 + youtube_thumbnail.NEGATIVE_TTL_SECONDS + 1
+        )
+        assert body == b"OK"
+        assert mock_get.call_count == 2
+
+    @patch("app.core.youtube_thumbnail.httpx.get")
+    def test_success_clears_prior_negative_entry(self, mock_get: MagicMock) -> None:
+        # 一旦成功,负缓存条目应被清除,后续成功立即走正缓存,不被旧失败拖住。
+        mock_get.side_effect = [
+            httpx.HTTPError("boom"),
+            _make_response(content=b"OK", content_type="image/jpeg"),
+        ]
+        with pytest.raises(youtube_thumbnail.YouTubeThumbnailError):
+            youtube_thumbnail.fetch_thumbnail("dQw4w9WgXcQ", now=1000.0)
+        youtube_thumbnail.fetch_thumbnail("dQw4w9WgXcQ", now=1000.0 + youtube_thumbnail.NEGATIVE_TTL_SECONDS + 1)
+        assert "dQw4w9WgXcQ" not in youtube_thumbnail._negative_cache
+
 
 class TestThumbnailRoute:
     def setup_method(self) -> None:
         youtube_thumbnail._cache.clear()
+        youtube_thumbnail._negative_cache.clear()
 
     def _client(self):
         from fastapi.testclient import TestClient
@@ -106,3 +146,22 @@ class TestThumbnailRoute:
         # 非法 id:不应返回图片(走错误路径)。
         r = self._client().get("/api/v1/public/youtube-thumbnail/short")
         assert not r.headers.get("content-type", "").startswith("image/")
+
+    @patch("app.core.rate_limit.get_redis_client")
+    @patch("app.core.youtube_thumbnail.httpx.get")
+    def test_route_is_rate_limited(self, mock_get: MagicMock, mock_redis: MagicMock) -> None:
+        # 缩略图代理是匿名同步出网端点:必须按 IP 限流,否则可被枚举式刷成出网放大器。
+        mock_get.return_value = _make_response(content=b"IMG", content_type="image/jpeg")
+
+        class _Saturated:
+            async def incr(self, _key: str) -> int:
+                return 10**9  # 直接越过任何阈值
+
+            async def expire(self, _key: str, _ttl: int) -> None:
+                return None
+
+        mock_redis.return_value = _Saturated()
+        r = self._client().get("/api/v1/public/youtube-thumbnail/dQw4w9WgXcQ")
+        assert r.status_code == 200  # 统一错误信封是 HTTP 200
+        assert r.json()["code"] == int(ErrorCode.RATE_LIMIT_EXCEEDED)
+        mock_get.assert_not_called()  # 限流在抓取前短路,绝不出网

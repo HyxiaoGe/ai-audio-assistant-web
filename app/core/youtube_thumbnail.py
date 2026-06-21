@@ -25,8 +25,16 @@ MAX_BYTES = 2 * 1024 * 1024
 MAX_ENTRIES = 1024
 _FETCH_TIMEOUT = 10.0
 
+# 负缓存:抓取失败/上游非图片的 id 短时间内直接短路,不再出网。挡住「枚举不存在的 11 位
+# id」——否则每个不存在 id 都触发一次同步出网抓取,把同步路由的线程池打满(出网放大器)。
+# TTL 取短(失败非永久判决,上游抖动恢复后允许重试);负缓存自身也有上限,绝不能反成放大面。
+NEGATIVE_TTL_SECONDS = 10 * 60
+NEGATIVE_MAX_ENTRIES = 4096
+
 # video_id -> (body, content_type, fetched_at)
 _cache: dict[str, tuple[bytes, str, float]] = {}
+# video_id -> failed_at(负缓存)
+_negative_cache: dict[str, float] = {}
 
 
 class YouTubeThumbnailError(Exception):
@@ -61,30 +69,51 @@ def _evict_if_needed() -> None:
         _cache.pop(key, None)
 
 
+def _remember_failure(video_id: str, moment: float) -> None:
+    """记一次抓取失败到负缓存;超限时按时间淘汰最旧条目,防止负缓存自身被枚举撑爆。"""
+    _negative_cache[video_id] = moment
+    if len(_negative_cache) <= NEGATIVE_MAX_ENTRIES:
+        return
+    overflow = len(_negative_cache) - NEGATIVE_MAX_ENTRIES
+    for key, _ in sorted(_negative_cache.items(), key=lambda kv: kv[1])[:overflow]:
+        _negative_cache.pop(key, None)
+
+
 def fetch_thumbnail(video_id: str, *, now: float | None = None) -> tuple[bytes, str]:
     """返回 ``(image_bytes, content_type)``;非法 id 或上游失败抛 ``YouTubeThumbnailError``。"""
     moment = time.time() if now is None else now
     if not is_valid_video_id(video_id):
+        # 非法 id 在出网前就被正则挡掉,本就零成本,无需进负缓存。
         raise YouTubeThumbnailError(400, "Invalid video id")
 
     cached = _cache.get(video_id)
     if cached is not None and moment - cached[2] < CACHE_TTL_SECONDS:
         return cached[0], cached[1]
 
+    failed_at = _negative_cache.get(video_id)
+    if failed_at is not None and moment - failed_at < NEGATIVE_TTL_SECONDS:
+        # 近期刚失败过:直接短路,不再出网(挡枚举式重复抓取)。
+        raise YouTubeThumbnailError(502, "Thumbnail fetch failed")
+
     try:
         response = httpx.get(_thumbnail_url(video_id), timeout=_FETCH_TIMEOUT, follow_redirects=False)
         response.raise_for_status()
     except httpx.HTTPError as exc:
+        _remember_failure(video_id, moment)
         raise YouTubeThumbnailError(502, "Thumbnail fetch failed") from exc
 
     content_type = response.headers.get("content-type", "")
     if not content_type.startswith("image/"):
+        _remember_failure(video_id, moment)
         raise YouTubeThumbnailError(502, "Upstream is not an image")
 
     body = response.content
     if len(body) > MAX_BYTES:
+        _remember_failure(video_id, moment)
         raise YouTubeThumbnailError(502, "Thumbnail too large")
 
+    # 成功:清掉可能存在的旧负缓存条目,后续直接走正缓存。
+    _negative_cache.pop(video_id, None)
     _cache[video_id] = (body, content_type, moment)
     _evict_if_needed()
     return body, content_type

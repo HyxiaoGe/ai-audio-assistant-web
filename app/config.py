@@ -225,6 +225,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_SUMMARY_REGENERATE_PER_MIN: int = Field(default=5)
     RATE_LIMIT_YOUTUBE_SYNC_PER_MIN: int = Field(default=10)
     RATE_LIMIT_PUBLIC_PER_MIN: int = Field(default=60)  # 公开探索端点,按 IP
+    # 缩略图同步代理(匿名出网抓取):比普通公开端点放得宽(一个探索页可并发若干封面),
+    # 但仍需上限,挡住「枚举不存在 id」把同步线程池刷成出网放大器。
+    RATE_LIMIT_THUMBNAIL_PROXY_PER_MIN: int = Field(default=120)
     RATE_LIMIT_TASK_SEARCH_PER_MIN: int = Field(default=30)  # 转写全文搜索(FTS 查询有成本)
     # 按 IP 限流取客户端 IP 时信任的反代跳数(ProxyFix x_for 语义:从 XFF 右数第 N 跳)。
     # 默认 0 = 完全不信任 XFF(优先 CF-Connecting-IP,否则回落 socket 地址)。XFF 跳数取决于
