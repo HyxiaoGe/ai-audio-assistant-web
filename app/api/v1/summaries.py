@@ -164,6 +164,7 @@ async def regenerate_summary(
     data: SummaryRegenerateRequest,
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
+    _rl: None = Depends(rate_limit(limit=settings.RATE_LIMIT_SUMMARY_REGENERATE_PER_MIN, scope="summary_regenerate")),
 ) -> JSONResponse:
     """重新生成指定类型的摘要"""
     from worker.celery_app import celery_app

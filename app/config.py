@@ -221,6 +221,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_TASK_CREATE_PER_MIN: int = Field(default=20)
     RATE_LIMIT_UPLOAD_PRESIGN_PER_MIN: int = Field(default=30)
     RATE_LIMIT_SUMMARY_COMPARE_PER_MIN: int = Field(default=10)
+    # regenerate 比 compare 更重(同时烧 LLM + 付费 Seedream 配图),取更紧的上限
+    RATE_LIMIT_SUMMARY_REGENERATE_PER_MIN: int = Field(default=5)
     RATE_LIMIT_YOUTUBE_SYNC_PER_MIN: int = Field(default=10)
     RATE_LIMIT_PUBLIC_PER_MIN: int = Field(default=60)  # 公开探索端点,按 IP
     RATE_LIMIT_TASK_SEARCH_PER_MIN: int = Field(default=30)  # 转写全文搜索(FTS 查询有成本)
