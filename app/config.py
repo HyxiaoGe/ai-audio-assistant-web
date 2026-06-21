@@ -226,6 +226,11 @@ class Settings(BaseSettings):
     RATE_LIMIT_YOUTUBE_SYNC_PER_MIN: int = Field(default=10)
     RATE_LIMIT_PUBLIC_PER_MIN: int = Field(default=60)  # 公开探索端点,按 IP
     RATE_LIMIT_TASK_SEARCH_PER_MIN: int = Field(default=30)  # 转写全文搜索(FTS 查询有成本)
+    # 按 IP 限流取客户端 IP 时信任的反代跳数(ProxyFix x_for 语义:从 XFF 右数第 N 跳)。
+    # 默认 0 = 完全不信任 XFF(优先 CF-Connecting-IP,否则回落 socket 地址)。XFF 跳数取决于
+    # box 上真实 nginx proxy_set_header(不在仓里),猜错=所有匿名请求塌进一桶=自我 DoS;
+    # 只有在 ssh 读过 live nginx 配置后才把它设成真实跳数,详见 app/core/rate_limit.py。
+    RATE_LIMIT_TRUSTED_PROXY_HOPS: int = Field(default=0)
 
     # PromptHub
     PROMPTHUB_BASE_URL: str | None = Field(default=None)
