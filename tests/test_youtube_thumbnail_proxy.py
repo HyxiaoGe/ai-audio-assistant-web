@@ -117,8 +117,30 @@ class TestFetchThumbnail:
         ]
         with pytest.raises(youtube_thumbnail.YouTubeThumbnailError):
             youtube_thumbnail.fetch_thumbnail("dQw4w9WgXcQ", now=1000.0)
-        youtube_thumbnail.fetch_thumbnail("dQw4w9WgXcQ", now=1000.0 + youtube_thumbnail.NEGATIVE_TTL_SECONDS + 1)
+        body2, _ = youtube_thumbnail.fetch_thumbnail(
+            "dQw4w9WgXcQ", now=1000.0 + youtube_thumbnail.NEGATIVE_TTL_SECONDS + 1
+        )
+        assert body2 == b"OK"
         assert "dQw4w9WgXcQ" not in youtube_thumbnail._negative_cache
+        # 第三次必须走正缓存,不再出网(side_effect 只有 2 项,真出网会 StopIteration)
+        body3, _ = youtube_thumbnail.fetch_thumbnail(
+            "dQw4w9WgXcQ", now=1000.0 + youtube_thumbnail.NEGATIVE_TTL_SECONDS + 2
+        )
+        assert body3 == b"OK"
+        assert mock_get.call_count == 2
+
+    def test_negative_cache_eviction_is_bounded_and_amortized(self) -> None:
+        # 负缓存是为「枚举不存在 id」设计的——正是它被填满的场景。淘汰必须有界且摊还,
+        # 不能每加一个就 O(n log n) 全量排序掉一个。
+        n = youtube_thumbnail.NEGATIVE_MAX_ENTRIES
+        for i in range(n + 64):
+            youtube_thumbnail._remember_failure(f"id{i:08d}", float(i))
+        assert len(youtube_thumbnail._negative_cache) <= n  # 永不超上限
+        # 触发过一次摊还淘汰 → 降到低水位附近(远小于上限),而非贴着上限每次掉一个
+        assert len(youtube_thumbnail._negative_cache) <= youtube_thumbnail.NEGATIVE_LOW_WATER + 64
+        # 保留最新的(最近失败的更可能被很快重复请求),淘汰最旧的
+        assert f"id{n + 63:08d}" in youtube_thumbnail._negative_cache
+        assert "id00000000" not in youtube_thumbnail._negative_cache
 
 
 class TestThumbnailRoute:

@@ -30,6 +30,9 @@ _FETCH_TIMEOUT = 10.0
 # TTL 取短(失败非永久判决,上游抖动恢复后允许重试);负缓存自身也有上限,绝不能反成放大面。
 NEGATIVE_TTL_SECONDS = 10 * 60
 NEGATIVE_MAX_ENTRIES = 4096
+# 满了就一次性降到低水位(保留最新的 9 成),把 O(n log n) 排序摊还到约 1 成的添加上,
+# 而非每加一个就排序淘汰一个——枚举攻击恰是负缓存被填满的场景,不能让它每请求都全量排序。
+NEGATIVE_LOW_WATER = NEGATIVE_MAX_ENTRIES * 9 // 10
 
 # video_id -> (body, content_type, fetched_at)
 _cache: dict[str, tuple[bytes, str, float]] = {}
@@ -70,13 +73,17 @@ def _evict_if_needed() -> None:
 
 
 def _remember_failure(video_id: str, moment: float) -> None:
-    """记一次抓取失败到负缓存;超限时按时间淘汰最旧条目,防止负缓存自身被枚举撑爆。"""
+    """记一次抓取失败到负缓存;超上限时一次性降到低水位,防止负缓存自身被枚举撑爆。
+
+    摊还淘汰:仅当越过 NEGATIVE_MAX_ENTRIES 才排序,一次保留最新的 NEGATIVE_LOW_WATER 个,
+    之后约 1 成的添加都无需再排序(对枚举攻击下的高频失败尤为关键)。
+    """
     _negative_cache[video_id] = moment
     if len(_negative_cache) <= NEGATIVE_MAX_ENTRIES:
         return
-    overflow = len(_negative_cache) - NEGATIVE_MAX_ENTRIES
-    for key, _ in sorted(_negative_cache.items(), key=lambda kv: kv[1])[:overflow]:
-        _negative_cache.pop(key, None)
+    keep = sorted(_negative_cache.items(), key=lambda kv: kv[1])[-NEGATIVE_LOW_WATER:]
+    _negative_cache.clear()
+    _negative_cache.update(keep)
 
 
 def fetch_thumbnail(video_id: str, *, now: float | None = None) -> tuple[bytes, str]:

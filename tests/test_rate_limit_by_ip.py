@@ -114,6 +114,21 @@ async def test_trusted_xff_offset_when_configured(monkeypatch: pytest.MonkeyPatc
     assert any(":ip:10.0.0.9:" in k for k in fake.counts)  # 最右(第 1 跳)
 
 
+async def test_trusted_xff_insufficient_parts_falls_back_to_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """配置 hops=2 但 XFF 不足 2 跳时回落 socket 地址,不误信可伪造的最左 token。
+
+    这正是 hops 配置高于真实代理深度时的边界:`len(parts) >= hops` 守卫不成立 → 走 socket
+    回落,而不是把不足跳数里那个客户端可控的 token 当成 IP。
+    """
+    fake = _FakeRedis()
+    monkeypatch.setattr(rate_limit_module, "get_redis_client", lambda: fake)
+    monkeypatch.setattr(rate_limit_module.settings, "RATE_LIMIT_TRUSTED_PROXY_HOPS", 2)
+    async with _client(_make_app(limit=1)) as client:
+        resp = await client.get("/probe", headers={"x-forwarded-for": "9.9.9.9"})  # 只有 1 跳
+        assert resp.json()["ok"] == 1
+    assert not any(":ip:9.9.9.9:" in k for k in fake.counts)  # 不足跳数的 XFF token 未被当作 IP
+
+
 async def test_fail_open_on_redis_error_logs_once(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
     def _boom() -> Any:
         raise ConnectionError("redis down")
