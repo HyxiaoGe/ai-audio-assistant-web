@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    admin_costs,
     asr_quotas,
     asr_usage,
     client_errors,
@@ -22,6 +23,7 @@ from app.api.v1 import (
 )
 
 api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(admin_costs.router)
 api_router.include_router(asr_quotas.router)
 api_router.include_router(asr_usage.router)
 api_router.include_router(client_errors.router)

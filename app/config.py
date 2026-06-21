@@ -118,6 +118,14 @@ class Settings(BaseSettings):
     LITELLM_API_KEY: str | None = Field(default=None)
     LITELLM_MODEL: str = Field(default="chat-default")
     LITELLM_MAX_TOKENS: int = Field(default=4096)
+    # 管理员成本看板用:读 LiteLLM 的 end-user spend(GET /customer/info)需要 master key(代理管理员)。
+    # 不配则成本看板的「LLM($)」列优雅降级为「未配置」,不影响 ASR/配图(¥)两列。由 secret manager 注入。
+    LITELLM_MASTER_KEY: str | None = Field(default=None)
+
+    # 配图成本估算(¥/张):远端 image-service 不回成本,按「ready 图片数 × 每模型价」app 侧估。
+    # 默认价对齐当前主力模型 Seedream 4.5(¥0.25/张);换模型/调价改 BY_MODEL 覆盖,键=图片 model_id。
+    IMAGE_COST_CNY_DEFAULT: float = Field(default=0.25)
+    IMAGE_COST_CNY_BY_MODEL: dict[str, float] = Field(default_factory=dict)
 
     # 转写润色的并发 LLM 调用上限。润色把长转写按时间窗/段数切成多组、各组独立调一次
     # deepseek-chat。有界并发压缩总耗时；上限必须 < proxy_llm 熔断阈值（failure_threshold=5），
