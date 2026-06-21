@@ -53,6 +53,17 @@ def test_configure_logging_is_idempotent() -> None:
         assert sum(isinstance(f, TraceIdFilter) for f in handler.filters) == 1
 
 
+def test_configure_logging_never_raises_on_setup_failure(monkeypatch) -> None:
+    # 评审 MEDIUM:日志配置在 app/worker 启动早期调用——若内部装配抛错,绝不能拖垮启动。
+    import app.core.logging_config as logging_config
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError("formatter blew up")
+
+    monkeypatch.setattr(logging_config.logging, "Formatter", _boom)
+    configure_logging()  # 不抛错即通过(吞掉内部失败,退化为无 trace_id 但能启动)
+
+
 def test_unhandled_exception_log_and_response_share_trace_id(caplog) -> None:
     app = create_app()
 

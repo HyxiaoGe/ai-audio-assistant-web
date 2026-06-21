@@ -42,18 +42,25 @@ def configure_logging(level: int = logging.INFO) -> None:
     幂等是硬要求:uvicorn --reload、测试里每个用例 create_app()、Celery prefork 子进程回收
     (worker_max_tasks_per_child=100)都会重复调用,绝不能叠加 handler(否则日志重复)。
     实现:不新增 handler(除非 root 一个都没有),只给现有 handler 补挂一次 Filter 并统一 Formatter。
+    本函数在 app/worker 启动早期调用——任何内部装配异常都吞掉(退化为无 trace_id 但能正常启动),
+    绝不让日志配置失败拖垮整个进程启动。
     """
-    root = logging.getLogger()
-    root.setLevel(level)
+    try:
+        root = logging.getLogger()
+        root.setLevel(level)
 
-    if not root.handlers:
-        root.addHandler(logging.StreamHandler())
+        if not root.handlers:
+            root.addHandler(logging.StreamHandler())
 
-    formatter = logging.Formatter(_TRACE_FORMAT)
-    for handler in root.handlers:
-        if not any(isinstance(f, TraceIdFilter) for f in handler.filters):
-            handler.addFilter(TraceIdFilter())
-        handler.setFormatter(formatter)
+        formatter = logging.Formatter(_TRACE_FORMAT)
+        for handler in root.handlers:
+            if not any(isinstance(f, TraceIdFilter) for f in handler.filters):
+                handler.addFilter(TraceIdFilter())
+            handler.setFormatter(formatter)
+    except Exception:  # noqa: BLE001 — 日志装配失败不应阻断启动
+        logging.getLogger(__name__).warning(
+            "configure_logging failed; continuing without trace_id formatting", exc_info=True
+        )
 
 
 @contextmanager
