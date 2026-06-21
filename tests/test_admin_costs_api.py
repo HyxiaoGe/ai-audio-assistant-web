@@ -88,6 +88,9 @@ async def test_costs_compose_dual_currency_and_sort(monkeypatch: Any) -> None:
     items = data["items"]
     # 按 ¥ 合计降序:admin(3.0+0.5=3.5) 在前,user(1.0+0.25=1.25) 在后
     assert [i["user_id"] for i in items] == [_ADMIN, _USER]
+    # 「本人行」标记:发起请求的管理员自己的行 is_self=True,其余 False
+    assert items[0]["is_self"] is True
+    assert items[1]["is_self"] is False
     admin_row = items[0]
     assert admin_row["display_name"] == "管理员"
     assert admin_row["asr_cny"] == 3.0

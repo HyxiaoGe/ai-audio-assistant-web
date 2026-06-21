@@ -14,6 +14,8 @@ from pydantic import BaseModel
 class UserCostRow(BaseModel):
     user_id: str
     display_name: str | None = None
+    # 该行是否为发起请求的管理员自己(前端据此给名字加「(你)」);默认 False 保持向后兼容。
+    is_self: bool = False
 
     # 人民币列(¥):厂商直连按用量计 + 配图按张估。
     asr_cny: float
