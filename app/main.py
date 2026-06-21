@@ -1,3 +1,4 @@
+import logging
 import os
 
 from fastapi import FastAPI, HTTPException, Request
@@ -11,6 +12,7 @@ from app.core import litellm_health
 from app.core.config_manager import ConfigManager
 from app.core.exceptions import BusinessError
 from app.core.i18n import get_message
+from app.core.logging_config import configure_logging
 from app.core.middleware import (
     LocaleMiddleware,
     LoggingMiddleware,
@@ -19,7 +21,7 @@ from app.core.middleware import (
     UserContextMiddleware,
 )
 from app.core.monitoring import MonitoringSystem
-from app.core.response import error
+from app.core.response import error, get_request_id, reset_request_id, set_request_id
 from app.core.smart_factory import SelectionStrategy, SmartFactory, SmartFactoryConfig
 from app.db import async_session_factory
 from app.i18n.codes import ErrorCode
@@ -37,6 +39,8 @@ from app.services.llm import image_service as _llm_image_service  # noqa: F401
 from app.services.llm import proxy as _llm_proxy  # noqa: F401
 from app.services.storage import configs as storage_configs  # noqa: F401
 from app.services.storage import cos, minio, oss, tos  # noqa: F401
+
+logger = logging.getLogger(__name__)
 
 
 def _http_status_error_code(status_code: int) -> ErrorCode:
@@ -153,6 +157,7 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup_event() -> None:
         """Initialize services on application startup."""
+        configure_logging()
         SmartFactory.configure(
             SmartFactoryConfig(
                 default_strategy=SelectionStrategy.HEALTH_FIRST,
@@ -184,19 +189,27 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        import logging
+        # 异常处理器跑在 RequestIDMiddleware 之外的 ServerErrorMiddleware 层,中间件的 finally
+        # 可能已把 request_id contextvar reset 掉了;故从 request.state.trace_id 取回并临时重置,
+        # 使 500 的异常日志行与返回给客户端的 traceId 用同一个 id(可关联排障)。
+        trace_id = getattr(request.state, "trace_id", None) or get_request_id()
+        token = set_request_id(trace_id)
+        try:
+            logger.exception(
+                "Unhandled exception in %s %s [trace_id=%s]: %s: %s",
+                request.method,
+                request.url.path,
+                trace_id,
+                exc.__class__.__name__,
+                exc,
+            )
 
-        logger = logging.getLogger(__name__)
-
-        # 记录详细的异常信息
-        logger.exception(
-            f"Unhandled exception in {request.method} {request.url.path}: {exc.__class__.__name__}: {str(exc)}"
-        )
-
-        locale = getattr(request.state, "locale", "zh")
-        message = get_message(ErrorCode.INTERNAL_SERVER_ERROR, locale)
-        status_code = 500 if _is_media_stream_request(request) else 200
-        return error(ErrorCode.INTERNAL_SERVER_ERROR.value, message, status_code=status_code)
+            locale = getattr(request.state, "locale", "zh")
+            message = get_message(ErrorCode.INTERNAL_SERVER_ERROR, locale)
+            status_code = 500 if _is_media_stream_request(request) else 200
+            return error(ErrorCode.INTERNAL_SERVER_ERROR.value, message, status_code=status_code)
+        finally:
+            reset_request_id(token)
 
     return app
 
