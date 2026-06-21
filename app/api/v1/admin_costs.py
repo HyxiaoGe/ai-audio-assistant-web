@@ -44,7 +44,7 @@ async def get_costs_by_user(
     start_date: datetime | None = Query(default=None, description="开始时间(含)"),
     end_date: datetime | None = Query(default=None, description="结束时间(含)"),
     db: AsyncSession = Depends(get_db),
-    _admin: CurrentUser = Depends(get_admin_user),
+    admin: CurrentUser = Depends(get_admin_user),
 ) -> JSONResponse:
     """按用户聚合成本(管理员)。
 
@@ -69,6 +69,7 @@ async def get_costs_by_user(
             UserCostRow(
                 user_id=uid,
                 display_name=names.get(uid),
+                is_self=(uid == str(admin.id)),
                 asr_cny=asr_cny,
                 asr_paid_cny=float(a.get("paid_cny", 0.0)),
                 asr_calls=int(a.get("calls", 0)),
