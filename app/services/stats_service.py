@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import statistics
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 
 from sqlalchemy import func, select
@@ -32,6 +33,40 @@ def _format_duration(total_seconds: float) -> str:
     minutes = (total % 3600) // 60
     seconds = total % 60
     return f"{hours}h {minutes}m {seconds}s"
+
+
+_PENDING_STATES = {"pending", "queued"}
+
+
+def _resolve_tz(value: str | None) -> str:
+    if not value:
+        return "Asia/Shanghai"
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="invalid timezone") from exc
+    return value
+
+
+def _fold_status(status: str) -> str:
+    if status == "completed":
+        return "completed"
+    if status == "failed":
+        return "failed"
+    if status in _PENDING_STATES:
+        return "pending"
+    return "processing"
+
+
+def _daily_axis(start: datetime, end: datetime, tz: str) -> list[date]:
+    zone = ZoneInfo(tz)
+    cursor = start.astimezone(zone).date()
+    last = end.astimezone(zone).date()
+    days: list[date] = []
+    while cursor <= last:
+        days.append(cursor)
+        cursor += timedelta(days=1)
+    return days
 
 
 class StatsService:
