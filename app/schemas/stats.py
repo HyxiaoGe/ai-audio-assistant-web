@@ -28,6 +28,7 @@ class ServiceUsageBreakdown(BaseModel):
 
 class ServiceUsageOverviewResponse(BaseModel):
     time_range: TimeRange
+    resolved_range: str | None = None
     usage_by_service_type: list[ServiceUsageBreakdown]
     usage_by_provider: list[ServiceUsageBreakdown]
     asr_usage_by_provider: list[ServiceUsageBreakdown]
@@ -36,6 +37,7 @@ class ServiceUsageOverviewResponse(BaseModel):
 
 class TaskOverviewResponse(BaseModel):
     time_range: TimeRange
+    resolved_range: str | None = None
     total_tasks: int
     status_distribution: dict[str, int]
     success_rate: float
