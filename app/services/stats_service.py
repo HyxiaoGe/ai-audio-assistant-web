@@ -111,16 +111,43 @@ class StatsService:
         self.db = db
         self.user = user
 
+    async def _resolve_default_range(self, now: datetime) -> str:
+        stmt = select(func.max(Task.created_at)).where(
+            Task.user_id == self.user.id,
+            Task.deleted_at.is_(None),
+        )
+        latest = (await self.db.execute(stmt)).scalar_one_or_none()
+        if latest is None:
+            return "week"
+        latest = _ensure_utc(latest)
+        if latest >= now - timedelta(days=7):
+            return "week"
+        if latest >= now - timedelta(days=30):
+            return "month"
+        return "all"
+
     async def _parse_time_range(
         self,
         time_range: str | None,
         start_date: datetime | None,
         end_date: datetime | None,
-    ) -> tuple[datetime, datetime]:
+    ) -> tuple[datetime, datetime, str]:
         if time_range and time_range not in _TIME_RANGE_VALUES:
             raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="invalid time_range")
 
         now = datetime.now(UTC)
+
+        # 仅自定义日期(无命名档) → custom
+        if not time_range and (start_date is not None or end_date is not None):
+            start = _ensure_utc(start_date or (now - timedelta(days=30)))
+            end = _ensure_utc(end_date or now)
+            if start > end:
+                raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="start_date after end_date")
+            return start, end, "custom"
+
+        # 无任何参数 → 智能默认档
+        if not time_range:
+            time_range = await self._resolve_default_range(now)
 
         if time_range == "today":
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -131,25 +158,21 @@ class StatsService:
         elif time_range == "month":
             start = now - timedelta(days=30)
             end = now
-        elif time_range == "all":
+        else:  # all
             stmt = select(func.min(Task.created_at)).where(
                 Task.user_id == self.user.id,
                 Task.deleted_at.is_(None),
             )
-            result = await self.db.execute(stmt)
-            earliest = result.scalar_one_or_none()
+            earliest = (await self.db.execute(stmt)).scalar_one_or_none()
             start = earliest or (now - timedelta(days=30))
             end = now
-        else:
-            start = start_date or (now - timedelta(days=30))
-            end = end_date or now
 
         start = _ensure_utc(start)
         end = _ensure_utc(end)
         if start > end:
             raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="start_date after end_date")
 
-        return start, end
+        return start, end, time_range
 
     async def get_service_usage_overview(
         self,
@@ -157,7 +180,7 @@ class StatsService:
         start_date: datetime | None = None,
         end_date: datetime | None = None,
     ) -> dict[str, Any]:
-        start, end = await self._parse_time_range(time_range, start_date, end_date)
+        start, end, resolved_range = await self._parse_time_range(time_range, start_date, end_date)
 
         usage_by_provider: list[dict[str, Any]] = []
         usage_by_service_type: list[dict[str, Any]] = []
@@ -383,6 +406,7 @@ class StatsService:
 
         return {
             "time_range": {"start": start, "end": end},
+            "resolved_range": resolved_range,
             "usage_by_service_type": usage_by_service_type,
             "usage_by_provider": usage_by_provider,
             "asr_usage_by_provider": asr_usage_by_provider,
@@ -395,7 +419,7 @@ class StatsService:
         start_date: datetime | None = None,
         end_date: datetime | None = None,
     ) -> dict[str, Any]:
-        start, end = await self._parse_time_range(time_range, start_date, end_date)
+        start, end, resolved_range = await self._parse_time_range(time_range, start_date, end_date)
 
         status_stmt = (
             select(Task.status, func.count(Task.id).label("count"))
@@ -480,6 +504,7 @@ class StatsService:
 
         return {
             "time_range": {"start": start, "end": end},
+            "resolved_range": resolved_range,
             "total_tasks": total_tasks,
             "status_distribution": status_distribution,
             "success_rate": round(success_rate, 1),
@@ -498,17 +523,13 @@ class StatsService:
         end_date: datetime | None = None,
         tz: str | None = None,
     ) -> dict[str, Any]:
-        start, end = await self._parse_time_range(time_range, start_date, end_date)
+        start, end, resolved_range = await self._parse_time_range(time_range, start_date, end_date)
         if end - start > timedelta(days=366):
             raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="range too long")
         zone_name = _resolve_tz(tz)
 
-        task_rows = (
-            await self.db.execute(_build_task_daily_stmt(self.user.id, start, end, zone_name))
-        ).all()
-        asr_rows = (
-            await self.db.execute(_build_asr_daily_cost_stmt(self.user.id, start, end, zone_name))
-        ).all()
+        task_rows = (await self.db.execute(_build_task_daily_stmt(self.user.id, start, end, zone_name))).all()
+        asr_rows = (await self.db.execute(_build_asr_daily_cost_stmt(self.user.id, start, end, zone_name))).all()
 
         buckets: dict[str, dict[str, Any]] = {
             d.isoformat(): {
@@ -547,6 +568,7 @@ class StatsService:
 
         return {
             "time_range": {"start": start, "end": end},
+            "resolved_range": resolved_range,
             "timezone": zone_name,
             "granularity": "day",
             "buckets": ordered,
