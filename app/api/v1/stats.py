@@ -37,3 +37,17 @@ async def get_task_overview(
     service = StatsService(db, user)
     data = await service.get_task_overview(time_range, start_date, end_date)
     return success(data=jsonable_encoder(data))
+
+
+@router.get("/tasks/timeseries")
+async def get_task_timeseries(
+    time_range: str | None = Query(default=None),
+    start_date: datetime | None = Query(default=None),
+    end_date: datetime | None = Query(default=None),
+    tz: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    service = StatsService(db, user)
+    data = await service.get_task_timeseries(time_range, start_date, end_date, tz)
+    return success(data=jsonable_encoder(data))

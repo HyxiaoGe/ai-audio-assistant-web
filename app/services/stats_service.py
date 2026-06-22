@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import statistics
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentUser
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
+from app.models.asr_usage import ASRUsage
 from app.models.llm_usage import LLMUsage
 from app.models.task import Task
 from app.models.task_stage import TaskStage
@@ -32,6 +34,76 @@ def _format_duration(total_seconds: float) -> str:
     minutes = (total % 3600) // 60
     seconds = total % 60
     return f"{hours}h {minutes}m {seconds}s"
+
+
+_PENDING_STATES = {"pending", "queued"}
+
+
+def _resolve_tz(value: str | None) -> str:
+    if not value:
+        return "Asia/Shanghai"
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="invalid timezone") from exc
+    return value
+
+
+def _fold_status(status: str) -> str:
+    if status == "completed":
+        return "completed"
+    if status == "failed":
+        return "failed"
+    if status in _PENDING_STATES:
+        return "pending"
+    return "processing"
+
+
+def _daily_axis(start: datetime, end: datetime, tz: str) -> list[date]:
+    zone = ZoneInfo(tz)
+    cursor = start.astimezone(zone).date()
+    last = end.astimezone(zone).date()
+    days: list[date] = []
+    while cursor <= last:
+        days.append(cursor)
+        cursor += timedelta(days=1)
+    return days
+
+
+def _build_task_daily_stmt(user_id: str, start: datetime, end: datetime, tz: str):
+    day = func.date_trunc("day", func.timezone(tz, Task.created_at)).label("day")
+    return (
+        select(
+            day,
+            Task.status,
+            func.count(Task.id).label("count"),
+            func.coalesce(func.sum(Task.duration_seconds), 0).label("duration"),
+        )
+        .where(
+            Task.user_id == user_id,
+            Task.created_at >= start,
+            Task.created_at <= end,
+            Task.deleted_at.is_(None),
+        )
+        .group_by(day, Task.status)
+    )
+
+
+def _build_asr_daily_cost_stmt(user_id: str, start: datetime, end: datetime, tz: str):
+    day = func.date_trunc("day", func.timezone(tz, ASRUsage.created_at)).label("day")
+    return (
+        select(
+            day,
+            func.coalesce(func.sum(ASRUsage.estimated_cost), 0).label("cost"),
+        )
+        .where(
+            ASRUsage.user_id == user_id,
+            ASRUsage.created_at >= start,
+            ASRUsage.created_at <= end,
+            ASRUsage.status == "success",
+        )
+        .group_by(day)
+    )
 
 
 class StatsService:
@@ -417,4 +489,65 @@ class StatsService:
             "processing_time_by_stage": processing_time_by_stage,
             "total_audio_duration_seconds": float(total_duration),
             "total_audio_duration_formatted": _format_duration(float(total_duration)),
+        }
+
+    async def get_task_timeseries(
+        self,
+        time_range: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        tz: str | None = None,
+    ) -> dict[str, Any]:
+        start, end = await self._parse_time_range(time_range, start_date, end_date)
+        if end - start > timedelta(days=366):
+            raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="range too long")
+        zone_name = _resolve_tz(tz)
+
+        task_rows = (
+            await self.db.execute(_build_task_daily_stmt(self.user.id, start, end, zone_name))
+        ).all()
+        asr_rows = (
+            await self.db.execute(_build_asr_daily_cost_stmt(self.user.id, start, end, zone_name))
+        ).all()
+
+        buckets: dict[str, dict[str, Any]] = {
+            d.isoformat(): {
+                "date": d.isoformat(),
+                "total": 0,
+                "completed": 0,
+                "failed": 0,
+                "processing": 0,
+                "pending": 0,
+                "audio_duration_seconds": 0.0,
+                "asr_cost": 0.0,
+            }
+            for d in _daily_axis(start, end, zone_name)
+        }
+
+        for row in task_rows:
+            key = row.day.date().isoformat()
+            bucket = buckets.get(key)
+            if bucket is None:
+                continue
+            bucket[_fold_status(row.status)] += row.count
+            bucket["total"] += row.count
+            bucket["audio_duration_seconds"] += float(row.duration or 0)
+
+        for row in asr_rows:
+            key = row.day.date().isoformat()
+            bucket = buckets.get(key)
+            if bucket is None:
+                continue
+            bucket["asr_cost"] += float(row.cost or 0)
+
+        ordered = [buckets[k] for k in sorted(buckets)]
+        for bucket in ordered:
+            bucket["audio_duration_seconds"] = round(bucket["audio_duration_seconds"], 1)
+            bucket["asr_cost"] = round(bucket["asr_cost"], 4)
+
+        return {
+            "time_range": {"start": start, "end": end},
+            "timezone": zone_name,
+            "granularity": "day",
+            "buckets": ordered,
         }
