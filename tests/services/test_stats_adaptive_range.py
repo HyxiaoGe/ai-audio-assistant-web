@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -24,6 +25,24 @@ class _MaxSession:
 
     async def execute(self, _stmt):
         return _ScalarResult(self._latest)
+
+
+class _ListResult:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[Any]:
+        return self._rows
+
+
+class _QueueSession:
+    """依次弹出预置结果集;支持 .all()(给 timeseries 的 task/asr 两次查询用)。"""
+
+    def __init__(self, result_sets: list[list[Any]]) -> None:
+        self._queue = list(result_sets)
+
+    async def execute(self, _stmt: Any) -> _ListResult:
+        return _ListResult(self._queue.pop(0) if self._queue else [])
 
 
 def _svc(latest):
@@ -77,3 +96,37 @@ async def test_parse_time_range_smart_default_uses_ladder():
     start, end, resolved = await _svc(now - timedelta(days=5))._parse_time_range(None, None, None)
     assert resolved == "week"
     assert (now - start) <= timedelta(days=8)
+
+
+# ---------- Task 2:timeseries 超长跨度截断 ----------
+
+
+@pytest.mark.asyncio
+async def test_timeseries_clamps_long_named_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    """命名档(resolved!='custom')跨度>366天 → start 被截到 end-366d,不抛错。"""
+    now = datetime.now(UTC)
+    svc = StatsService(_QueueSession([[], []]), CurrentUser(id="u-1", email="x@e.com"))
+
+    async def fake_parse(*_a: Any, **_k: Any):  # noqa: ANN202
+        return now - timedelta(days=500), now, "all"
+
+    monkeypatch.setattr(svc, "_parse_time_range", fake_parse)
+    result = await svc.get_task_timeseries(None, None, None, "UTC")
+    span = result["time_range"]["end"] - result["time_range"]["start"]
+    assert span <= timedelta(days=366)
+
+
+@pytest.mark.asyncio
+async def test_timeseries_custom_too_long_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """custom 跨度>366天 → 仍抛 BusinessError(PARAMETER_ERROR)。"""
+    from app.core.exceptions import BusinessError
+
+    now = datetime.now(UTC)
+    svc = StatsService(_QueueSession([]), CurrentUser(id="u-1", email="x@e.com"))
+
+    async def fake_parse(*_a: Any, **_k: Any):  # noqa: ANN202
+        return now - timedelta(days=500), now, "custom"
+
+    monkeypatch.setattr(svc, "_parse_time_range", fake_parse)
+    with pytest.raises(BusinessError):
+        await svc.get_task_timeseries(None, datetime(2025, 1, 1, tzinfo=UTC), now, "UTC")

@@ -525,7 +525,9 @@ class StatsService:
     ) -> dict[str, Any]:
         start, end, resolved_range = await self._parse_time_range(time_range, start_date, end_date)
         if end - start > timedelta(days=366):
-            raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="range too long")
+            if resolved_range == "custom":
+                raise BusinessError(ErrorCode.PARAMETER_ERROR, reason="range too long")
+            start = end - timedelta(days=366)
         zone_name = _resolve_tz(tz)
 
         task_rows = (await self.db.execute(_build_task_daily_stmt(self.user.id, start, end, zone_name))).all()
