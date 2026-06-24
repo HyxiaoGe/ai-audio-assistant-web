@@ -224,3 +224,8 @@ __marimo__/
 
 # Coverage reports
 coverage.xml
+
+# Local AI agent scratch docs —— 本地暂存文档,永不进 git
+# (与前端 #30「取消跟踪误并入的本地文档」约定统一;防 git add -A 再次误并入)
+CLAUDE.md
+AGENTS.md
