@@ -125,6 +125,17 @@ def test_reconcile_skips_when_no_pending(monkeypatch: pytest.MonkeyPatch) -> Non
     assert spy.sent == []
 
 
+def test_reconcile_skips_when_images_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    # M-1.2:summary.images 为 None 时不应派发(not summary.images 短路)
+    spy = _SpyCelery()
+    monkeypatch.setattr(dts, "celery_app", spy)
+    monkeypatch.setattr(dts, "get_sync_redis_client", lambda: _FakeRedis())
+    rows = [(_summary(None), _task())]
+    n = dts._reconcile_stuck_image_slots(_FakeSession(rows))
+    assert n == 0
+    assert spy.sent == []
+
+
 def test_reconcile_respects_cooldown_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     spy = _SpyCelery()
     monkeypatch.setattr(dts, "celery_app", spy)
@@ -173,6 +184,27 @@ def test_fail_stuck_no_rows_no_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     assert session.commits == 0
 
 
+def test_terminal_statuses_contract() -> None:
+    # I-1 回归守卫:死任务巡检用排除法,必须覆盖所有非终态(尤其 queued 与全部 youtube 摄入态),
+    # 只放过真终态。WHERE 用 Task.status.notin_(TERMINAL_STATUSES),故此处锁定集合成员即锁定行为。
+    assert set(dts.TERMINAL_STATUSES) == {"completed", "failed", "cancelled"}
+    for nonterminal in (
+        "queued",  # 头号卡死态:派发丢失 / 部署重启窗口,原 allow-list 漏掉
+        "extracting",
+        "resolving",
+        "downloading",
+        "downloaded",
+        "transcoding",
+        "uploading",
+        "uploaded",
+        "resolved",
+        "transcribing",
+        "polishing",
+        "summarizing",
+    ):
+        assert nonterminal not in dts.TERMINAL_STATUSES
+
+
 # ---------- 壳层:总开关 + 独立容错 ----------
 
 
@@ -213,3 +245,20 @@ class _CtxSession(_FakeSession):
 
     def __exit__(self, *a: Any) -> bool:
         return False
+
+
+def test_sweep_uses_independent_session_per_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    # M-1:每个 helper 各开独立 session,且 try 在 with 外——任一 helper(或其 commit-on-exit)抛错都不冒泡
+    monkeypatch.setattr(dts.settings, "DEAD_TASK_SWEEP_ENABLED", True)
+    opened = {"n": 0}
+
+    def _factory() -> _CtxSession:
+        opened["n"] += 1
+        return _CtxSession()
+
+    monkeypatch.setattr(dts, "get_sync_db_session", _factory)
+    monkeypatch.setattr(dts, "_reconcile_stuck_image_slots", lambda s: 2)
+    monkeypatch.setattr(dts, "_fail_stuck_tasks", lambda s: 5)
+    out = dts.run_dead_task_sweep()
+    assert opened["n"] == 2  # 两个 helper 各开一个 session
+    assert out == {"images_reconciled": 2, "tasks_failed": 5}
