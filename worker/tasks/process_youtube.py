@@ -1629,7 +1629,7 @@ def _process_youtube(
                 # ========== 初始化 overview 摘要的配图状态（不生图、不阻塞 completed）==========
                 # 渐进式展示：摘要文字此刻已落库；overview 配图改为 images=[{status:"pending"}…]，
                 # content 永久保留 {{IMAGE:…}} 占位锚点（不再被 replace_placeholders 覆盖）。
-                # 真正生图推迟到 completed 之后的异步段（见文末 _enqueue_summary_images）。
+                # 真正生图推迟到 completed 之后的异步段（见文末 enqueue_summary_images）。
                 images_initialized = False
                 for summary in summaries:
                     try:
