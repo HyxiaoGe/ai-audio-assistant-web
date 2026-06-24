@@ -66,6 +66,7 @@ class _FakeRedis:
     def __init__(self, held: set[str] | None = None) -> None:
         self.held = held or set()
         self.set_keys: list[str] = []
+        self.deleted: list[str] = []
 
     def set(self, key: str, value: str, nx: bool = False, ex: int | None = None) -> bool | None:
         self.set_keys.append(key)
@@ -73,6 +74,10 @@ class _FakeRedis:
             return None
         self.held.add(key)
         return True
+
+    def delete(self, key: str) -> None:
+        self.deleted.append(key)
+        self.held.discard(key)
 
 
 class _SpyCelery:
@@ -129,6 +134,21 @@ def test_reconcile_respects_cooldown_lock(monkeypatch: pytest.MonkeyPatch) -> No
     n = dts._reconcile_stuck_image_slots(_FakeSession(rows))
     assert n == 0  # 近期已派发,防抖
     assert spy.sent == []
+
+
+class _BoomCelery:
+    def send_task(self, name: str, **kwargs: Any) -> Any:
+        raise RuntimeError("broker down")
+
+
+def test_reconcile_releases_cooldown_when_dispatch_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dts, "celery_app", _BoomCelery())
+    redis = _FakeRedis()
+    monkeypatch.setattr(dts, "get_sync_redis_client", lambda: redis)
+    rows = [(_summary([{"placeholder": "P1", "status": "pending"}]), _task())]
+    n = dts._reconcile_stuck_image_slots(_FakeSession(rows))
+    assert n == 0  # 派发失败不计数
+    assert "summary:imgreconcile:lock:s1" in redis.deleted  # 冷却锁已释放,下轮可重试
 
 
 # ---------- 1b: 卡死任务标 failed ----------

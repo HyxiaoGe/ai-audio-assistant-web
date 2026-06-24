@@ -78,6 +78,10 @@ def _reconcile_stuck_image_slots(session: Session) -> int:
             dispatched += 1
         except Exception:
             logger.warning("dead_task_sweep: re-enqueue images failed for summary %s", summary.id, exc_info=True)
+            try:
+                redis_client.delete(cooldown_key)
+            except Exception:
+                logger.warning("dead_task_sweep: failed to release cooldown key %s", cooldown_key, exc_info=True)
     return dispatched
 
 
