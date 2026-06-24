@@ -32,6 +32,7 @@
   "50001": "Database service error",
   "50002": "Cache service error",
   "50003": "File processing error",
+  "50004": "Task stalled and was auto-marked failed; please retry.",
   "51000": "Speech recognition service temporarily unavailable",
   "51001": "Speech recognition service timeout",
   "51002": "Speech recognition failed: {reason}",

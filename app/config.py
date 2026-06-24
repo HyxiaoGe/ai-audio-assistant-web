@@ -49,6 +49,7 @@ class Settings(BaseSettings):
 
     CONFIG_CENTER_DB_ENABLED: bool = Field(default=True)
     CONFIG_CENTER_CACHE_TTL: int = Field(default=60)
+    DEAD_TASK_SWEEP_ENABLED: bool = Field(default=True)
     # 用户默认免费 ASR 额度（秒），1小时 = 3600秒
     DEFAULT_USER_FREE_QUOTA_SECONDS: int = Field(default=3600)
 
