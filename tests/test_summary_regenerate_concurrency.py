@@ -91,9 +91,22 @@ def _patch_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_regenerate_rejected_when_lock_exists(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_rate_limit(monkeypatch)
     monkeypatch.setattr(summaries_module, "get_redis_client", lambda: _LockRedis(1))
+
+    sent: list[str] = []
+
+    class _Spy:
+        def send_task(self, name: str, **kwargs: Any) -> Any:
+            sent.append(name)
+            return types.SimpleNamespace(id="task-x")
+
+    import worker.celery_app as celery_mod
+
+    monkeypatch.setattr(celery_mod, "celery_app", _Spy())
+
     async with _client(_make_app()) as client:
         resp = await client.post(f"/summaries/{_TASK}/regenerate", json={"summary_type": "overview"})
     assert resp.json()["code"] == int(ErrorCode.SUMMARY_REGENERATING)
+    assert sent == []  # 拒绝时绝不入队
 
 
 async def test_regenerate_dispatches_when_no_lock(monkeypatch: pytest.MonkeyPatch) -> None:

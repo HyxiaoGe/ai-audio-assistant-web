@@ -103,3 +103,4 @@ def test_lock_released_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
         _invoke(monkeypatch, comparison_id=None, redis=redis, spy_raises=True)
     key = rs.build_regen_lock_key("t1", "overview")
     assert key not in redis.store  # finally 已释放
+    assert redis.deleted == [key]  # 精确锁定:走了 token 校验删除,非靠 TTL/其它
