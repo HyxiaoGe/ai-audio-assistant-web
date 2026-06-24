@@ -52,8 +52,8 @@ from worker.redis_client import publish_task_update_sync
 from worker.stage_manager import StageManager
 from worker.tasks.asr_idempotency import AsrRetryAction, decide_asr_action
 from worker.tasks.image_generator import (
-    build_image_specs,
-    is_auto_images_enabled,
+    enqueue_summary_images,
+    init_overview_images,
 )
 from worker.tasks.summary_generator import _generate_single_summary
 
@@ -825,55 +825,6 @@ async def _summarize_one(
         # 真实 output token 优先；provider 未透出用量时回落字符数近似(向后兼容)。
         token_count=meta.get("output_tokens") or len(content),
     )
-
-
-def _init_overview_images(summary: Summary, content_style: str | None) -> bool:
-    """为 overview summary 初始化 images=[{status:"pending"}…] 并保留 content 占位锚点。
-
-    复用 build_image_specs：若摘要无 {{IMAGE:…}} 占位符，会规划默认占位符并写回 summary.content。
-    返回是否产生了图集（True 表示需后续异步生图）。非 overview / 未启用自动配图 / 无可规划占位符 -> False。
-    """
-    if summary.summary_type != "overview":
-        return False
-    if not is_auto_images_enabled("overview", content_style):
-        return False
-    new_content, specs = build_image_specs(summary.content, content_style)
-    if not specs:
-        return False
-    summary.content = new_content  # 保留 {{IMAGE:…}} 锚点（默认占位符已插入）
-    summary.images = specs
-    return True
-
-
-def _enqueue_summary_images(
-    *,
-    task_id: str,
-    user_id: str,
-    summaries: list[Summary],
-    content_style: str | None,
-) -> None:
-    """completed 之后异步触发 overview 配图任务（每个有 pending images 的 overview 一个任务）。
-
-    best-effort：入队失败只记日志，绝不影响已 completed 的任务。
-    """
-    for summary in summaries:
-        if summary.summary_type != "overview" or not summary.images:
-            continue
-        if not any(item.get("status") == "pending" for item in summary.images):
-            continue
-        try:
-            celery_app.send_task(
-                "worker.tasks.generate_summary_images_async",
-                kwargs={
-                    "task_id": task_id,
-                    "user_id": user_id,
-                    "summary_id": str(summary.id),
-                    "content": summary.content,
-                    "content_style": content_style,
-                },
-            )
-        except Exception:
-            logger.warning("Task %s: enqueue async summary images failed, suppressed", task_id, exc_info=True)
 
 
 def _process_youtube(
@@ -1682,7 +1633,7 @@ def _process_youtube(
                 images_initialized = False
                 for summary in summaries:
                     try:
-                        if _init_overview_images(summary, content_style):
+                        if init_overview_images(summary, content_style):
                             images_initialized = True
                     except Exception:
                         logger.warning(
@@ -1749,7 +1700,7 @@ def _process_youtube(
             .all()
         )
         content_style_for_images = normalize_content_style((task.options or {}).get("summary_style"))
-        _enqueue_summary_images(
+        enqueue_summary_images(
             task_id=task_id,
             user_id=str(task.user_id),
             summaries=overview_summaries,

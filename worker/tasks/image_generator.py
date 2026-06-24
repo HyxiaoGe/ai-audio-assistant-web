@@ -351,6 +351,58 @@ def build_image_specs(
     return content, specs
 
 
+def init_overview_images(summary: Summary, content_style: str | None) -> bool:
+    """为 overview summary 初始化 images=[{status:"pending"}…] 并保留 content 占位锚点。
+
+    复用 build_image_specs：若摘要无 {{IMAGE:…}} 占位符，会规划默认占位符并写回 summary.content。
+    返回是否产生了图集（True 表示需后续异步生图）。非 overview / 未启用自动配图 / 无可规划占位符 -> False。
+    """
+    if summary.summary_type != "overview":
+        return False
+    if not is_auto_images_enabled("overview", content_style):
+        return False
+    new_content, specs = build_image_specs(summary.content, content_style)
+    if not specs:
+        return False
+    summary.content = new_content  # 保留 {{IMAGE:…}} 锚点（默认占位符已插入）
+    summary.images = specs
+    return True
+
+
+def enqueue_summary_images(
+    *,
+    task_id: str,
+    user_id: str,
+    summaries: list[Summary],
+    content_style: str | None,
+) -> None:
+    """completed 之后异步触发 overview 配图任务（每个有 pending images 的 overview 一个任务）。
+
+    best-effort：入队失败只记日志，绝不影响已 completed 的任务。
+    celery_app 函数内惰性 import：避免与 worker/celery_app.py 底部的任务模块导入构成循环。
+    """
+    from worker.celery_app import celery_app
+
+    for summary in summaries:
+        if summary.summary_type != "overview" or not summary.images:
+            continue
+        if not any(item.get("status") == "pending" for item in summary.images):
+            continue
+        try:
+            celery_app.send_task(
+                "worker.tasks.generate_summary_images_async",
+                kwargs={
+                    "task_id": task_id,
+                    "user_id": user_id,
+                    "summary_id": str(summary.id),
+                    "content": summary.content,
+                    "content_style": content_style,
+                },
+            )
+        except Exception:
+            logger.warning("Task %s: enqueue async summary images failed, suppressed", task_id, exc_info=True)
+
+
 def apply_image_result_to_summary(
     session: Any,
     summary_id: str,

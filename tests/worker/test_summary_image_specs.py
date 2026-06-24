@@ -3,6 +3,12 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from typing import Any
+
+import pytest
+
+from app.models.summary import Summary
+from worker.tasks import image_generator as ig_mod
 
 
 def _load():
@@ -329,3 +335,98 @@ async def test_generate_single_image_returns_resolved_provider_on_failure(monkey
     assert result["status"] == "failed"
     assert result["provider"] == "image_service"
     assert result["model_id"] == "doubao-seedream-4-5"
+
+
+# --------------------------------------------------------------------------- #
+# 渐进式配图 helper（由 process_youtube 上提到 image_generator，youtube/audio 共用）
+# --------------------------------------------------------------------------- #
+def test_init_overview_images_sets_pending_and_keeps_placeholder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ig_mod, "is_auto_images_enabled", lambda *a, **k: True)
+    summary = Summary(
+        task_id="t1",
+        summary_type="overview",
+        version=1,
+        is_active=True,
+        content="正文一\n\n{{IMAGE: infographic | 主题 | 关键}}\n\n正文二",
+        model_used="m",
+    )
+    changed = ig_mod.init_overview_images(summary, content_style="review")
+    assert changed is True
+    assert summary.images is not None and len(summary.images) == 1
+    assert summary.images[0]["status"] == "pending"
+    assert summary.images[0]["placeholder"] == "{{IMAGE: infographic | 主题 | 关键}}"
+    assert "{{IMAGE: infographic | 主题 | 关键}}" in summary.content
+
+
+def test_init_overview_images_inserts_default_placeholder_into_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ig_mod, "is_auto_images_enabled", lambda *a, **k: True)
+    summary = Summary(
+        task_id="t1",
+        summary_type="overview",
+        version=1,
+        is_active=True,
+        content="## 实测对比\n\n这段比较了多个 AI 产品。",
+        model_used="m",
+    )
+    changed = ig_mod.init_overview_images(summary, content_style="review")
+    assert changed is True
+    assert summary.images and summary.images[0]["status"] == "pending"
+    assert summary.images[0]["placeholder"] in summary.content
+
+
+def test_init_overview_images_noop_for_non_overview() -> None:
+    summary = Summary(
+        task_id="t1",
+        summary_type="key_points",
+        version=1,
+        is_active=True,
+        content="要点",
+        model_used="m",
+    )
+    assert ig_mod.init_overview_images(summary, content_style="review") is False
+    assert summary.images is None
+
+
+def test_init_overview_images_returns_false_when_auto_images_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ig_mod, "is_auto_images_enabled", lambda *a, **k: False)
+    summary = Summary(
+        task_id="t1",
+        summary_type="overview",
+        version=1,
+        is_active=True,
+        content="正文 {{IMAGE: a | x | y}}",
+        model_used="m",
+    )
+    assert ig_mod.init_overview_images(summary, content_style="review") is False
+    assert summary.images is None
+
+
+def test_enqueue_summary_images_sends_async_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    from worker.celery_app import celery_app
+
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **kw: sent.append({"name": name, **kw}))
+    summary = Summary(
+        task_id="t1",
+        summary_type="overview",
+        version=1,
+        is_active=True,
+        content="正文 {{IMAGE: a | x | y}}",
+        model_used="m",
+    )
+    summary.id = "sum-x"
+    summary.images = [
+        {
+            "placeholder": "{{IMAGE: a | x | y}}",
+            "status": "pending",
+            "url": None,
+            "alt": "x",
+            "model_id": None,
+            "error": None,
+        }
+    ]
+    ig_mod.enqueue_summary_images(task_id="t1", user_id="user-1", summaries=[summary], content_style="review")
+    assert len(sent) == 1
+    assert sent[0]["name"] == "worker.tasks.generate_summary_images_async"
+    assert sent[0]["kwargs"]["summary_id"] == str(summary.id)
+    assert sent[0]["kwargs"]["user_id"] == "user-1"
