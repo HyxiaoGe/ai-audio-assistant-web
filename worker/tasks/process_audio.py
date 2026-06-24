@@ -49,6 +49,7 @@ from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_message_sync, publish_task_update_sync
 from worker.tasks.asr_idempotency import AsrRetryAction, decide_asr_action
+from worker.tasks.image_generator import enqueue_summary_images, init_overview_images
 from worker.tasks.summary_generator import generate_summaries_with_quality_awareness
 
 logger = logging.getLogger("worker.process_audio")
@@ -1177,6 +1178,7 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
                 requested_style or "auto",
             )
 
+            summaries: list = []
             # 使用新的质量感知摘要生成函数
             try:
                 summaries, summary_metadata = await generate_summaries_with_quality_awareness(
@@ -1208,6 +1210,18 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
 
                 # 保存所有摘要到数据库
                 session.add_all(summaries)
+
+                # 渐进式配图:为 overview 落 pending 图槽(content 保留 {{IMAGE}} 锚点),
+                # 真正生图推迟到 completed 之后的异步段(见下方 enqueue_summary_images)。
+                for _summary in summaries:
+                    try:
+                        init_overview_images(_summary, content_style)
+                    except Exception:
+                        logger.warning(
+                            "Task %s: init overview images failed for one summary, suppressed",
+                            task_id,
+                            exc_info=True,
+                        )
 
                 # LLM 用量记账:每条摘要一行 LLMUsage(只记 success;失败在生成器内被吞、
                 # 此层不可见,见设计决策 B)。绝不加成本/token 列——LiteLLM 是花费账本权威。
@@ -1256,6 +1270,13 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
             task.error_code = None
             task.error_message = None
             await _update_task(session, task, "completed", 100, "completed", request_id)
+            # 渐进式展示:completed 之后异步补 overview 配图(占位符已在 images 标 pending)。
+            enqueue_summary_images(
+                task_id=str(task.id),
+                user_id=str(task.user_id),
+                summaries=summaries,
+                content_style=content_style,
+            )
         except BusinessError as exc:
             logger.error(
                 "Task %s failed with business error: %s (code=%s)",
