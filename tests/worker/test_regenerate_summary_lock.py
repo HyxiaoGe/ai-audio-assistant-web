@@ -3,13 +3,14 @@
 worker 侧原子锁(set nx ex + token 校验 delete)是重生防重的唯一正确性来源:
 - 单条重生(comparison_id=None)抢锁;抢不到直接 return,不烧 LLM/配图。
 - 对比(comparison_id 非空)按设计并发,豁免锁。
-直接 import 真实模块并对其打桩(不再 importlib 复制一份):celery_app 在 import 时按固定名
-"worker.tasks.regenerate_summary" 急加载注册任务(且与本模块循环 import)。复制一份会在全量串行
-套件里因「真实模块已先注册」而让 .apply() 落到真实模块的函数上、桩却打在副本上→失效,跑真 redis
-(CI 镜像无 redis→连接被拒)+ 真异步 DB(sqlite 同步上下文→MissingGreenlet),是 CI 全量套件偶发
-红、本地却绿的根因。直接 import 真实模块 → 打桩对象 == 运行对象,与 import 顺序/环境无关。
-把 _regenerate_summary 换成 spy 隔离重活,用 task.apply(..., throw=True) 在本进程同步执行任务体
-(自动绑定 self、提供 request 上下文)。
+桩打在「真正执行的那个函数的 __globals__」上,而不是某个模块对象上:celery_app 在 import 时按
+固定名 "worker.tasks.regenerate_summary" 注册任务,而本测试与 test_regenerate_summary_images.py
+都会加载 regenerate_summary。全量串行套件里任务名只认第一个注册者,各模块的 regenerate_summary
+属性可能都指向「第一个副本」的函数——把桩打在 rs 模块对象上就会失效,跑真 redis(CI 镜像无
+redis→连接被拒)+ 真异步 DB(sqlite 同步上下文→MissingGreenlet),即 CI 全量套件偶发红、本地却
+绿的根因。改用 monkeypatch.setitem 打到 rs.regenerate_summary.run.__globals__(.apply() 真正执行
+的那个函数的全局名字空间),与「任务对象到底绑到哪个模块」无关。把 _regenerate_summary 换成 spy
+隔离重活,用 task.apply(..., throw=True) 在本进程同步执行任务体(自动绑定 self、提供 request 上下文)。
 """
 
 from __future__ import annotations
@@ -55,8 +56,10 @@ def _invoke(
         if spy_raises:
             raise RuntimeError("boom")
 
-    monkeypatch.setattr(rs, "get_sync_redis_client", lambda: redis)
-    monkeypatch.setattr(rs, "_regenerate_summary", _spy)
+    # 打到 .apply() 真正执行的那个函数的全局名字空间(见模块 docstring:任务对象可能绑到另一份副本的函数)
+    task_globals = rs.regenerate_summary.run.__globals__
+    monkeypatch.setitem(task_globals, "get_sync_redis_client", lambda: redis)
+    monkeypatch.setitem(task_globals, "_regenerate_summary", _spy)
     rs.regenerate_summary.apply(
         args=["t1", "overview"],
         kwargs={"comparison_id": comparison_id},
