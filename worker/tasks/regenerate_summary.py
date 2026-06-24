@@ -4,7 +4,9 @@ import asyncio
 import json
 import logging
 import time
+from uuid import uuid4
 
+from redis import Redis
 from sqlalchemy import select
 
 from app.config import settings
@@ -33,6 +35,22 @@ from worker.tasks.image_generator import (
 )
 
 logger = logging.getLogger("worker.regenerate_summary")
+
+REGEN_LOCK_TTL = 600  # 秒；仅作 worker 被 SIGKILL 时的兜底自动解锁(一次重生最重 dev 实测 ~133s)
+
+
+def build_regen_lock_key(task_id: str, summary_type: str) -> str:
+    """单条重生(非对比)的并发去重锁 key。端点预检与 worker 持锁共用此唯一真源。"""
+    return f"summary:regen:lock:{task_id}:{summary_type}"
+
+
+def _release_regen_lock(redis_client: Redis, lock_key: str, lock_token: str | None) -> None:
+    """释放重生锁:仅当持有者 token 匹配才删,避免误删 TTL 过期后他人重新获取的锁;失败靠 TTL 兜底。"""
+    try:
+        if lock_token is not None and redis_client.get(lock_key) == lock_token:
+            redis_client.delete(lock_key)
+    except Exception:
+        logger.warning("Failed to release regen lock %s, will expire via TTL", lock_key, exc_info=True)
 
 
 def _load_llm_model_id(provider: str, user_id: str | None) -> str | None:
@@ -110,6 +128,24 @@ def regenerate_summary(
         comparison_id,
     )
 
+    # 并发去重锁:仅对单条重生(非对比)加锁;compare(comparison_id 非空)按设计并发,豁免。
+    # worker 侧原子锁是唯一正确性来源(端点预检仅快反馈);锁存活==任务存活,丢投递不留僵尸锁。
+    redis_client: Redis | None = None
+    lock_key: str | None = None
+    lock_token: str | None = None
+    if comparison_id is None:
+        redis_client = get_sync_redis_client()
+        lock_key = build_regen_lock_key(task_id, summary_type)
+        lock_token = (self.request.id if self.request else None) or uuid4().hex
+        if not redis_client.set(lock_key, lock_token, nx=True, ex=REGEN_LOCK_TTL):
+            logger.warning(
+                "[%s] Summary regeneration skipped: %s/%s already in progress",
+                request_id,
+                task_id,
+                summary_type,
+            )
+            return
+
     try:
         _regenerate_summary(task_id, summary_type, model, model_id, request_id, comparison_id)
         logger.info(
@@ -124,6 +160,9 @@ def regenerate_summary(
     except Exception:
         logger.exception(f"[{request_id}] Unexpected error during summary regeneration")
         raise
+    finally:
+        if redis_client is not None and lock_key is not None:
+            _release_regen_lock(redis_client, lock_key, lock_token)
 
 
 async def _process_regenerated_images(
