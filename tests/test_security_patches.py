@@ -92,9 +92,7 @@ def test_reject_privileged_fields(field: str) -> None:
 
 def test_allow_benign_fields() -> None:
     # Non-credential tuning fields must still be permitted.
-    _reject_privileged_user_fields(
-        {"timeout": 30, "retry_count": 3, "default_model": "m", "use_ssl": True}
-    )
+    _reject_privileged_user_fields({"timeout": 30, "retry_count": 3, "default_model": "m", "use_ssl": True})
 
 
 # --------------------------------------------------------------------------- #
@@ -157,3 +155,102 @@ def test_media_object_ids_use_full_uuid(module: str, var: str) -> None:
     src = (root / module).read_text(encoding="utf-8")
     assert "uuid.uuid4())[:8]" not in src, f"{module} still truncates the object id"
     assert f"{var} = uuid.uuid4().hex" in src, f"{module} missing full-entropy id"
+
+
+# --------------------------------------------------------------------------- #
+# P1-B.1: rollback_my_config 对称补特权字段拦截
+# --------------------------------------------------------------------------- #
+from types import SimpleNamespace
+
+import app.api.v1.config_center as cc
+from app.i18n.codes import ErrorCode
+from app.models.service_config import ServiceConfig
+from app.models.service_config_history import ServiceConfigHistory
+
+
+class _FakeExecResult:
+    def __init__(self, scalar: object = None, first: object = None) -> None:
+        self._scalar = scalar
+        self._first = first
+
+    def scalar_one_or_none(self) -> object:
+        return self._scalar
+
+    def scalars(self) -> _FakeExecResult:
+        return self
+
+    def first(self) -> object:
+        return self._first
+
+
+class _FakeRollbackDb:
+    """两次 execute:先 ServiceConfig,后 ServiceConfigHistory。"""
+
+    def __init__(self, record: object, history: object) -> None:
+        self._results = [_FakeExecResult(scalar=record), _FakeExecResult(first=history)]
+        self.added: list[object] = []
+
+    async def execute(self, stmt: object) -> _FakeExecResult:
+        return self._results.pop(0)
+
+    def add(self, item: object) -> None:
+        self.added.append(item)
+
+    async def commit(self) -> None:
+        return None
+
+    async def refresh(self, obj: object) -> None:
+        return None
+
+
+async def _async_noop(*args: object, **kwargs: object) -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_rollback_rejects_privileged_history_config() -> None:
+    record = ServiceConfig(
+        service_type="llm", provider="deepseek", owner_user_id="u1", config={}, enabled=True, version=2
+    )
+    history = ServiceConfigHistory(
+        service_type="llm",
+        provider="deepseek",
+        owner_user_id="u1",
+        version=1,
+        config={"base_url": "http://evil.internal"},  # 特权字段
+        enabled=True,
+    )
+    db = _FakeRollbackDb(record, history)
+    user = SimpleNamespace(id="u1")
+    payload = SimpleNamespace(version=1, note=None)
+
+    with pytest.raises(BusinessError) as ei:
+        await cc.rollback_my_config("llm", "deepseek", payload, db=db, user=user)
+    assert ei.value.code == ErrorCode.PERMISSION_DENIED
+    assert db.added == []  # 拒绝发生在写历史快照之前
+
+
+@pytest.mark.asyncio
+async def test_rollback_allows_benign_history_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    record = ServiceConfig(
+        service_type="llm", provider="deepseek", owner_user_id="u1", config={"model": "old"}, enabled=True, version=2
+    )
+    history = ServiceConfigHistory(
+        service_type="llm",
+        provider="deepseek",
+        owner_user_id="u1",
+        version=1,
+        config={"model": "new"},  # 无特权字段
+        enabled=True,
+    )
+    db = _FakeRollbackDb(record, history)
+    user = SimpleNamespace(id="u1")
+    payload = SimpleNamespace(version=1, note=None)
+
+    monkeypatch.setattr(cc.ConfigManager, "refresh_from_db", _async_noop)
+    monkeypatch.setattr(cc, "_serialize_config", lambda rec: {"ok": True})
+
+    await cc.rollback_my_config("llm", "deepseek", payload, db=db, user=user)
+
+    assert record.config == {"model": "new"}  # 回滚生效
+    assert record.version == 3  # 版本自增
