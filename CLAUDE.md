@@ -91,6 +91,14 @@ flake8 app/ worker/ tests/             # Lint
 mypy app/ worker/                      # Type check
 ```
 
+## 工程约定是有约束力的 (Established Conventions Are Binding)
+
+> 与根 `../CLAUDE.md` 同名章节同源,本节聚焦后端。核心原则:**一次标准化做完,标准即生效——别一错再错、别重复清理。**
+
+- **已设的标准就是契约。** 当某次优化/重构确立了一种写法(并清理了旧写法),新代码必须沿用,**不得重新引入被清理掉的模式**。"照着周围旧代码写"不是借口——很多文件早于现行系统,有疑问以现行约定为准。
+- **约定写进 CLAUDE.md,能机器强制的就用 ruff 兜底。** 后端代码规范见本文件「Code Quality Requirements」章节,由 `ruff`(lint + format)在 pre-commit/CI 强制(实际门禁是 ruff + pytest)。存量缺口用 `# noqa`/局部豁免圈起来不阻塞 CI,**改到哪清到哪**,不搞独立的全量 codemod 战役。
+- **新增一类标准时**:落到本文件对应章节(必要时加 ruff 规则),并在根 `../CLAUDE.md`「工程约定是有约束力的」节登记一行,使其对前后端都可见。
+
 ## Architecture
 
 ### Core Design Principles
