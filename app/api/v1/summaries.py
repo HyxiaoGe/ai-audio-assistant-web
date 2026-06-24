@@ -23,6 +23,7 @@ from app.api.v1.media import assert_owns_media_key, assert_public_media_access, 
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.rate_limit import rate_limit, rate_limit_query
+from app.core.redis import get_redis_client
 from app.core.response import success
 from app.core.security import SCOPE_STREAM, issue_scoped_token
 from app.i18n.codes import ErrorCode
@@ -196,6 +197,14 @@ async def regenerate_summary(
                 ErrorCode.PARAMETER_ERROR,
                 reason=f"未知或不支持文本生成的 LLM provider: {data.provider}（可用: {sorted(valid_providers)}）",
             )
+
+    # 并发去重预检(best-effort 快反馈):同一 (task, summary_type) 已有单条重生在跑 → 直接拒绝。
+    # worker 侧原子锁才是真正保证;此处仅为常见「生成中重复点击」给即时提示。compare 走独立端点不经此路径。
+    from worker.tasks.regenerate_summary import build_regen_lock_key
+
+    lock_key = build_regen_lock_key(task_id, data.summary_type)
+    if await get_redis_client().exists(lock_key):
+        raise BusinessError(ErrorCode.SUMMARY_REGENERATING)
 
     # Submit regeneration task
     trace_id = getattr(request.state, "trace_id", None)
