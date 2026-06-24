@@ -14,7 +14,7 @@ from app.models.summary import Summary
 from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import TranscriptSegment
-from worker.tasks import process_audio
+from worker.tasks import image_generator, process_audio
 
 # Realistic upload object key: matches the `upload/{user_id}/{Y/m/d}/{32-hex}{ext}`
 # shape produced by app.api.v1.upload._build_file_key for user_id="user-1".
@@ -985,3 +985,128 @@ async def test_process_audio_skips_llm_usage_when_provider_missing(monkeypatch: 
     assert task.status == "completed"
     assert len(session.summaries) == 1
     assert session.llm_usages == []  # provider 缺失 → 不写脏行
+
+
+@pytest.mark.asyncio
+async def test_process_audio_inits_and_enqueues_overview_images(monkeypatch: pytest.MonkeyPatch) -> None:
+    """upload 任务:overview 含 {{IMAGE}} + 自动配图开 → 落 pending specs 且派发异步配图任务。"""
+    settings.UPLOAD_PRESIGN_EXPIRES = 60
+    task = _build_task("upload", None, _UPLOAD_KEY)
+    session = _FakeSession(task)
+    asr = _FakeASRService()
+    llm = _FakeLLMService()
+    storage = _FakeStorageService()
+
+    async def _fake_gen_with_image(*args: Any, **kwargs: Any) -> tuple[list[Summary], dict[str, Any]]:
+        summaries = [
+            Summary(
+                task_id=str(task.id),
+                summary_type="overview",
+                content="概述正文\n\n{{IMAGE: infographic | 主题 | 关键}}",
+                model_used="test-model",
+            ),
+            Summary(
+                task_id=str(task.id),
+                summary_type="action_items",
+                content="行动项",
+                model_used="test-model",
+            ),
+        ]
+        metadata = {
+            "quality_score": "high",
+            "avg_confidence": 0.9,
+            "llm_provider": "test-provider",
+            "llm_model": "test-model",
+            "summaries_generated": 2,
+        }
+        return summaries, metadata
+
+    enqueued: list[dict[str, Any]] = []
+
+    def _spy_enqueue(*, task_id: str, user_id: str, summaries: list[Summary], content_style: str | None) -> None:
+        enqueued.append(
+            {
+                "task_id": task_id,
+                "user_id": user_id,
+                "content_style": content_style,
+                "overview_count": sum(1 for s in summaries if s.summary_type == "overview"),
+            }
+        )
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", lambda: asr)
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *a, **k: llm)
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *a, **k: storage)
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_gen_with_image)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
+    monkeypatch.setattr(image_generator, "is_auto_images_enabled", lambda *a, **k: True)
+    monkeypatch.setattr(process_audio, "enqueue_summary_images", _spy_enqueue)
+
+    await process_audio._process_task(task.id, "req-1")
+
+    # 落库时已建 pending specs(init_overview_images 在 commit 前运行)
+    overview = next(s for s in session.summaries if getattr(s, "summary_type", None) == "overview")
+    assert overview.images and overview.images[0]["status"] == "pending"
+    # completed 后派发了配图(只 overview 计一)
+    assert len(enqueued) == 1 and enqueued[0]["overview_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_process_audio_skips_images_when_auto_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """自动配图关 → overview 不建 images、不派发。"""
+    settings.UPLOAD_PRESIGN_EXPIRES = 60
+    task = _build_task("upload", None, _UPLOAD_KEY)
+    session = _FakeSession(task)
+    enqueued: list[Any] = []
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", lambda: _FakeASRService())
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *a, **k: _FakeLLMService())
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *a, **k: _FakeStorageService())
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
+    monkeypatch.setattr(image_generator, "is_auto_images_enabled", lambda *a, **k: False)
+    monkeypatch.setattr(
+        process_audio,
+        "enqueue_summary_images",
+        lambda **k: enqueued.append(sum(1 for s in k["summaries"] if s.images)),
+    )
+
+    await process_audio._process_task(task.id, "req-1")
+
+    overview = next(s for s in session.summaries if getattr(s, "summary_type", None) == "overview")
+    assert overview.images is None
+    # enqueue 被调用但无 pending overview → 真实 helper 会 no-op;此处 spy 计 images 非空数=0
+    assert enqueued == [] or enqueued[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_process_audio_init_images_error_suppressed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """init_overview_images 抛异常 → 被吞只记 warning,任务仍 completed,enqueue 仍被调用。"""
+    settings.UPLOAD_PRESIGN_EXPIRES = 60
+    task = _build_task("upload", None, _UPLOAD_KEY)
+    session = _FakeSession(task)
+    enqueued: list[int] = []
+
+    def _exploding_init(summary: Summary, content_style: str | None) -> bool:
+        raise RuntimeError("模拟 init_overview_images 爆炸")
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", lambda: _FakeASRService())
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *a, **k: _FakeLLMService())
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *a, **k: _FakeStorageService())
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
+    monkeypatch.setattr(process_audio, "init_overview_images", _exploding_init)
+    monkeypatch.setattr(process_audio, "enqueue_summary_images", lambda **k: enqueued.append(1))
+
+    await process_audio._process_task(task.id, "req-1")
+
+    assert task.status == "completed"
+    assert len(enqueued) == 1  # enqueue 仍被调用

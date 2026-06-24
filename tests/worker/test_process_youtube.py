@@ -237,116 +237,6 @@ def test_process_youtube_failed_calls_notify_task_failed_without_raw_error(
         assert "leak this internal trace" not in str(value)
 
 
-# --------------------------------------------------------------------------- #
-# 渐进式展示：overview 配图改为 pending + completed 之后异步入队
-# --------------------------------------------------------------------------- #
-def test_init_overview_images_sets_pending_and_keeps_placeholder(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.models.summary import Summary
-
-    monkeypatch.setattr(process_youtube, "is_auto_images_enabled", lambda *a, **k: True)
-    summary = Summary(
-        task_id="t1",
-        summary_type="overview",
-        version=1,
-        is_active=True,
-        content="正文一\n\n{{IMAGE: infographic | 主题 | 关键}}\n\n正文二",
-        model_used="m",
-    )
-    changed = process_youtube._init_overview_images(summary, content_style="review")
-    assert changed is True
-    assert summary.images is not None and len(summary.images) == 1
-    assert summary.images[0]["status"] == "pending"
-    assert summary.images[0]["placeholder"] == "{{IMAGE: infographic | 主题 | 关键}}"
-    assert "{{IMAGE: infographic | 主题 | 关键}}" in summary.content
-
-
-def test_init_overview_images_inserts_default_placeholder_into_content(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.models.summary import Summary
-
-    monkeypatch.setattr(process_youtube, "is_auto_images_enabled", lambda *a, **k: True)
-    summary = Summary(
-        task_id="t1",
-        summary_type="overview",
-        version=1,
-        is_active=True,
-        content="## 实测对比\n\n这段比较了多个 AI 产品。",
-        model_used="m",
-    )
-    changed = process_youtube._init_overview_images(summary, content_style="review")
-    assert changed is True
-    assert summary.images and summary.images[0]["status"] == "pending"
-    assert summary.images[0]["placeholder"] in summary.content
-
-
-def test_init_overview_images_noop_for_non_overview() -> None:
-    from app.models.summary import Summary
-
-    summary = Summary(
-        task_id="t1",
-        summary_type="key_points",
-        version=1,
-        is_active=True,
-        content="要点",
-        model_used="m",
-    )
-    assert process_youtube._init_overview_images(summary, content_style="review") is False
-    assert summary.images is None
-
-
-def test_init_overview_images_returns_false_when_auto_images_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.models.summary import Summary
-
-    monkeypatch.setattr(process_youtube, "is_auto_images_enabled", lambda *a, **k: False)
-    summary = Summary(
-        task_id="t1", summary_type="overview", version=1, is_active=True,
-        content="正文 {{IMAGE: a | x | y}}", model_used="m",
-    )
-    assert process_youtube._init_overview_images(summary, content_style="review") is False
-    assert summary.images is None
-
-
-def test_enqueue_summary_images_sends_async_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.models.summary import Summary
-
-    sent: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        process_youtube.celery_app,
-        "send_task",
-        lambda name, **kw: sent.append({"name": name, **kw}),
-    )
-    summary = Summary(
-        task_id="t1",
-        summary_type="overview",
-        version=1,
-        is_active=True,
-        content="正文 {{IMAGE: a | x | y}}",
-        model_used="m",
-    )
-    summary.id = "sum-x"
-    summary.images = [
-        {
-            "placeholder": "{{IMAGE: a | x | y}}",
-            "status": "pending",
-            "url": None,
-            "alt": "x",
-            "model_id": None,
-            "error": None,
-        }
-    ]
-    process_youtube._enqueue_summary_images(
-        task_id="t1",
-        user_id="user-1",
-        summaries=[summary],
-        content_style="review",
-    )
-    assert len(sent) == 1
-    assert sent[0]["name"] == "worker.tasks.generate_summary_images_async"
-    assert sent[0]["kwargs"]["summary_id"] == str(summary.id)
-    assert sent[0]["kwargs"]["user_id"] == "user-1"
-
-
 # ============================================================
 # yt-dlp 抓取韧性：超时注入 + 瞬时/永久错误分类 + 仅瞬时重试
 # ============================================================
@@ -409,10 +299,19 @@ def test_classify_youtube_error_maps_known_keywords() -> None:
     from app.core.exceptions import BusinessError
     from app.i18n.codes import ErrorCode
 
-    assert process_youtube._classify_youtube_error(Exception("Private video")).code == ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE
-    assert process_youtube._classify_youtube_error(Exception("Video unavailable")).code == ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE
-    assert process_youtube._classify_youtube_error(Exception("Incomplete YouTube ID")).code == ErrorCode.INVALID_URL_FORMAT
-    assert process_youtube._classify_youtube_error(Exception("Read timed out")).code == ErrorCode.YOUTUBE_DOWNLOAD_FAILED
+    assert (
+        process_youtube._classify_youtube_error(Exception("Private video")).code == ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE
+    )
+    assert (
+        process_youtube._classify_youtube_error(Exception("Video unavailable")).code
+        == ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE
+    )
+    assert (
+        process_youtube._classify_youtube_error(Exception("Incomplete YouTube ID")).code == ErrorCode.INVALID_URL_FORMAT
+    )
+    assert (
+        process_youtube._classify_youtube_error(Exception("Read timed out")).code == ErrorCode.YOUTUBE_DOWNLOAD_FAILED
+    )
     # 已是 BusinessError 时原样返回（不二次包装）。
     be = BusinessError(ErrorCode.YOUTUBE_VIDEO_UNAVAILABLE)
     assert process_youtube._classify_youtube_error(be) is be
