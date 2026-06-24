@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _load():
@@ -104,3 +105,43 @@ async def test_chapters_folds_token_usage_into_metadata(monkeypatch) -> None:
     assert meta["slug"] == "segmentation-segment-zh"
     assert meta["input_tokens"] == 1500
     assert meta["output_tokens"] == 88
+
+
+class _FakeDbForSummaries:
+    def add(self, item: object) -> None:
+        return None
+
+    def add_all(self, items: list[object]) -> None:
+        return None
+
+
+async def test_summaries_persist_quality_tier(monkeypatch) -> None:
+    monkeypatch.setattr(sg, "get_prompt_manager", lambda: _FakePM())
+
+    async def _fake_get_service(*args, **kwargs):
+        return _UsageLLM()
+
+    monkeypatch.setattr(sg.SmartFactory, "get_service", _fake_get_service)
+    monkeypatch.setattr(
+        sg.TranscriptProcessor,
+        "assess_quality",
+        lambda segments: SimpleNamespace(quality_score="high", avg_confidence=0.95),
+    )
+    # 短文本 → 跳过章节(只走 overview/key_points/action_items 一处 Summary 构造)
+    monkeypatch.setattr(sg.TranscriptProcessor, "preprocess", lambda *a, **k: "短转写文本")
+    monkeypatch.setattr(sg.TranscriptProcessor, "get_quality_notice", lambda q: "")
+
+    segments = [SimpleNamespace(content="x", start_time=0.0, end_time=1.0, speaker_id=None, confidence=0.9, words=[])]
+    summaries, meta = await sg.generate_summaries_with_quality_awareness(
+        task_id="t1",
+        segments=segments,
+        content_style="meeting",
+        session=_FakeDbForSummaries(),
+        user_id="u1",
+        provider="proxy",
+        model_id="chat-default",
+    )
+
+    assert summaries  # 至少生成一条
+    assert all(s.quality_tier == "high" for s in summaries)
+    assert meta["quality_score"] == "high"

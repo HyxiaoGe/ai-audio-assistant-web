@@ -337,6 +337,11 @@ async def rollback_my_config(
     if history is None:
         raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
+    # 与 upsert_my_config 对称:历史快照可能含护栏上线前残留的特权字段(base_url/api_key 等),
+    # 回滚不过滤等于给自助配置开后门(SSRF/凭证注入)。空快照({})跳过,防御 None 迭代。
+    if history.config:
+        _reject_privileged_user_fields(history.config)
+
     db.add(
         ServiceConfigHistory(
             service_type=record.service_type,

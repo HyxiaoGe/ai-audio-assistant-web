@@ -29,6 +29,7 @@ from app.core.registry import ServiceRegistry
 from app.core.smart_factory import SmartFactory
 from app.i18n.codes import ErrorCode
 from app.models.asr_usage import ASRUsage
+from app.models.llm_usage import LLMUsage
 from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.asr.base import ASRService, TranscriptSegment, WordTimestamp
@@ -1207,6 +1208,27 @@ async def _process_task(task_id: str, request_id: str | None) -> None:
 
                 # 保存所有摘要到数据库
                 session.add_all(summaries)
+
+                # LLM 用量记账:每条摘要一行 LLMUsage(只记 success;失败在生成器内被吞、
+                # 此层不可见,见设计决策 B)。绝不加成本/token 列——LiteLLM 是花费账本权威。
+                llm_provider = summary_metadata.get("llm_provider")
+                if summaries and llm_provider:
+                    llm_model = summary_metadata.get("llm_model")
+                    session.add_all(
+                        [
+                            LLMUsage(
+                                user_id=str(task.user_id),
+                                task_id=str(task.id),
+                                provider=llm_provider,
+                                model_id=llm_model,
+                                call_type="summarize",
+                                summary_type=s.summary_type,
+                                status="success",
+                            )
+                            for s in summaries
+                        ]
+                    )
+
                 await _commit(session)
 
                 logger.info(
