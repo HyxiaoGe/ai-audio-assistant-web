@@ -9,6 +9,7 @@ from app.config import settings
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
 from app.models.asr_usage import ASRUsage
+from app.models.llm_usage import LLMUsage
 from app.models.summary import Summary
 from app.models.task import Task
 from app.models.transcript import Transcript
@@ -64,6 +65,7 @@ class _FakeSession:
         self.task = task
         self.transcripts: list[Transcript] = []
         self.summaries: list[Summary] = []
+        self.llm_usages: list[LLMUsage] = []
 
     async def execute(self, query: object) -> _FakeResult:
         # Check if query is for Task model (by checking the query string)
@@ -80,6 +82,8 @@ class _FakeSession:
             self.transcripts.append(item)
         elif isinstance(item, Summary):
             self.summaries.append(item)
+        elif isinstance(item, LLMUsage):
+            self.llm_usages.append(item)
 
     def add_all(self, items: list[object]) -> None:
         for item in items:
@@ -363,10 +367,10 @@ async def test_process_audio_summary_failure_does_not_fail_task(monkeypatch: pyt
 
     await process_audio._process_task(task.id, None)
 
-    assert task.status == "completed"          # 不再 failed
+    assert task.status == "completed"  # 不再 failed
     assert task.error_code is None
-    assert len(session.transcripts) == 1       # 转写保留
-    assert session.summaries == []             # 摘要为空（局部失败）
+    assert len(session.transcripts) == 1  # 转写保留
+    assert session.summaries == []  # 摘要为空（局部失败）
 
 
 @pytest.mark.asyncio
@@ -874,3 +878,110 @@ async def test_process_audio_failed_calls_notify_task_failed_without_raw_error(
     # 原始错误文本不得出现在任何 user-facing params 字段
     for value in kwargs["params"].values():
         assert "boom secret internal trace" not in str(value)
+
+
+# --------------------------------------------------------------------------- #
+# LLMUsage 记账行
+# --------------------------------------------------------------------------- #
+async def _fake_generate_summaries_no_provider(
+    task_id: str,
+    segments: list[TranscriptSegment],
+    content_style: str,
+    session: Any,
+    user_id: str,
+    provider: str | None = None,
+    model_id: str | None = None,
+) -> tuple[list[Summary], dict[str, Any]]:
+    summaries = [
+        Summary(task_id=task_id, summary_type="overview", content="o", model_used="m"),
+    ]
+    metadata = {
+        "quality_score": "high",
+        "avg_confidence": 0.9,
+        "llm_provider": None,  # provider 缺失 → 不应写 LLMUsage
+        "llm_model": None,
+        "summaries_generated": 1,
+    }
+    return summaries, metadata
+
+
+@pytest.mark.asyncio
+async def test_process_audio_writes_llm_usage_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings.UPLOAD_PRESIGN_EXPIRES = 60
+    task = _build_task("upload", None, _UPLOAD_KEY)
+    session = _FakeSession(task)
+    asr = _FakeASRService(
+        segments=[TranscriptSegment(speaker_id="1", start_time=0.0, end_time=1.0, content="hello", confidence=0.9)]
+    )
+    llm = _FakeLLMService()
+    storage = _FakeStorageService()
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", lambda: asr)
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries)
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
+
+    from app.services import asr_free_quota_service
+
+    monkeypatch.setattr(
+        asr_free_quota_service.AsrFreeQuotaService,
+        "consume_quota",
+        _fake_consume_quota,
+    )
+
+    await process_audio._process_task(task.id, "req-1")
+
+    assert task.status == "completed"
+    assert len(session.summaries) == 3
+    # 每条摘要一行 LLMUsage(只 success)
+    assert len(session.llm_usages) == 3
+    types = {u.summary_type for u in session.llm_usages}
+    assert types == {"overview", "keypoints", "action_items"}
+    for u in session.llm_usages:
+        assert u.provider == "test-provider"
+        assert u.model_id == "test-model"
+        assert u.call_type == "summarize"
+        assert u.status == "success"
+        assert u.user_id == str(task.user_id)
+        assert u.task_id == str(task.id)
+
+
+@pytest.mark.asyncio
+async def test_process_audio_skips_llm_usage_when_provider_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings.UPLOAD_PRESIGN_EXPIRES = 60
+    task = _build_task("upload", None, _UPLOAD_KEY)
+    session = _FakeSession(task)
+    asr = _FakeASRService(
+        segments=[TranscriptSegment(speaker_id="1", start_time=0.0, end_time=1.0, content="hello", confidence=0.9)]
+    )
+    llm = _FakeLLMService()
+    storage = _FakeStorageService()
+
+    monkeypatch.setattr(process_audio, "async_session_factory", lambda: _FakeSessionContext(session))
+    monkeypatch.setattr(process_audio, "get_asr_service", lambda: asr)
+    monkeypatch.setattr(process_audio, "get_llm_service", lambda *args, **kwargs: llm)
+    monkeypatch.setattr(process_audio, "get_storage_service", lambda *args, **kwargs: storage)
+    monkeypatch.setattr(process_audio, "publish_message", _noop_publish_message)
+    monkeypatch.setattr(process_audio.NotificationService, "notify", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(
+        process_audio, "generate_summaries_with_quality_awareness", _fake_generate_summaries_no_provider
+    )
+    monkeypatch.setattr(process_audio, "ingest_task_chunks_sync", _fake_ingest_task_chunks)
+
+    from app.services import asr_free_quota_service
+
+    monkeypatch.setattr(
+        asr_free_quota_service.AsrFreeQuotaService,
+        "consume_quota",
+        _fake_consume_quota,
+    )
+
+    await process_audio._process_task(task.id, "req-1")
+
+    assert task.status == "completed"
+    assert len(session.summaries) == 1
+    assert session.llm_usages == []  # provider 缺失 → 不写脏行
