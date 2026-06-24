@@ -81,6 +81,12 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.sync_youtube_videos.check_scheduled_syncs",
         "schedule": crontab(minute=30),  # 每小时 30 分执行
     },
+    # 死任务兜底巡检 - 每 15min:重派卡 pending 的配图 + 把卡非终态超时的任务标 failed。
+    # 不设 options.queue(worker 无 -Q,只消费默认 celery 队列;历史死信教训)。
+    "run-dead-task-sweep": {
+        "task": "worker.tasks.run_dead_task_sweep",
+        "schedule": crontab(minute="*/15"),
+    },
 }
 
 ConfigManager.configure_db(worker_async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL)
@@ -111,6 +117,7 @@ from app.services.storage import cos, minio, oss, tos  # noqa: F401, E402
 # Must import after celery_app is created to avoid circular imports
 from worker.tasks import (
     cleanup_task,  # noqa: F401, E402
+    dead_task_sweeper,  # noqa: F401, E402
     download_youtube,  # noqa: F401, E402
     process_audio,  # noqa: F401, E402
     process_youtube,  # noqa: F401, E402

@@ -24,6 +24,26 @@ from worker.tasks.image_generator import (
 logger = logging.getLogger("worker.summary_image_task")
 
 
+def _ready_placeholders(summary_id: str) -> set[str]:
+    """读 summary.images,返回已 status=='ready' 的 placeholder 集合(用于重跑时跳过,不重烧)。
+
+    读失败(DB 抖动等)→ 返回空集合 = 全量重跑,语义安全(最多重烧,绝不漏补)。
+    """
+    from app.models.summary import Summary
+
+    try:
+        with get_sync_db_session() as session:
+            summary = session.query(Summary).filter(Summary.id == summary_id).first()
+            if summary is None or not summary.images:
+                return set()
+            return {i.get("placeholder") for i in summary.images if i.get("status") == "ready" and i.get("placeholder")}
+    except Exception:
+        logger.warning(
+            "Task summary %s: read ready placeholders failed, will regenerate all", summary_id, exc_info=True
+        )
+        return set()
+
+
 async def _run_summary_images(
     *,
     task_id: str,
@@ -36,6 +56,15 @@ async def _run_summary_images(
     placeholders = extract_image_placeholders(content)
     if not placeholders:
         logger.info("Task %s: no image placeholders for async images; nothing to do", task_id)
+        return
+
+    # Fix3:只补 pending/failed,跳过已 ready 的槽(worker-lost 重投 / 巡检补派发都走本任务 →
+    # 不重烧已成功的图)。pending 与 failed 都重跑(failed 借此获得自动重试)。
+    ready = _ready_placeholders(summary_id)
+    if ready:
+        placeholders = [p for p in placeholders if p["placeholder"] not in ready]
+    if not placeholders:
+        logger.info("Task %s: all image slots already ready; nothing to do", task_id)
         return
 
     config = get_auto_images_config()
