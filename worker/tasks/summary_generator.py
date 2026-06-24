@@ -152,6 +152,7 @@ async def generate_summaries_with_quality_awareness(
                 output_tokens=chapters_meta.get("output_tokens"),
                 # 真实 output token 优先；provider 未透出用量时回落字符数近似(向后兼容)。
                 token_count=chapters_meta.get("output_tokens") or len(json.dumps(chapters_data)),
+                quality_tier=quality.quality_score,
             )
             session.add(chapters_summary)
 
@@ -197,6 +198,7 @@ async def generate_summaries_with_quality_awareness(
                 output_tokens=prompt_meta.get("output_tokens"),
                 # 真实 output token 优先；provider 未透出用量时回落字符数近似(向后兼容)。
                 token_count=prompt_meta.get("output_tokens") or len(content),
+                quality_tier=quality.quality_score,
             )
             summaries.append(summary)
 
