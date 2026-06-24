@@ -3,29 +3,22 @@
 worker 侧原子锁(set nx ex + token 校验 delete)是重生防重的唯一正确性来源:
 - 单条重生(comparison_id=None)抢锁;抢不到直接 return,不烧 LLM/配图。
 - 对比(comparison_id 非空)按设计并发,豁免锁。
-importlib 加载模式同 test_regenerate_summary_images.py;把 _regenerate_summary 换成 spy 隔离重活,
-用 task.apply(..., throw=True) 在本进程同步执行任务体(自动绑定 self、提供 request 上下文)。
+直接 import 真实模块并对其打桩(不再 importlib 复制一份):celery_app 在 import 时按固定名
+"worker.tasks.regenerate_summary" 急加载注册任务(且与本模块循环 import)。复制一份会在全量串行
+套件里因「真实模块已先注册」而让 .apply() 落到真实模块的函数上、桩却打在副本上→失效,跑真 redis
+(CI 镜像无 redis→连接被拒)+ 真异步 DB(sqlite 同步上下文→MissingGreenlet),是 CI 全量套件偶发
+红、本地却绿的根因。直接 import 真实模块 → 打桩对象 == 运行对象,与 import 顺序/环境无关。
+把 _regenerate_summary 换成 spy 隔离重活,用 task.apply(..., throw=True) 在本进程同步执行任务体
+(自动绑定 self、提供 request 上下文)。
 """
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-
-def _load() -> Any:
-    p = Path(__file__).resolve().parents[2] / "worker" / "tasks" / "regenerate_summary.py"
-    spec = importlib.util.spec_from_file_location("regenerate_summary_lock_uut", p)
-    assert spec and spec.loader
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
-    return m
-
-
-rs = _load()
+import worker.tasks.regenerate_summary as rs
 
 
 class _FakeRedis:
