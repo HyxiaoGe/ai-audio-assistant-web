@@ -138,13 +138,25 @@ def regenerate_summary(
         lock_key = build_regen_lock_key(task_id, summary_type)
         lock_token = (self.request.id if self.request else None) or uuid4().hex
         if not redis_client.set(lock_key, lock_token, nx=True, ex=REGEN_LOCK_TTL):
-            logger.warning(
-                "[%s] Summary regeneration skipped: %s/%s already in progress",
-                request_id,
-                task_id,
-                summary_type,
-            )
-            return
+            # SETNX 失败:若锁值==自己的 token,说明是「本任务上一条因 OOM 单子进程崩溃留下的
+            # 陈旧自锁」(重投复用同 task id → 同 lock_token),应接管续跑而非把自己挡在外面;
+            # 续租 TTL 重新武装兜底。否则确是别人在跑,维持原行为跳过。
+            if redis_client.get(lock_key) == lock_token:
+                redis_client.set(lock_key, lock_token, ex=REGEN_LOCK_TTL)
+                logger.warning(
+                    "[%s] Regen lock taken over (own stale lock): %s/%s",
+                    request_id,
+                    task_id,
+                    summary_type,
+                )
+            else:
+                logger.warning(
+                    "[%s] Summary regeneration skipped: %s/%s already in progress",
+                    request_id,
+                    task_id,
+                    summary_type,
+                )
+                return
 
     try:
         _regenerate_summary(task_id, summary_type, model, model_id, request_id, comparison_id)

@@ -104,3 +104,69 @@ def test_lock_released_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     key = rs.build_regen_lock_key("t1", "overview")
     assert key not in redis.store  # finally 已释放
     assert redis.deleted == [key]  # 精确锁定:走了 token 校验删除,非靠 TTL/其它
+
+
+class _NxFailSelfTokenRedis:
+    """模拟 SETNX 失败、且锁里存的就是本次 token(=自己上一条崩溃留下的陈旧自锁)。
+
+    nx=True 的 set 记下本次尝试写入的 value 并返回 None(失败);后续 get 返回该 value →
+    与任务计算出的 lock_token 必然相等,命中「自 token 接管」分支。非 nx 的 set = 续租 TTL。
+    """
+
+    def __init__(self) -> None:
+        self.set_calls = 0
+        self.reset_calls = 0
+        self._value: str | None = None
+        self.deleted: list[str] = []
+
+    def set(self, key: str, value: str, nx: bool = False, ex: int | None = None) -> bool | None:
+        self.set_calls += 1
+        if nx:
+            self._value = value
+            return None
+        self.reset_calls += 1
+        self._value = value
+        return True
+
+    def get(self, key: str) -> str | None:
+        return self._value
+
+    def delete(self, key: str) -> int:
+        self.deleted.append(key)
+        self._value = None
+        return 1
+
+
+class _NxFailOtherTokenRedis:
+    """SETNX 失败、锁里是别人的 token → 不接管,跳过(保留原行为)。"""
+
+    def __init__(self) -> None:
+        self.set_calls = 0
+        self.deleted: list[str] = []
+
+    def set(self, key: str, value: str, nx: bool = False, ex: int | None = None) -> bool | None:
+        self.set_calls += 1
+        return None  # 永远抢不到
+
+    def get(self, key: str) -> str | None:
+        return "someone-elses-token"
+
+    def delete(self, key: str) -> int:
+        self.deleted.append(key)
+        return 0
+
+
+def test_own_stale_lock_is_taken_over(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis = _NxFailSelfTokenRedis()
+    calls = _invoke(monkeypatch, comparison_id=None, redis=redis)
+    assert len(calls) == 1  # 接管续跑:重活被执行
+    assert redis.reset_calls == 1  # 续租了 TTL(非 nx 的 set 调一次)
+    key = rs.build_regen_lock_key("t1", "overview")
+    assert redis.deleted == [key]  # finally 仍 token 校验后释放
+
+
+def test_other_holder_lock_still_skips(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis = _NxFailOtherTokenRedis()
+    calls = _invoke(monkeypatch, comparison_id=None, redis=redis)
+    assert calls == []  # 别人在跑 → 跳过,不烧钱
+    assert redis.deleted == []  # 非持有者绝不删他人锁
