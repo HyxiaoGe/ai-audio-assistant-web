@@ -98,7 +98,15 @@ def _resolve_llm_selection(
     return provider, model_id
 
 
-@celery_app.task(bind=True, name="worker.tasks.regenerate_summary")
+@celery_app.task(
+    bind=True,
+    name="worker.tasks.regenerate_summary",
+    # per-task 超时兜底:重生最坏 = 摘要流式 + 内联最多 6 张配图(≈1200s)。
+    # soft 1500 先抛 SoftTimeLimitExceeded → 经 finally 释放重生锁;time 1700 硬杀作 backstop。
+    # 原无超时:卡死的重生会干等全局 4200s 白占 worker 槽。celery 硬超时参数名是 time_limit。
+    soft_time_limit=1500,
+    time_limit=1700,
+)
 def regenerate_summary(
     self,
     task_id: str,
