@@ -8,10 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentUser, get_db, get_public_viewer
 from app.config import settings
 from app.core.exceptions import BusinessError
-from app.core.rate_limit import _client_ip, rate_limit_user_or_ip
+from app.core.rate_limit import _client_ip, rate_limit_by_ip, rate_limit_user_or_ip
 from app.core.response import success
 from app.i18n.codes import ErrorCode
-from app.schemas.youtube_search import SearchData
+from app.schemas.youtube_search import SearchData, TrendingData, TrendingItemOut
 from app.services.youtube import search_cache
 from app.services.youtube.search_service import YouTubeSearchService
 
@@ -22,6 +22,8 @@ _search_rate_limit = rate_limit_user_or_ip(
     ip_limit=settings.YOUTUBE_SEARCH_RATE_PER_IP_MIN,
     scope="youtube_search",
 )
+
+_trending_rate_limit = rate_limit_by_ip(limit=settings.YOUTUBE_SEARCH_RATE_PER_IP_MIN, scope="youtube_trending")
 
 
 @router.get("/search")
@@ -55,4 +57,16 @@ async def search_youtube(
     await search_cache.register_query_heat(db, normalized, searcher_key)
 
     data = SearchData(query=display, items=hits, cached=was_cached)
+    return success(data=jsonable_encoder(data))
+
+
+@router.get("/search/trending")
+async def youtube_trending(
+    limit: int = Query(default=settings.YOUTUBE_TRENDING_TOP_N, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    _rl: None = Depends(_trending_rate_limit),
+) -> JSONResponse:
+    """公开:返回近 7d top-N 热门词;不同查询数不足阈值时 get_trending 已返空。"""
+    items = await search_cache.get_trending(db)
+    data = TrendingData(items=[TrendingItemOut(query=i.query, count=i.count) for i in items[:limit]])
     return success(data=jsonable_encoder(data))
