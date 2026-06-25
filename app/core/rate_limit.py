@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import Depends, Request
 
-from app.api.deps import CurrentUser, get_current_user, get_current_user_from_query
+from app.api.deps import CurrentUser, get_current_user, get_current_user_from_query, get_public_viewer
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.core.redis import get_redis_client
@@ -115,5 +115,23 @@ def rate_limit_by_ip(*, limit: int, window_seconds: int = 60, scope: str) -> Cal
         client_ip = _client_ip(request)
         bucket = int(time.time() // window_seconds)
         await _check(f"rl:{scope}:ip:{client_ip}:{bucket}", limit, window_seconds)
+
+    return _dep
+
+
+def rate_limit_user_or_ip(
+    *, user_limit: int, ip_limit: int, window_seconds: int = 60, scope: str
+) -> Callable[..., Awaitable[None]]:
+    """公开端点限流:登录用户按 user.id(user_limit),匿名按可信 IP(ip_limit)。
+
+    解析 viewer 用 get_public_viewer(坏 token 回落匿名,绝不 401),纯用于选限流桶。
+    """
+
+    async def _dep(request: Request, viewer: CurrentUser | None = Depends(get_public_viewer)) -> None:
+        bucket = int(time.time() // window_seconds)
+        if viewer is not None:
+            await _check(f"rl:{scope}:u:{viewer.id}:{bucket}", user_limit, window_seconds)
+        else:
+            await _check(f"rl:{scope}:ip:{_client_ip(request)}:{bucket}", ip_limit, window_seconds)
 
     return _dep
