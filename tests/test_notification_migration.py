@@ -143,7 +143,7 @@ def test_single_alembic_head_is_new_revision() -> None:
     )
     assert out.returncode == 0, out.stderr
     heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
-    # 必须恰好单 head（否则说明迁移链分叉）。head 随新迁移前移:转写 FTS 切 jiebacfg
-    # c1d2e3f4a5b6（down_revision=发布者身份字段 b1c2d3e4f5a6），故当前 head 为它。
+    # 必须恰好单 head（否则说明迁移链分叉）。head 随新迁移前移:YouTube 搜索缓存表
+    # ab7156a5abd5（down_revision=转写 FTS jiebacfg c1d2e3f4a5b6），故当前 head 为它。
     assert len(heads) == 1, f"alembic 出现多 head：{out.stdout}"
-    assert "c1d2e3f4a5b6" in heads[0]
+    assert "ab7156a5abd5" in heads[0]
