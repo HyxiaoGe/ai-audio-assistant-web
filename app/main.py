@@ -113,7 +113,7 @@ async def database_error_handler(request: Request, exc: DBAPIError) -> JSONRespo
 
 
 def create_app() -> FastAPI:
-    _enable_docs = os.getenv("ENABLE_DOCS", "true").lower() == "true"
+    _enable_docs = os.getenv("ENABLE_DOCS", "false").lower() == "true"
     app = FastAPI(
         title="AI Audio Assistant API",
         version="0.1.0",

@@ -166,3 +166,10 @@ def test_other_holder_lock_still_skips(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _invoke(monkeypatch, comparison_id=None, redis=redis)
     assert calls == []  # 别人在跑 → 跳过,不烧钱
     assert redis.deleted == []  # 非持有者绝不删他人锁
+
+
+def test_regenerate_summary_has_per_task_timeout() -> None:
+    # 卡死的重生不应无界占用 worker 槽(原无超时 → 干等全局 4200s)。
+    # soft 触发 SoftTimeLimitExceeded → 经 finally 释放重生锁;time 硬杀作 backstop。
+    assert rs.regenerate_summary.soft_time_limit == 1500
+    assert rs.regenerate_summary.time_limit == 1700
