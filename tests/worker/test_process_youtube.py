@@ -380,13 +380,14 @@ def test_extract_youtube_info_retries_transient_then_resolves(monkeypatch: pytes
     _FakeYDL._calls["n"] = 0
     _FakeYDL._side_effects = [
         ValueError("read timed out"),
-        {"title": "Hello", "url": "https://cdn.example/direct.m4a"},
+        {"title": "Hello", "url": "https://cdn.example/direct.m4a", "duration": 123},
     ]
     monkeypatch.setattr(process_youtube, "YoutubeDL", _FakeYDL)
 
-    direct_url, title = process_youtube._extract_youtube_info("https://youtu.be/abc")
+    direct_url, title, duration = process_youtube._extract_youtube_info("https://youtu.be/abc")
     assert title == "Hello"
     assert direct_url == "https://cdn.example/direct.m4a"
+    assert duration == 123
     assert _FakeYDL._calls["n"] == 2  # 1 次瞬时失败 + 1 次成功
 
 

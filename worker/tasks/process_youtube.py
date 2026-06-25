@@ -569,13 +569,26 @@ def _run_with_youtube_retry(fn: Callable[[], Any], *, max_attempts: int, what: s
     raise RuntimeError("unreachable")  # pragma: no cover
 
 
-def _extract_youtube_info(url: str) -> tuple[str | None, str | None]:
-    def _do() -> tuple[str | None, str | None]:
+def _duration_over_cap(duration: int | None) -> bool:
+    """媒体时长是否超过摄入上限（settings.INGEST_MAX_DURATION_SECONDS）。
+
+    上限 <= 0 视为不限制（关闸）；duration 为 None（站点未报时长）时不拦，交由下载后兜底再判。
+    """
+    cap = settings.INGEST_MAX_DURATION_SECONDS
+    return bool(cap and cap > 0 and duration and duration > cap)
+
+
+def _extract_youtube_info(url: str) -> tuple[str | None, str | None, int | None]:
+    def _do() -> tuple[str | None, str | None, int | None]:
         with YoutubeDL(_youtube_ydl_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
+            if isinstance(info, str):
+                return info, None, None
             title = info.get("title") if isinstance(info, dict) else None
-            direct_url = info if isinstance(info, str) else _extract_direct_url(info)
-            return direct_url, title
+            direct_url = _extract_direct_url(info) if isinstance(info, dict) else None
+            raw = info.get("duration") if isinstance(info, dict) else None
+            duration = int(raw) if isinstance(raw, (int, float)) and raw > 0 else None
+            return direct_url, title, duration
 
     return _run_with_youtube_retry(_do, max_attempts=settings.YOUTUBE_RESOLVE_MAX_ATTEMPTS, what="resolve")
 
@@ -893,7 +906,13 @@ def _process_youtube(
             stage_manager.start_stage(session, StageType.RESOLVE_YOUTUBE)
 
         try:
-            direct_url, title = _extract_youtube_info(task.source_url)
+            direct_url, title, resolved_duration = _extract_youtube_info(task.source_url)
+            if _duration_over_cap(resolved_duration):
+                # 下载前即拦截：省掉下载 + ASR 成本。BusinessError 经下方 except → 终态 failed、不重试。
+                raise BusinessError(
+                    ErrorCode.MEDIA_TOO_LONG,
+                    max_minutes=settings.INGEST_MAX_DURATION_SECONDS // 60,
+                )
             with get_sync_db_session() as session:
                 stage_manager.complete_stage(session, StageType.RESOLVE_YOUTUBE, {"title": title})
         except Exception as exc:
@@ -1087,6 +1106,19 @@ def _process_youtube(
                     # 转码成功但上传失败，且有直链：跳过上传，改用直链转写（任务仍会成功）
                     stage_manager.skip_stage(session, StageType.UPLOAD_STORAGE, "上传失败，回退到直链流")
                 _update_task(session, task, "resolved", 35, "resolved", request_id)
+
+        # 时长闸兜底：解析阶段未报时长的站点，用下载后 ffprobe 的真实时长再判一次（仍在更贵的 ASR 之前）。
+        if _duration_over_cap(duration_seconds):
+            cap_error = BusinessError(
+                ErrorCode.MEDIA_TOO_LONG,
+                max_minutes=settings.INGEST_MAX_DURATION_SECONDS // 60,
+            )
+            with get_sync_db_session() as session:
+                task = _get_task(session, task_id)
+                if task is None:
+                    return
+                _mark_failed(session, task, cap_error, request_id)
+            return
 
     # ========== 检查是否可以跳过转写阶段 ==========
     skip_transcribe = False
