@@ -580,8 +580,8 @@ def test_process_youtube_url_source_type_passes_guard(
         # 返回 None 值触发 _duration_over_cap(None) → False，然后进 complete_stage；
         # 但 complete_stage 已被 _NoopStageManager 打桩，流程会继续但最终在 _update_metadata
         # 等地方遇到桩失败；不过我们只关心 extract_calls["n"] > 0。
-        # 抛出 ValueError 让 _process_youtube 的 except 分支 return，干净退出：
-        raise ValueError("sentinel: extract called, exiting cleanly")
+        # 抛出 _SentinelError 让 _process_youtube 的 except 分支 return，干净退出：
+        raise _SentinelError("sentinel: extract called, exiting cleanly")
 
     monkeypatch.setattr(process_youtube, "_extract_youtube_info", _counting_extract)
 
