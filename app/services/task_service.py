@@ -94,6 +94,21 @@ class TaskService:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     @staticmethod
+    def _normalize_ingest_url(url: str) -> str:
+        """规范化拉取 URL 用于去重：小写 scheme+host、去 fragment、去末尾 '/'，保留 path 与 query。
+
+        不同视频常仅靠 query 区分（?v= / ?p= 等），故保留 query；fragment 不影响内容，去掉。
+        """
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        netloc = f"{host}:{parsed.port}" if parsed.port else host
+        path = parsed.path.rstrip("/")
+        normalized = f"{parsed.scheme.lower()}://{netloc}{path}"
+        if parsed.query:
+            normalized += f"?{parsed.query}"
+        return normalized
+
+    @staticmethod
     def _validate_provider_selection(data: TaskCreateRequest) -> None:
         """校验用户在 options 里指定的 provider 是否为已注册且可用的服务。
 
@@ -249,7 +264,7 @@ class TaskService:
         trace_id: str | None,
         token: str | None = None,
     ) -> Task:
-        if data.source_type not in {"upload", "youtube"}:
+        if data.source_type not in {"upload", "youtube", "url"}:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="source_type")
 
         if data.source_type == "upload":
@@ -273,6 +288,16 @@ class TaskService:
             video_id = TaskService._extract_youtube_video_id(data.source_url)
             if video_id:
                 data.content_hash = TaskService._generate_content_hash(f"youtube:{video_id}")
+
+        # 通用链接任务（B站/Vimeo/播客等任意 yt-dlp 支持的站点）：校验 URL（已放开主机白名单、
+        # 保留 SSRF 兜底），按规范化 URL 生成跨源前缀 hash 去重。不依赖网络，标题/时长交给 worker 回填。
+        if data.source_type == "url":
+            if not data.source_url:
+                raise BusinessError(ErrorCode.MISSING_REQUIRED_PARAMETER, field="source_url")
+            TaskService.validate_ingest_url(data.source_url)
+            data.content_hash = TaskService._generate_content_hash(
+                f"url:{TaskService._normalize_ingest_url(data.source_url)}"
+            )
 
         # 检查是否有相同内容的任务
         if data.content_hash:
@@ -327,7 +352,7 @@ class TaskService:
             content_hash=data.content_hash,
             title=data.title,
             source_type=data.source_type,
-            source_url=data.source_url if data.source_type == "youtube" else None,
+            source_url=data.source_url if data.source_type in {"youtube", "url"} else None,
             source_key=data.file_key if data.source_type == "upload" else None,
             source_metadata={},
             options=data.options.model_dump(),
@@ -349,7 +374,7 @@ class TaskService:
 
         from worker.celery_app import celery_app
 
-        if data.source_type == "youtube":
+        if data.source_type in {"youtube", "url"}:
             celery_app.send_task(
                 "worker.tasks.process_youtube",
                 args=[task.id],
@@ -1007,7 +1032,7 @@ class TaskService:
 
         task_kwargs = {"request_id": task.request_id}
 
-        if task.source_type == "youtube":
+        if task.source_type in {"youtube", "url"}:
             celery_app.send_task(
                 "worker.tasks.process_youtube",
                 args=[task.id],
