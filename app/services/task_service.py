@@ -44,8 +44,8 @@ _PUBLIC_AUDIO_PRESIGN_EXPIRES = 3600
 # 客户端只能引用自己前缀下、且严格匹配该形态的 key，否则可越权读/写/删他人对象。
 _UPLOAD_KEY_RE = re.compile(r"^upload/[^/]+/\d{4}/\d{2}/\d{2}/[0-9a-f]{32}(?:\.[A-Za-z0-9]+)?$")
 
-# 仅允许从这些受信媒体站点的主机（或其子域）拉取，杜绝 SSRF 打内网 / 云元数据端点。
-_ALLOWED_INGEST_HOSTS: tuple[str, ...] = ("youtube.com", "youtu.be", "bilibili.com", "b23.tv")
+# SSRF 兜底：内网式主机后缀（拒绝）。开放任意公网主机后，仍挡掉这些非公网目标。
+_BLOCKED_INGEST_HOST_SUFFIXES: tuple[str, ...] = (".localhost", ".internal", ".local")
 
 # 处于"处理中"（非终态 completed/failed）的任务状态全集——任务流水线的中间态。
 # list_tasks 的 status="processing" 伞形筛选、以及 tasks.py 路由的状态白名单都从这里派生，
@@ -215,10 +215,10 @@ class TaskService:
 
     @staticmethod
     def validate_ingest_url(url: str | None) -> None:
-        """对用户提交的拉取 URL 做严格校验（SSRF 防护），非法时抛 BusinessError。
+        """对用户提交的拉取 URL 做 SSRF 防护校验，非法时抛 BusinessError。
 
-        白名单主机（精确或子域）是主防线，同时也挡掉十进制 / 十六进制 IP 编码；
-        IP 字面量分支是对环回 / 链路本地 / RFC1918 / 元数据等规范写法的额外兜底。
+        开放策略：不再做媒体站点主机白名单（交给 yt-dlp 自动识别 1000+ 站点），
+        但保留 SSRF 兜底——拒非 http(s)、拒 IP 字面量、拒 localhost/单标签/内网式后缀主机。
         全程不做 DNS 解析，保持纯函数、无网络副作用。
         """
         if not url:
@@ -235,10 +235,11 @@ class TaskService:
         except ValueError:
             pass
         else:
-            # 任意 IP 字面量都不可能是受信媒体主机
-            raise BusinessError(ErrorCode.UNSUPPORTED_YOUTUBE_URL_FORMAT)
-        if not any(host == h or host.endswith("." + h) for h in _ALLOWED_INGEST_HOSTS):
-            raise BusinessError(ErrorCode.UNSUPPORTED_YOUTUBE_URL_FORMAT)
+            # 任意 IP 字面量都不是合法公网媒体主机
+            raise BusinessError(ErrorCode.INVALID_URL_FORMAT)
+        # 单标签主机（无 '.'，如 localhost / router / 十进制IP）与内网式后缀：拒。
+        if "." not in host or host.endswith(_BLOCKED_INGEST_HOST_SUFFIXES):
+            raise BusinessError(ErrorCode.INVALID_URL_FORMAT)
 
     @staticmethod
     async def create_task(
