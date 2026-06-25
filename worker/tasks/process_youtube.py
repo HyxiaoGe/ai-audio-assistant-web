@@ -857,8 +857,8 @@ def _process_youtube(
         if task is None:
             logger.warning("task not found: %s", task_id)
             return
-        if task.source_type != "youtube":
-            logger.warning("task source_type is not youtube: %s", task_id)
+        if task.source_type not in {"youtube", "url"}:
+            logger.warning("task source_type is not an ingest URL type: %s", task_id)
             return
         if not task.source_url:
             _mark_failed(

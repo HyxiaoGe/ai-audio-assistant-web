@@ -76,7 +76,7 @@ RETRY_MODE_CLEAR_STAGES: dict[RetryMode, str | list[StageType]] = {
 
 def get_stage_flow(source_type: str) -> list[StageType]:
     """根据任务类型获取处理流程"""
-    if source_type == "youtube":
+    if source_type in {"youtube", "url"}:
         return YOUTUBE_STAGE_FLOW
     else:
         return AUDIO_STAGE_FLOW
