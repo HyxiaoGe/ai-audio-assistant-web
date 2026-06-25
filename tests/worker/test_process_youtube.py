@@ -380,13 +380,14 @@ def test_extract_youtube_info_retries_transient_then_resolves(monkeypatch: pytes
     _FakeYDL._calls["n"] = 0
     _FakeYDL._side_effects = [
         ValueError("read timed out"),
-        {"title": "Hello", "url": "https://cdn.example/direct.m4a"},
+        {"title": "Hello", "url": "https://cdn.example/direct.m4a", "duration": 123},
     ]
     monkeypatch.setattr(process_youtube, "YoutubeDL", _FakeYDL)
 
-    direct_url, title = process_youtube._extract_youtube_info("https://youtu.be/abc")
+    direct_url, title, duration = process_youtube._extract_youtube_info("https://youtu.be/abc")
     assert title == "Hello"
     assert direct_url == "https://cdn.example/direct.m4a"
+    assert duration == 123
     assert _FakeYDL._calls["n"] == 2  # 1 次瞬时失败 + 1 次成功
 
 
@@ -467,3 +468,127 @@ async def test_summarize_one_carries_prompt_provenance(monkeypatch: pytest.Monke
     assert summary.input_tokens == 12
     assert summary.output_tokens == 34
     assert summary.token_count == 34  # 真实 output token 优先于字符数近似
+
+
+# ============================================================
+# Defect #1 回归：source_type="url" 任务不被 guard 短路
+# ============================================================
+
+
+class _SentinelError(Exception):
+    """哨兵异常：_extract_youtube_info 被调用时抛出，用于证明 guard 已被越过。"""
+
+
+class _FakeContextSession:
+    """get_sync_db_session() 上下文管理器的最小替身，不需要真实 DB。"""
+
+    def __init__(self, task: Task) -> None:
+        self._task = task
+
+    def __enter__(self) -> _FakeContextSession:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def query(self, model: Any) -> _FakeSyncQuery:
+        return _FakeSyncQuery([self._task])
+
+    def commit(self) -> None:
+        pass
+
+    def add(self, item: Any) -> None:
+        pass
+
+
+def test_process_youtube_url_source_type_passes_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """source_type="url" 任务必须越过 guard，执行到 _extract_youtube_info 阶段。
+
+    测试策略：
+    - 用 source_type="url" 的 Task 替身替换 _get_task；
+    - 将 _extract_youtube_info 替换为抛出 _SentinelError 的桩，
+      证明 guard 已被越过（若 guard 短路，_SentinelError 永远不会被抛出）；
+    - 捕获 _SentinelError 作为断言证据。
+
+    此测试在 OLD guard（!= "youtube"）下必定失败（_SentinelError 不被抛出，
+    而是 _process_youtube 静默 return；pytest.raises 检测到无异常则报 Failed）。
+    """
+    url_task = Task(
+        user_id="user-url",
+        content_hash="hash-url",
+        title="bilibili-demo",
+        source_type="url",
+        source_url="https://www.bilibili.com/video/BV1xx",
+        duration_seconds=None,
+    )
+    # source_key=None 确保不会走 skip_download 分支（无法在 guard 之后短路前就退出）
+    url_task.source_key = None  # type: ignore[attr-defined]
+
+    fake_session = _FakeContextSession(url_task)
+
+    # 替换上下文管理器工厂，让每次 `with get_sync_db_session()` 都返回同一 fake_session
+    from collections.abc import Generator
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _fake_get_sync_db_session() -> Generator[_FakeContextSession, None, None]:
+        yield fake_session
+
+    monkeypatch.setattr(process_youtube, "get_sync_db_session", _fake_get_sync_db_session)
+
+    # _get_task 从 session 中取任务，用真实 _get_task 会查 DB；直接打桩返回 url_task。
+    monkeypatch.setattr(process_youtube, "_get_task", lambda session, task_id: url_task)
+
+    # validate_ingest_url 需要白名单，直接 noop 跳过
+    monkeypatch.setattr(process_youtube.TaskService, "validate_ingest_url", staticmethod(lambda url: None))
+
+    # StageManager 会调用 DB，打桩为 noop
+    class _NoopStageManager:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def skip_stage(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def start_stage(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def complete_stage(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def fail_stage(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    monkeypatch.setattr(process_youtube, "StageManager", _NoopStageManager)
+
+    # _mark_failed 写 DB + 通知，打桩为 noop（_SentinelError 进入 except 分支会调用它）
+    monkeypatch.setattr(process_youtube, "_mark_failed", lambda *a, **k: None)
+
+    # publish_task_update_sync 写 Redis，打桩为 noop 避免连接错误
+    monkeypatch.setattr(process_youtube, "publish_task_update_sync", lambda *a, **k: None)
+
+    # 哨兵计数器：guard 被越过后，执行会到达 _extract_youtube_info；
+    # 若 guard 短路（旧代码），extract_calls["n"] 永远是 0，断言失败。
+    # _extract_youtube_info 的返回值被后续代码使用，
+    # 但其 except 分支会 return，所以返回任意值让 _process_youtube 正常退出即可。
+    extract_calls: dict[str, int] = {"n": 0}
+
+    def _counting_extract(url: str) -> tuple[str | None, str | None, int | None]:
+        extract_calls["n"] += 1
+        # 返回 None 值触发 _duration_over_cap(None) → False，然后进 complete_stage；
+        # 但 complete_stage 已被 _NoopStageManager 打桩，流程会继续但最终在 _update_metadata
+        # 等地方遇到桩失败；不过我们只关心 extract_calls["n"] > 0。
+        # 抛出 _SentinelError 让 _process_youtube 的 except 分支 return，干净退出：
+        raise _SentinelError("sentinel: extract called, exiting cleanly")
+
+    monkeypatch.setattr(process_youtube, "_extract_youtube_info", _counting_extract)
+
+    # 运行（内部捕获 ValueError，调用 _mark_failed(已打桩为 noop)，然后 return）
+    process_youtube._process_youtube(str(url_task.id), "req-url-1")
+
+    # 关键断言：若 guard 短路（旧代码 != "youtube"），n 恒为 0
+    assert extract_calls["n"] == 1, (
+        "guard short-circuited for source_type='url': _extract_youtube_info was never called"
+    )

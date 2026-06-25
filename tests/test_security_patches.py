@@ -105,7 +105,13 @@ def test_allow_benign_fields() -> None:
         "https://youtu.be/abcdefghijk",
         "https://www.bilibili.com/video/BV1xx",
         "http://b23.tv/abcd",
-        "HTTPS://YouTube.Com/x",  # host is case-insensitive
+        "HTTPS://YouTube.Com/x",  # host 大小写不敏感
+        # —— 开放策略后这些公网主机均放行（交给 yt-dlp） ——
+        "https://vimeo.com/123456789",
+        "https://soundcloud.com/artist/track",
+        "https://www.example.com/watch?v=x",
+        "http://youtube.com.attacker.tld/v",  # 任意公网主机：放行（不再做后缀白名单）
+        "https://evil.com/",  # 任意公网主机：放行
     ],
 )
 def test_ingest_url_allowed(url: str) -> None:
@@ -115,20 +121,22 @@ def test_ingest_url_allowed(url: str) -> None:
 @pytest.mark.parametrize(
     "url",
     [
-        "http://169.254.169.254/youtube.com",  # metadata IP, substring bypass
-        "http://youtube.com.attacker.tld/v",  # suffix spoof
-        "http://attacker.tld/?next=youtube.com",  # query substring
-        "http://youtu.be@169.254.169.254/",  # userinfo trick
-        "http://127.0.0.1/youtube.com",  # loopback v4
-        "http://[::1]/youtu.be",  # loopback v6
+        "http://169.254.169.254/youtube.com",  # 元数据 IP 字面量
+        "http://youtu.be@169.254.169.254/",  # userinfo 把戏（hostname 仍是 IP 字面量）
+        "http://127.0.0.1/youtube.com",  # 环回 v4
+        "http://[::1]/youtu.be",  # 环回 v6
         "http://10.0.0.5/",  # RFC1918
-        "https://2130706433/youtu.be",  # decimal-IP encoding (allowlist must catch)
-        "//youtube.com/x",  # scheme-relative (no scheme)
-        "file:///etc/passwd",  # non-http scheme
-        "httpx://youtube.com/x",  # bogus scheme passing old startswith('http')
-        "https://evil.com/",  # disallowed host
-        None,  # missing
-        "",  # empty
+        "https://2130706433/youtu.be",  # 十进制 IP / 单标签主机
+        "http://localhost/x",  # localhost
+        "http://api.localhost/x",  # *.localhost 后缀
+        "http://router/",  # 单标签内网短名（无 '.'）
+        "http://svc.internal/",  # 内网式后缀
+        "http://svc.local/",  # 内网式后缀
+        "//youtube.com/x",  # 无 scheme
+        "file:///etc/passwd",  # 非 http scheme
+        "httpx://youtube.com/x",  # 伪 scheme
+        None,  # 缺失
+        "",  # 空
     ],
 )
 def test_ingest_url_rejected(url: str | None) -> None:
