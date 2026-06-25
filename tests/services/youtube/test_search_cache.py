@@ -114,6 +114,19 @@ async def test_heat_is_new_searcher_failopen_true_on_redis_error(monkeypatch: py
     assert await sc.heat_is_new_searcher("q", "user-1") is True
 
 
+async def test_upsert_results_commits(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _FakeSession(_Result())
+    await sc.upsert_results(db, "hello world", "Hello World", [_hit("v1")])
+    assert db.committed is True
+
+
+async def test_register_query_heat_commits(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sc, "get_redis_client", lambda: _FakeRedis(returns=True))
+    db = _FakeSession(_Result())
+    await sc.register_query_heat(db, "hello world", "user-1")
+    assert db.committed is True
+
+
 async def test_get_trending_below_threshold_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sc.settings, "YOUTUBE_TRENDING_MIN_VOLUME", 20)
     rows = [_Row(f"q{i}", f"q{i}", [], None, search_count=i) for i in range(3)]
@@ -133,3 +146,17 @@ async def test_get_trending_sorts_filters_denylist_and_limits(monkeypatch: pytes
     out = await sc.get_trending(_FakeSession(_Result(rows=rows)))
     assert [i.query for i in out] == ["B", "A"]  # 降序 + top-2,spam 被滤
     assert out[0] == TrendingItem(query="B", count=10)
+
+
+async def test_get_trending_threshold_uses_post_denylist_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Raw rows = 3 distinct queries; 2 are denylisted → eligible = 1 < MIN_VOLUME=2 → expect []
+    # This pins that the threshold is evaluated against len(eligible), not len(rows).
+    monkeypatch.setattr(sc.settings, "YOUTUBE_TRENDING_MIN_VOLUME", 2)
+    monkeypatch.setattr(sc.settings, "YOUTUBE_TRENDING_TOP_N", 10)
+    monkeypatch.setattr(sc.settings, "YOUTUBE_SEARCH_DENYLIST", ["bad one", "bad two"])
+    rows = [
+        _Row("bad one", "Bad One", [], None, search_count=50),   # denylisted (normalize → "bad one")
+        _Row("bad two", "Bad Two", [], None, search_count=40),   # denylisted (normalize → "bad two")
+        _Row("good", "Good", [], None, search_count=30),          # eligible
+    ]
+    assert await sc.get_trending(_FakeSession(_Result(rows=rows))) == []
