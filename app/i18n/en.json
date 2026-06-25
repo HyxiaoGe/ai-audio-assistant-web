@@ -9,6 +9,7 @@
   "40013": "Unsupported YouTube URL format",
   "40014": "The file contains no audio track and cannot be transcribed; please upload audio/video that has sound",
   "40015": "Media exceeds the maximum duration ({max_minutes} min); please use shorter content",
+  "40016": "This keyword is not available for search; please try another",
   "40100": "Authentication token not provided",
   "40101": "Invalid authentication token",
   "40102": "Authentication token expired, please login again",
@@ -51,5 +52,6 @@
   "51903": "YouTube API error: {reason}",
   "51904": "Invalid YouTube authorization state, please try again",
   "51905": "Not subscribed to this channel: {reason}",
-  "51906": "Video not found in cache: {reason}"
+  "51906": "Video not found in cache: {reason}",
+  "51907": "Search is temporarily unavailable, please try again later"
 }

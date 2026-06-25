@@ -217,6 +217,16 @@ class Settings(BaseSettings):
     # 应用层对「下载」整体的重试次数(含首次)。下载本身已有 yt-dlp 库内重试兜底，故应用层少重试。
     YOUTUBE_DOWNLOAD_MAX_ATTEMPTS: int = Field(default=2)
 
+    # YouTube 关键词搜索 / 发现页(/discover)
+    YOUTUBE_SEARCH_CACHE_TTL_SECONDS: int = Field(default=21600)  # 查询→结果缓存 6h
+    YOUTUBE_SEARCH_RESULT_LIMIT: int = Field(default=20)  # ytsearchN 默认条数
+    YOUTUBE_SEARCH_RATE_PER_USER_MIN: int = Field(default=20)  # 登录用户每分钟搜索次数
+    YOUTUBE_SEARCH_RATE_PER_IP_MIN: int = Field(default=10)  # 匿名按可信 IP 每分钟
+    YOUTUBE_TRENDING_WINDOW_DAYS: int = Field(default=7)  # 热门滚动窗口
+    YOUTUBE_TRENDING_MIN_VOLUME: int = Field(default=20)  # 近窗口不同查询数 < 此值则隐藏热门
+    YOUTUBE_TRENDING_TOP_N: int = Field(default=10)  # 热门返回条数
+    YOUTUBE_SEARCH_DENYLIST: list[str] = Field(default_factory=list)  # 静态违规词(归一化后比较)
+
     # Google OAuth for YouTube API
     GOOGLE_CLIENT_ID: str | None = Field(default=None)
     GOOGLE_CLIENT_SECRET: str | None = Field(default=None)
