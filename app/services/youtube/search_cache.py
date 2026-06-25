@@ -48,6 +48,8 @@ async def upsert_results(db: AsyncSession, normalized: str, display: str, hits: 
     """写入/刷新结果与 fetched_at(成功抓取后调用;失败路径不调用 => 不写负缓存)。"""
     payload = [h.model_dump() for h in hits]
     now = datetime.now(UTC)
+    # last_searched_at 故意不在此写:register_query_heat 是唯一写入者,
+    # 避免崩在两次 commit 之间留下「count=0 但已进热门窗口」的孤儿行。
     stmt = (
         pg_insert(YouTubeSearchQuery)
         .values(
@@ -55,7 +57,6 @@ async def upsert_results(db: AsyncSession, normalized: str, display: str, hits: 
             display_query=display,
             results_json=payload,
             fetched_at=now,
-            last_searched_at=now,
         )
         .on_conflict_do_update(
             index_elements=[YouTubeSearchQuery.normalized_query],
