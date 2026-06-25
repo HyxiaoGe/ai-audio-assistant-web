@@ -202,6 +202,10 @@ class Settings(BaseSettings):
     YOUTUBE_OUTPUT_TEMPLATE: str | None = Field(default=None)
     YOUTUBE_DOWNLOAD_FORMAT: str | None = Field(default=None)
 
+    # 摄入媒体单条时长上限（秒）。worker 解析阶段（下载前）拦截超长媒体，省掉下载+ASR 成本。
+    # 同时约束 youtube 与 url 两条手动粘贴路径。<= 0 视为不限制（关闸）。
+    INGEST_MAX_DURATION_SECONDS: int = Field(default=14400)
+
     # —— yt-dlp 抓取韧性 ——（worker 解析/下载 YouTube 用；国内直连 YouTube 抖动大，需重试+超时）
     # 单连接 socket 读/连超时（秒）。yt-dlp 默认不设上限，慢连接会无限期挂住占满 worker。
     YOUTUBE_SOCKET_TIMEOUT: int = Field(default=30)
