@@ -176,6 +176,17 @@ class Settings(BaseSettings):
     IMAGE_SERVICE_API_KEY: str | None = Field(default=None)
     IMAGE_SERVICE_DEFAULT_MODEL: str = Field(default="gemini-3-pro-image-preview")
 
+    # 内容审核服务 CMS(content-moderation-service)。公共边界文本审核:搜索输入 + 公开发布输出。
+    # 内网直连同 box 容器(同 ai-audio-network),不走公网;密钥经 env,绝不硬编码/打印。
+    MODERATION_SERVICE_URL: str = Field(default="http://content-moderation-service:8200")
+    MODERATION_API_KEY: str | None = Field(default=None)
+    # 每场景独立三态灰度:off=不调 CMS 直接放行;shadow=调用+记日志但恒放行(影子观测);
+    # enforce=按云判决拦截(block / 不可用一律 fail-closed)。影子先行、观察误杀率后再 enforce。
+    MODERATION_SEARCH_MODE: Literal["off", "shadow", "enforce"] = Field(default="off")
+    MODERATION_PUBLISH_MODE: Literal["off", "shadow", "enforce"] = Field(default="off")
+    # CMS 单次调用紧超时(秒)。同步内联在搜索/发布路径,必须短;失败即 degraded 交 gate 按 flag 处理。
+    MODERATION_TIMEOUT: float = Field(default=3.0)
+
     OPENAI_API_KEY: str | None = Field(default=None)
     OPENAI_BASE_URL: str | None = Field(default="https://api.openai.com/v1")
 
