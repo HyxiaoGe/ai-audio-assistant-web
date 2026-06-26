@@ -27,6 +27,7 @@ class VideoHit(BaseModel):
     title: str
     channel: str | None = None
     channel_id: str | None = None
+    handle: str | None = None  # @handle(取自 yt-dlp uploader_id),供频道黑名单按 handle 兜底匹配
     thumbnail: str | None = None
     url: str
 
@@ -37,11 +38,13 @@ def _entry_to_hit(entry: dict[str, Any]) -> VideoHit | None:
         return None
     title = entry.get("title")
     channel = entry.get("channel") or entry.get("uploader")
+    uploader_id = entry.get("uploader_id")
     return VideoHit(
         video_id=video_id,
         title=str(title) if title else video_id,
         channel=channel if isinstance(channel, str) else None,
         channel_id=entry.get("channel_id") if isinstance(entry.get("channel_id"), str) else None,
+        handle=uploader_id if isinstance(uploader_id, str) else None,
         # flat 模式缩略图字段不稳定,直接由 video_id 拼 i.ytimg 直链(前端已识别该域,无需代理)
         thumbnail=f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
         url=f"https://www.youtube.com/watch?v={video_id}",
