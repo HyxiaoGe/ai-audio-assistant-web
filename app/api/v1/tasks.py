@@ -22,6 +22,7 @@ from app.schemas.task import (
     TaskVisibilityUpdateRequest,
 )
 from app.services import transcript_search
+from app.services.moderation import gate as moderation_gate
 from app.services.task_service import PROCESSING_STATUSES, TaskService
 
 router = APIRouter(prefix="/tasks")
@@ -86,6 +87,7 @@ async def get_task_status_counts(
 
 @router.get("/search")
 async def search_transcripts(
+    request: Request,
     q: str = Query(..., min_length=1, max_length=200, description="搜索词(中文经 pg_jieba 分词)"),
     limit: int = Query(default=20, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
@@ -96,6 +98,8 @@ async def search_transcripts(
 
     注意:路由须声明在 ``/{task_id}`` 之前,否则会被动态段捕获(同 ``/status-counts``)。
     """
+    # 公共边界:搜索输入过 CMS 自动审核(off 态即时短路)。
+    await moderation_gate.search_query(q.strip(), request_id=getattr(request.state, "trace_id", None))
     hits = await transcript_search.search(db, user.id, q, limit)
     return success(data=jsonable_encoder(TaskSearchResponse(query=q.strip(), hits=hits)))
 

@@ -12,6 +12,7 @@ from app.core.rate_limit import _client_ip, rate_limit_by_ip, rate_limit_user_or
 from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.schemas.youtube_search import SearchData, TrendingData, TrendingItemOut
+from app.services.moderation import gate as moderation_gate
 from app.services.youtube import blocklist_service, search_cache
 from app.services.youtube.search_service import YouTubeSearchService
 
@@ -43,6 +44,9 @@ async def search_youtube(
     bl = await blocklist_service.get_blocklist(db)
     if blocklist_service.is_term_blocked(normalized, bl):
         raise BusinessError(ErrorCode.YOUTUBE_SEARCH_QUERY_BLOCKED)
+
+    # 人工屏蔽词未命中 → CMS 自动审核(公共边界:搜索输入)。off 态此调用即时短路、零开销。
+    await moderation_gate.search_query(normalized, request_id=getattr(request.state, "trace_id", None))
 
     display = q.strip()
     cached = await search_cache.get_cached_results(db, normalized)
