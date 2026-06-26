@@ -73,12 +73,6 @@ def test_normalize_query_trims_collapses_casefolds() -> None:
     assert normalize_query("\tPython\n Tutorial ") == "python tutorial"
 
 
-def test_is_denylisted_compares_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sc.settings, "YOUTUBE_SEARCH_DENYLIST", ["  Bad Word "])
-    assert sc.is_denylisted("bad word") is True
-    assert sc.is_denylisted("good") is False
-
-
 async def test_get_cached_results_fresh_returns_hits() -> None:
     now = datetime.now(UTC)
     row = _Row("q", "q", [_hit("v1").model_dump()], fetched_at=now)

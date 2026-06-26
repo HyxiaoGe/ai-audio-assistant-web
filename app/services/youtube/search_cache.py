@@ -18,14 +18,6 @@ def normalize_query(raw: str) -> str:
     return " ".join(raw.split()).casefold()
 
 
-def _denylist_normalized() -> set[str]:
-    return {normalize_query(w) for w in settings.YOUTUBE_SEARCH_DENYLIST if w and w.strip()}
-
-
-def is_denylisted(normalized: str) -> bool:
-    return normalized in _denylist_normalized()
-
-
 @dataclass
 class TrendingItem:
     query: str
