@@ -15,6 +15,7 @@ class ErrorCode(IntEnum):
     NO_AUDIO_STREAM = 40014
     MEDIA_TOO_LONG = 40015
     YOUTUBE_SEARCH_QUERY_BLOCKED = 40016  # 搜索词命中 denylist
+    PUBLISH_CONTENT_BLOCKED = 40017  # 发布内容含违禁,无法公开
 
     AUTH_TOKEN_NOT_PROVIDED = 40100
     AUTH_TOKEN_INVALID = 40101
@@ -60,6 +61,9 @@ class ErrorCode(IntEnum):
     FILE_UPLOAD_FAILED = 51201
     YOUTUBE_DOWNLOAD_FAILED = 51300
     YOUTUBE_VIDEO_UNAVAILABLE = 51301
+
+    # 内容审核服务 (514xx)
+    MODERATION_SERVICE_UNAVAILABLE = 51400  # 审核服务暂不可用(enforce 态 fail-closed)
 
     # YouTube OAuth errors (519xx)
     YOUTUBE_NOT_CONNECTED = 51900
