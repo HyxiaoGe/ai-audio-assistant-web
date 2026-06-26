@@ -29,6 +29,18 @@ def _load() -> Any:
 dts = _load()
 
 
+def _sweep_globals() -> dict[str, Any]:
+    """run_dead_task_sweep 真正执行体的 __globals__。
+
+    celery_app 按固定名 "worker.tasks.run_dead_task_sweep" 注册任务:全量套件里若真模块
+    worker.tasks.dead_task_sweeper 先于本测试被 import,@celery_app.task 会返回既有(真)task,
+    使 dts.run_dead_task_sweep 绑定到真模块全局——此时 monkeypatch.setattr(dts, ...) 打不到执行体。
+    改打在「真正执行的那个函数的 __globals__」上(同 test_regenerate_summary_lock 的修法),
+    无论是否撞名都命中。settings 是共享单例,setattr(dts.settings, ...) 不受撞名影响,保持原样。
+    """
+    return dts.run_dead_task_sweep.run.__globals__
+
+
 class _FakeScalars:
     def __init__(self, rows: list[Any]) -> None:
         self._rows = rows
@@ -210,11 +222,10 @@ def test_terminal_statuses_contract() -> None:
 
 def test_sweep_disabled_skips_both(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dts.settings, "DEAD_TASK_SWEEP_ENABLED", False)
+    g = _sweep_globals()
     called = {"img": 0, "task": 0}
-    monkeypatch.setattr(
-        dts, "_reconcile_stuck_image_slots", lambda s: called.__setitem__("img", called["img"] + 1) or 0
-    )
-    monkeypatch.setattr(dts, "_fail_stuck_tasks", lambda s: called.__setitem__("task", called["task"] + 1) or 0)
+    monkeypatch.setitem(g, "_reconcile_stuck_image_slots", lambda s: called.__setitem__("img", called["img"] + 1) or 0)
+    monkeypatch.setitem(g, "_fail_stuck_tasks", lambda s: called.__setitem__("task", called["task"] + 1) or 0)
     out = dts.run_dead_task_sweep()
     assert out.get("skipped") == 1
     assert called == {"img": 0, "task": 0}
@@ -222,14 +233,15 @@ def test_sweep_disabled_skips_both(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_sweep_image_failure_does_not_block_task_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dts.settings, "DEAD_TASK_SWEEP_ENABLED", True)
-    monkeypatch.setattr(dts, "get_sync_db_session", lambda: _CtxSession())
+    g = _sweep_globals()
+    monkeypatch.setitem(g, "get_sync_db_session", lambda: _CtxSession())
     ran = {"task": 0}
 
     def _boom(_s: Any) -> int:
         raise RuntimeError("image sweep boom")
 
-    monkeypatch.setattr(dts, "_reconcile_stuck_image_slots", _boom)
-    monkeypatch.setattr(dts, "_fail_stuck_tasks", lambda s: ran.__setitem__("task", 1) or 3)
+    monkeypatch.setitem(g, "_reconcile_stuck_image_slots", _boom)
+    monkeypatch.setitem(g, "_fail_stuck_tasks", lambda s: ran.__setitem__("task", 1) or 3)
     out = dts.run_dead_task_sweep()
     assert ran["task"] == 1  # 图巡检抛错不拖累任务巡检
     assert out["tasks_failed"] == 3
@@ -250,15 +262,16 @@ class _CtxSession(_FakeSession):
 def test_sweep_uses_independent_session_per_helper(monkeypatch: pytest.MonkeyPatch) -> None:
     # M-1:每个 helper 各开独立 session,且 try 在 with 外——任一 helper(或其 commit-on-exit)抛错都不冒泡
     monkeypatch.setattr(dts.settings, "DEAD_TASK_SWEEP_ENABLED", True)
+    g = _sweep_globals()
     opened = {"n": 0}
 
     def _factory() -> _CtxSession:
         opened["n"] += 1
         return _CtxSession()
 
-    monkeypatch.setattr(dts, "get_sync_db_session", _factory)
-    monkeypatch.setattr(dts, "_reconcile_stuck_image_slots", lambda s: 2)
-    monkeypatch.setattr(dts, "_fail_stuck_tasks", lambda s: 5)
+    monkeypatch.setitem(g, "get_sync_db_session", _factory)
+    monkeypatch.setitem(g, "_reconcile_stuck_image_slots", lambda s: 2)
+    monkeypatch.setitem(g, "_fail_stuck_tasks", lambda s: 5)
     out = dts.run_dead_task_sweep()
     assert opened["n"] == 2  # 两个 helper 各开一个 session
     assert out == {"images_reconciled": 2, "tasks_failed": 5}
