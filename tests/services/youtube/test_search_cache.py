@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import app.services.youtube.blocklist_service as bls
 from app.services.youtube import search_cache as sc
 from app.services.youtube.search_cache import TrendingItem, normalize_query
 from app.services.youtube.search_service import VideoHit
@@ -129,6 +130,11 @@ async def test_register_query_heat_commits(monkeypatch: pytest.MonkeyPatch) -> N
 
 async def test_get_trending_below_threshold_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sc.settings, "YOUTUBE_TRENDING_MIN_VOLUME", 20)
+
+    async def _gb(_db):
+        return bls.Blocklist(terms=frozenset(), channel_ids=frozenset(), channel_names=frozenset())
+
+    monkeypatch.setattr(bls, "get_blocklist", _gb)
     rows = [_Row(f"q{i}", f"q{i}", [], None, search_count=i) for i in range(3)]
     assert await sc.get_trending(_FakeSession(_Result(rows=rows))) == []
 
@@ -136,10 +142,14 @@ async def test_get_trending_below_threshold_returns_empty(monkeypatch: pytest.Mo
 async def test_get_trending_sorts_filters_denylist_and_limits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sc.settings, "YOUTUBE_TRENDING_MIN_VOLUME", 2)
     monkeypatch.setattr(sc.settings, "YOUTUBE_TRENDING_TOP_N", 2)
-    monkeypatch.setattr(sc.settings, "YOUTUBE_SEARCH_DENYLIST", ["spam"])
+
+    async def _gb(_db):
+        return bls.Blocklist(terms=frozenset({"spam"}), channel_ids=frozenset(), channel_names=frozenset())
+
+    monkeypatch.setattr(bls, "get_blocklist", _gb)
     rows = [
         _Row("a", "A", [], None, search_count=5),
-        _Row("spam", "Spam", [], None, search_count=99),  # denylist 应被过滤
+        _Row("spam", "Spam", [], None, search_count=99),  # 黑名单词应被过滤
         _Row("b", "B", [], None, search_count=10),
         _Row("c", "C", [], None, search_count=1),
     ]
@@ -149,14 +159,19 @@ async def test_get_trending_sorts_filters_denylist_and_limits(monkeypatch: pytes
 
 
 async def test_get_trending_threshold_uses_post_denylist_count(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Raw rows = 3 distinct queries; 2 are denylisted → eligible = 1 < MIN_VOLUME=2 → expect []
-    # This pins that the threshold is evaluated against len(eligible), not len(rows).
+    # Raw rows = 3 distinct queries; 2 被黑名单 → eligible = 1 < MIN_VOLUME=2 → expect []
     monkeypatch.setattr(sc.settings, "YOUTUBE_TRENDING_MIN_VOLUME", 2)
     monkeypatch.setattr(sc.settings, "YOUTUBE_TRENDING_TOP_N", 10)
-    monkeypatch.setattr(sc.settings, "YOUTUBE_SEARCH_DENYLIST", ["bad one", "bad two"])
+
+    async def _gb(_db):
+        return bls.Blocklist(
+            terms=frozenset({"bad one", "bad two"}), channel_ids=frozenset(), channel_names=frozenset()
+        )
+
+    monkeypatch.setattr(bls, "get_blocklist", _gb)
     rows = [
-        _Row("bad one", "Bad One", [], None, search_count=50),   # denylisted (normalize → "bad one")
-        _Row("bad two", "Bad Two", [], None, search_count=40),   # denylisted (normalize → "bad two")
-        _Row("good", "Good", [], None, search_count=30),          # eligible
+        _Row("bad one", "Bad One", [], None, search_count=50),
+        _Row("bad two", "Bad Two", [], None, search_count=40),
+        _Row("good", "Good", [], None, search_count=30),
     ]
     assert await sc.get_trending(_FakeSession(_Result(rows=rows))) == []

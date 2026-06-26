@@ -94,6 +94,9 @@ async def register_query_heat(db: AsyncSession, normalized: str, searcher_key: s
 
 
 async def get_trending(db: AsyncSession) -> list[TrendingItem]:
+    # 局部 import 打破 search_cache ↔ blocklist_service 潜在环(blocklist_service 顶部 import 本模块)。
+    from app.services.youtube import blocklist_service
+
     window_start = datetime.now(UTC) - timedelta(days=settings.YOUTUBE_TRENDING_WINDOW_DAYS)
     rows = (
         (
@@ -107,8 +110,8 @@ async def get_trending(db: AsyncSession) -> list[TrendingItem]:
         .scalars()
         .all()
     )
-    denylist = _denylist_normalized()
-    eligible = [r for r in rows if r.normalized_query not in denylist]
+    bl = await blocklist_service.get_blocklist(db)
+    eligible = [r for r in rows if r.normalized_query not in bl.terms]
     # 冷启动隐藏:近窗口不同查询数 < 阈值则不展示热门
     if len(eligible) < settings.YOUTUBE_TRENDING_MIN_VOLUME:
         return []

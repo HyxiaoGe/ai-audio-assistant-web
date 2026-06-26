@@ -12,7 +12,7 @@ from app.core.rate_limit import _client_ip, rate_limit_by_ip, rate_limit_user_or
 from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.schemas.youtube_search import SearchData, TrendingData, TrendingItemOut
-from app.services.youtube import search_cache
+from app.services.youtube import blocklist_service, search_cache
 from app.services.youtube.search_service import YouTubeSearchService
 
 router = APIRouter(prefix="/youtube", tags=["youtube-search"])
@@ -39,7 +39,9 @@ async def search_youtube(
     normalized = search_cache.normalize_query(q)
     if not normalized or len(normalized) > 128:
         raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="q")
-    if search_cache.is_denylisted(normalized):
+
+    bl = await blocklist_service.get_blocklist(db)
+    if blocklist_service.is_term_blocked(normalized, bl):
         raise BusinessError(ErrorCode.YOUTUBE_SEARCH_QUERY_BLOCKED)
 
     display = q.strip()
@@ -52,6 +54,9 @@ async def search_youtube(
         hits = await YouTubeSearchService().search(display, limit)
         await search_cache.upsert_results(db, normalized, display, hits)
         was_cached = False
+
+    # 响应前剔除被拉黑频道:缓存存原始结果,过滤只在读时 → 拉黑/解禁即时,旧缓存不泄露。
+    hits = blocklist_service.filter_hits(hits, bl)
 
     searcher_key = viewer.id if viewer is not None else _client_ip(request)
     await search_cache.register_query_heat(db, normalized, searcher_key)
