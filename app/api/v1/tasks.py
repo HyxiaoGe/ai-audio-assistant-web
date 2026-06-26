@@ -117,6 +117,7 @@ async def get_task_detail(
 
 @router.patch("/{task_id}/visibility")
 async def update_task_visibility(
+    request: Request,
     task_id: str,
     data: TaskVisibilityUpdateRequest,
     db: AsyncSession = Depends(get_db),
@@ -128,7 +129,9 @@ async def update_task_visibility(
     透传 token 给 service:公开时用它回源 auth-service 捕获发布者 name/avatar(展示「由谁公开」)。
     """
     token = extract_bearer_token(authorization) if authorization else None
-    result = await TaskService.update_task_visibility(db, user, task_id, data.is_public, token=token)
+    result = await TaskService.update_task_visibility(
+        db, user, task_id, data.is_public, token=token, request_id=getattr(request.state, "trace_id", None)
+    )
     return success(data=jsonable_encoder(result))
 
 

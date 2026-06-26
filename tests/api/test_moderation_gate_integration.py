@@ -122,3 +122,107 @@ async def test_youtube_search_off_allows_and_calls_service(monkeypatch: pytest.M
         body = (await client.get("/api/v1/youtube/search?q=cats")).json()
     assert body["code"] == 0
     assert body["data"]["items"][0]["video_id"] == "v1"
+
+
+# ---------------------------------------------------------------------------
+# publish gate 集成测试
+# ---------------------------------------------------------------------------
+
+from app.api.deps import CurrentUser as _CurrentUser  # noqa: E402
+from app.models.summary import Summary  # noqa: E402
+from app.models.task import Task  # noqa: E402
+from app.services.task_service import TaskService  # noqa: E402
+
+
+class _FakeResult:
+    def __init__(self, obj: Any) -> None:
+        self._obj = obj
+
+    def scalar_one_or_none(self) -> Any:
+        return self._obj
+
+
+class _FakeSession:
+    """够本单测:execute 按目标实体分流(Task/Summary);get 返 None;commit 计数。"""
+
+    def __init__(self, task: Task, summary: Summary | None) -> None:
+        self.task = task
+        self.summary = summary
+        self.committed = 0
+
+    async def execute(self, stmt: Any) -> _FakeResult:
+        entity = stmt.column_descriptions[0]["entity"]
+        if entity is Summary:
+            return _FakeResult(self.summary)
+        return _FakeResult(self.task)
+
+    async def get(self, _model: Any, _pk: Any) -> Any:
+        return None
+
+    def add(self, _obj: Any) -> None:
+        pass
+
+    async def commit(self) -> None:
+        self.committed += 1
+
+
+_PUB_USER = _CurrentUser(id="11111111-1111-1111-1111-111111111111", email="a@ex.com", scopes=["admin"])
+
+
+def _completed_task() -> Task:
+    t = Task(
+        id="22222222-2222-2222-2222-222222222222",
+        user_id="11111111-1111-1111-1111-111111111111",
+        title="标题",
+        source_type="upload",
+        source_key="upload/x.mp3",
+        status="completed",
+        progress=100,
+        options={},
+    )
+    t.is_public = False
+    t.published_at = None
+    t.deleted_at = None
+    return t
+
+
+@pytest.mark.asyncio
+async def test_publish_enforce_block_keeps_task_private(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gate.config, "publish_mode", lambda: "enforce")
+
+    async def _cms_block(text: str, scene: str, request_id: str | None) -> ModerationResult:
+        assert scene == "ugc_publish"
+        assert "标题" in text  # 审的是标题 + overview 摘要
+        return ModerationResult(action="block")
+
+    monkeypatch.setattr(gate, "_moderate", _cms_block)
+
+    task = _completed_task()
+    summary = Summary(task_id=str(task.id), summary_type="overview", content="overview 摘要正文", is_active=True)
+    session = _FakeSession(task=task, summary=summary)
+
+    with pytest.raises(BusinessError) as ei:
+        await TaskService.update_task_visibility(session, _PUB_USER, str(task.id), is_public=True)
+    assert ei.value.code == ErrorCode.PUBLISH_CONTENT_BLOCKED
+
+    # 关键:被拦后任务仍私有,且没 commit
+    assert task.is_public is False
+    assert task.published_at is None
+    assert session.committed == 0
+
+
+@pytest.mark.asyncio
+async def test_publish_off_makes_public(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gate.config, "publish_mode", lambda: "off")  # off:跳过、不调 CMS、不查摘要
+
+    def _boom(*_a: Any, **_k: Any) -> ModerationResult:
+        raise AssertionError("off 态不该调 CMS")
+
+    monkeypatch.setattr(gate, "_moderate", _boom)
+
+    task = _completed_task()
+    session = _FakeSession(task=task, summary=None)
+
+    result = await TaskService.update_task_visibility(session, _PUB_USER, str(task.id), is_public=True)
+    assert result.is_public is True
+    assert task.is_public is True

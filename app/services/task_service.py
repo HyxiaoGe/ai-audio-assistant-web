@@ -29,6 +29,8 @@ from app.schemas.public import PublicOwner, PublicTaskDetailResponse, PublicTask
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem, TaskVisibilityResponse
 from app.services.asr_quota_service import check_any_provider_available
 from app.services.media_url import build_media_download_url, build_presigned_media_url
+from app.services.moderation import config as moderation_config
+from app.services.moderation import gate as moderation_gate
 from app.services.summary.excerpt import summary_excerpt
 from app.services.summary.public_image import first_ready_image_url, public_summary_image_url
 from app.services.user_preferences import fetch_auth_identity
@@ -614,7 +616,12 @@ class TaskService:
 
     @staticmethod
     async def update_task_visibility(
-        db: AsyncSession, user: CurrentUser, task_id: str, is_public: bool, token: str | None = None
+        db: AsyncSession,
+        user: CurrentUser,
+        task_id: str,
+        is_public: bool,
+        token: str | None = None,
+        request_id: str | None = None,
     ) -> TaskVisibilityResponse:
         """管理员把「自己的」任务设为公开/取消公开。
 
@@ -640,6 +647,15 @@ class TaskService:
         if is_public:
             if task.status != "completed":
                 raise BusinessError(ErrorCode.INVALID_PARAMETER)
+            # 公共边界:发布到公开广场前过 CMS 审核(标题 + overview 摘要,截至 10000 字)。
+            # off 态(默认)直接跳过:不查摘要、不调 CMS——避免默认路径多一次 DB 查询。
+            # gate 仍是 block/degraded 的唯一决策点;enforce+block/degraded 抛 BusinessError →
+            # 下方置公开不执行,任务保持私有。
+            if moderation_config.publish_mode() != "off":
+                await moderation_gate.publish(
+                    await TaskService._public_face_text(db, task),
+                    request_id=request_id,
+                )
             if not task.is_public:
                 task.is_public = True
                 task.published_at = datetime.now(UTC)
@@ -649,6 +665,24 @@ class TaskService:
             task.published_at = None
         await db.commit()
         return TaskVisibilityResponse(id=str(task.id), is_public=task.is_public, published_at=task.published_at)
+
+    @staticmethod
+    async def _public_face_text(db: AsyncSession, task: Task) -> str:
+        """拼公开面待审文本 = 标题 + active overview 摘要正文,截到 10000 字(CMS 上限)。
+
+        摘要可能尚未生成(发布早于出摘要):此时只审标题;标题也空则返回空串(gate 视为无可审、放行)。
+        """
+        overview = (
+            await db.execute(
+                select(Summary).where(
+                    Summary.task_id == str(task.id),
+                    Summary.is_active.is_(True),
+                    Summary.summary_type == "overview",
+                )
+            )
+        ).scalar_one_or_none()
+        parts = [task.title or "", overview.content if overview is not None else ""]
+        return "\n".join(p for p in parts if p).strip()[:10000]
 
     @staticmethod
     async def _capture_publisher_identity(db: AsyncSession, user_id: str, token: str | None) -> None:
