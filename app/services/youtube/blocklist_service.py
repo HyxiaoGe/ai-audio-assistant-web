@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.exceptions import BusinessError
+from app.i18n.codes import ErrorCode
 from app.models.youtube_blocklist import YouTubeBlocklistEntry
 from app.services.youtube.search_cache import normalize_query
 from app.services.youtube.search_service import VideoHit
@@ -105,3 +107,92 @@ def classify_channel_input(raw: str) -> tuple[str, str]:
     if _CHANNEL_ID_RE.match(s):
         return ("channel_id", s)
     return ("channel_name", normalize_query(s))
+
+
+async def list_entries(db: AsyncSession) -> list[YouTubeBlocklistEntry]:
+    rows = (
+        (
+            await db.execute(
+                select(YouTubeBlocklistEntry)
+                .where(YouTubeBlocklistEntry.deleted_at.is_(None))
+                .order_by(YouTubeBlocklistEntry.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
+
+
+async def add_entry(
+    db: AsyncSession,
+    *,
+    kind: str,
+    value: str,
+    note: str | None,
+    created_by: str | None,
+) -> YouTubeBlocklistEntry:
+    """加黑名单条目:服务端归一化 + 频道判型 + 幂等/复活去重。
+
+    - 同键活跃行已存在 → 幂等返回(不写库)。
+    - 同键软删行存在 → 复活(清 deleted_at,刷新 raw_value/note/created_by)。
+    - 无 → 插入。
+    """
+    raw = value.strip()
+    if not raw:
+        raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="value")
+
+    if kind == "term":
+        match_field, normalized_value = "query", normalize_query(raw)
+        if not normalized_value:
+            raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="value")
+    else:  # "channel"
+        match_field, normalized_value = classify_channel_input(raw)
+
+    existing = (
+        await db.execute(
+            select(YouTubeBlocklistEntry).where(
+                YouTubeBlocklistEntry.kind == kind,
+                YouTubeBlocklistEntry.match_field == match_field,
+                YouTubeBlocklistEntry.normalized_value == normalized_value,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if existing is not None:
+        if existing.deleted_at is None:
+            return existing  # 已活跃 → 幂等
+        existing.deleted_at = None
+        existing.raw_value = raw
+        existing.note = note
+        existing.created_by = created_by
+        await db.commit()
+        return existing
+
+    entry = YouTubeBlocklistEntry(
+        kind=kind,
+        match_field=match_field,
+        raw_value=raw,
+        normalized_value=normalized_value,
+        note=note,
+        created_by=created_by,
+    )
+    db.add(entry)
+    await db.commit()
+    return entry
+
+
+async def delete_entry(db: AsyncSession, entry_id: str) -> bool:
+    entry = (
+        await db.execute(
+            select(YouTubeBlocklistEntry).where(
+                YouTubeBlocklistEntry.id == entry_id,
+                YouTubeBlocklistEntry.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if entry is None:
+        return False
+    entry.deleted_at = datetime.now(UTC)
+    await db.commit()
+    return True
