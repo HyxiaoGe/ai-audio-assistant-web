@@ -10,12 +10,18 @@ from app.services.youtube.blocklist_service import Blocklist
 from app.services.youtube.search_service import VideoHit
 
 
-def _hit(vid: str, channel: str | None = None, channel_id: str | None = None) -> VideoHit:
+def _hit(
+    vid: str,
+    channel: str | None = None,
+    channel_id: str | None = None,
+    handle: str | None = None,
+) -> VideoHit:
     return VideoHit(
         video_id=vid,
         title=f"T {vid}",
         channel=channel,
         channel_id=channel_id,
+        handle=handle,
         thumbnail=f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
         url=f"https://www.youtube.com/watch?v={vid}",
     )
@@ -65,6 +71,19 @@ def test_is_channel_blocked_by_normalized_name() -> None:
     assert bls.is_channel_blocked(_hit("v2", channel="Other"), bl) is False
 
 
+def test_is_channel_blocked_by_handle() -> None:
+    # 结果 uploader_id 形如 "@globalnewstw";黑名单存归一化 handle "globalnewstw"
+    bl = Blocklist(
+        terms=frozenset(),
+        channel_ids=frozenset(),
+        channel_names=frozenset(),
+        channel_handles=frozenset({"globalnewstw"}),
+    )
+    assert bls.is_channel_blocked(_hit("v1", handle="@globalnewstw"), bl) is True
+    assert bls.is_channel_blocked(_hit("v2", handle="@OtherChannel"), bl) is False
+    assert bls.is_channel_blocked(_hit("v3", handle=None), bl) is False
+
+
 def test_filter_hits_drops_blocked_channels() -> None:
     bl = Blocklist(terms=frozenset(), channel_ids=frozenset({"UCbad"}), channel_names=frozenset())
     hits = [_hit("v1", channel_id="UCbad"), _hit("v2", channel_id="UCok")]
@@ -89,9 +108,45 @@ def test_classify_channel_input_display_name_normalized() -> None:
     assert bls.classify_channel_input("  Lex  Fridman ") == ("channel_name", "lex fridman")
 
 
-def test_classify_channel_input_handle_treated_as_name() -> None:
-    # v1 不把 @handle 映射成 channel_id —— 当作名字归一化
-    assert bls.classify_channel_input("@LexFridman") == ("channel_name", "@lexfridman")
+def test_classify_channel_input_bare_handle() -> None:
+    # @handle → channel_handle(去 @、casefold)
+    assert bls.classify_channel_input("@LexFridman") == ("channel_handle", "lexfridman")
+
+
+def test_classify_channel_input_handle_url() -> None:
+    assert bls.classify_channel_input("https://www.youtube.com/@globalnewstw") == (
+        "channel_handle",
+        "globalnewstw",
+    )
+
+
+def test_classify_channel_input_handle_url_percent_encoded() -> None:
+    # 浏览器对非 ASCII handle 百分号编码:%E5%A4%B8%E5%85%8B%E8%AF%B4 == 夸克说
+    assert bls.classify_channel_input("https://www.youtube.com/@%E5%A4%B8%E5%85%8B%E8%AF%B4") == (
+        "channel_handle",
+        "夸克说",
+    )
+
+
+def test_classify_channel_input_mobile_subdomain_handle() -> None:
+    assert bls.classify_channel_input("https://m.youtube.com/@globalnewstw") == ("channel_handle", "globalnewstw")
+
+
+def test_classify_channel_input_fake_youtube_host_not_handle() -> None:
+    # 主机边界:notyoutube.com / xyoutube.com 不是 youtube 主机 → 不判 handle,落回按名匹配
+    assert bls.classify_channel_input("https://notyoutube.com/@foo")[0] == "channel_name"
+    assert bls.classify_channel_input("https://xyoutube.com/@foo")[0] == "channel_name"
+
+
+def test_classify_channel_input_junk_handle_falls_back_to_name() -> None:
+    # 解码后混入 / @ 等非法字符 → 不当 handle(不存垃圾、不喂畸形路径给 yt-dlp)
+    field, _ = bls.classify_channel_input("https://www.youtube.com/@foo%2F..%2F@evil.com")
+    assert field == "channel_name"
+
+
+def test_normalize_handle_strips_before_stripping_at() -> None:
+    assert bls.normalize_handle(" @GlobalNewsTW ") == "globalnewstw"
+    assert bls.normalize_handle("@夸克说") == "夸克说"
 
 
 # ---- 加载 + 缓存 ----
@@ -100,11 +155,17 @@ def test_classify_channel_input_handle_treated_as_name() -> None:
 async def test_get_blocklist_partitions_rows_and_unions_env(monkeypatch: pytest.MonkeyPatch) -> None:
     bls.invalidate_cache()
     monkeypatch.setattr(bls.settings, "YOUTUBE_SEARCH_DENYLIST", ["  Env Bad "])
-    rows = [("query", "db term"), ("channel_id", "UC123"), ("channel_name", "lex fridman")]
+    rows = [
+        ("query", "db term"),
+        ("channel_id", "UC123"),
+        ("channel_name", "lex fridman"),
+        ("channel_handle", "globalnewstw"),
+    ]
     bl = await bls.get_blocklist(_FakeSession(rows))
     assert bl.terms == frozenset({"env bad", "db term"})  # env(归一化) ∪ DB
     assert bl.channel_ids == frozenset({"UC123"})
     assert bl.channel_names == frozenset({"lex fridman"})
+    assert bl.channel_handles == frozenset({"globalnewstw"})
 
 
 async def test_get_blocklist_caches_within_ttl_and_invalidates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,6 +229,34 @@ async def test_add_entry_classifies_channel_id() -> None:
     entry = await bls.add_entry(db, kind="channel", value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None)
     assert entry.match_field == "channel_id"
     assert entry.normalized_value == "UCXuqSBlHAE6Xw-yeJA0Tunw"
+
+
+async def test_add_entry_resolves_handle_url_to_channel_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_resolve(_raw: str) -> str:
+        return "UCp2f7tGJGN6R9Muxipem8Nw"
+
+    monkeypatch.setattr(bls, "resolve_channel_id", _fake_resolve)
+    db = _CrudSession(found=None)
+    entry = await bls.add_entry(
+        db, kind="channel", value="https://www.youtube.com/@globalnewstw", note=None, created_by=None
+    )
+    assert entry.match_field == "channel_id"
+    assert entry.normalized_value == "UCp2f7tGJGN6R9Muxipem8Nw"
+    assert entry.raw_value == "https://www.youtube.com/@globalnewstw"  # 原样保留管理员所填
+
+
+async def test_add_entry_handle_falls_back_when_resolution_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fail_resolve(_raw: str) -> None:
+        return None
+
+    monkeypatch.setattr(bls, "resolve_channel_id", _fail_resolve)
+    db = _CrudSession(found=None)
+    entry = await bls.add_entry(
+        db, kind="channel", value="https://www.youtube.com/@globalnewstw", note=None, created_by=None
+    )
+    # 解析失败 → 落库为 handle,匹配回落到结果 uploader_id
+    assert entry.match_field == "channel_handle"
+    assert entry.normalized_value == "globalnewstw"
 
 
 async def test_add_entry_blank_value_raises() -> None:

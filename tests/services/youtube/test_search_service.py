@@ -21,7 +21,13 @@ class _FakeYDL:
         assert download is False
         return {
             "entries": [
-                {"id": "abc123", "title": "Py 1", "channel": "Chan A", "channel_id": "ucx"},
+                {
+                    "id": "abc123",
+                    "title": "Py 1",
+                    "channel": "Chan A",
+                    "channel_id": "ucx",
+                    "uploader_id": "@chanA",
+                },
                 {"id": "def456", "title": "Py 2", "uploader": "Chan B"},
                 {"title": "no id -> skipped"},
                 None,
@@ -51,7 +57,9 @@ async def test_search_maps_entries_to_hits(monkeypatch: pytest.MonkeyPatch) -> N
     assert hits[0].thumbnail == "https://i.ytimg.com/vi/abc123/hqdefault.jpg"
     assert hits[0].channel == "Chan A"
     assert hits[0].channel_id == "ucx"
+    assert hits[0].handle == "@chanA"  # 取自 uploader_id,供频道黑名单按 handle 兜底
     assert hits[1].channel == "Chan B"
+    assert hits[1].handle is None  # 无 uploader_id → None
 
 
 async def test_search_raises_unavailable_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
