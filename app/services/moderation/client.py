@@ -114,6 +114,10 @@ class ModerationClient:
         except (CircuitBreakerOpenError, httpx.HTTPError) as exc:
             logger.warning("moderation: degraded scene=%s err=%s", scene, type(exc).__name__)
             result = _DEGRADED
+        except Exception as exc:  # noqa: BLE001
+            # 守住"永不抛"契约:任何意外(JSONDecodeError / 非 dict 信封 AttributeError / 其它)也归 degraded。
+            logger.warning("moderation: degraded(unexpected) scene=%s err=%s", scene, type(exc).__name__)
+            result = _DEGRADED
         latency_ms = int((time.monotonic() - start) * 1000)
         return ModerationResult(
             action=result.action,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -54,8 +56,9 @@ async def test_pass_parsed_and_headers_sent(monkeypatch: pytest.MonkeyPatch) -> 
     assert captured[0].headers["X-Request-Id"] == "req-9"
     assert captured[0].url.path == "/v1/moderate"
     body = captured[0].read().decode()
-    assert '"scene":"search_query"' in body
-    assert '"text":"hello"' in body
+    parsed = json.loads(body)
+    assert parsed["scene"] == "search_query"
+    assert parsed["text"] == "hello"
 
 
 @pytest.mark.asyncio
@@ -106,5 +109,21 @@ async def test_circuit_open_maps_to_degraded(monkeypatch: pytest.MonkeyPatch) ->
         raise CircuitBreakerOpenError("open")
 
     monkeypatch.setattr(ModerationClient, "_guarded_moderate", _raise_open)
+    result = await ModerationClient().moderate("x", scene="search_query", request_id=None)
+    assert result.action == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_non_json_body_maps_to_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    # CMS 返回 200 但 body 是 HTML(非 JSON) → resp.json() 抛 JSONDecodeError → 兜底 except → degraded
+    _patch_transport(monkeypatch, lambda req: httpx.Response(200, content=b"<html>down</html>"))
+    result = await ModerationClient().moderate("x", scene="search_query", request_id=None)
+    assert result.action == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_non_dict_json_body_maps_to_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    # CMS 返回 200 但 JSON 是非 dict(null) → envelope.get() 抛 AttributeError → 兜底 except → degraded
+    _patch_transport(monkeypatch, lambda req: httpx.Response(200, json=None))
     result = await ModerationClient().moderate("x", scene="search_query", request_id=None)
     assert result.action == "degraded"
