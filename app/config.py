@@ -226,6 +226,7 @@ class Settings(BaseSettings):
     YOUTUBE_TRENDING_MIN_VOLUME: int = Field(default=20)  # 近窗口不同查询数 < 此值则隐藏热门
     YOUTUBE_TRENDING_TOP_N: int = Field(default=10)  # 热门返回条数
     YOUTUBE_SEARCH_DENYLIST: list[str] = Field(default_factory=list)  # 静态违规词(归一化后比较)
+    BLOCKLIST_CACHE_TTL_SECONDS: int = Field(default=30)  # /discover 黑名单进程内缓存 TTL(秒)
 
     # Google OAuth for YouTube API
     GOOGLE_CLIENT_ID: str | None = Field(default=None)

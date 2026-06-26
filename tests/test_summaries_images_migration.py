@@ -48,6 +48,6 @@ def test_single_alembic_head_is_new_revision() -> None:
     )
     assert out.returncode == 0, out.stderr
     heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
-    # 必须恰好单 head（否则说明迁移链分叉）。head 随新迁移前移至 YouTube 搜索缓存表 ab7156a5abd5。
+    # 必须恰好单 head（否则说明迁移链分叉）。head 随新迁移前移至 /discover 黑名单表 d7b9f3a1c5e2。
     assert len(heads) == 1, f"alembic 出现多 head：{out.stdout}"
-    assert "ab7156a5abd5" in heads[0]
+    assert "d7b9f3a1c5e2" in heads[0]
