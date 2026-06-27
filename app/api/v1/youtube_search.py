@@ -66,7 +66,9 @@ async def search_youtube(
         # 旁路:把被 block 的频道累积进复核队列(best-effort,record_flags 内部吞异常,不影响搜索)
         await channel_flag_service.record_flags(outcome.blocked)
         hits = outcome.kept
-        await search_cache.upsert_results(db, normalized, display, hits)
+        # 结果含被 CMS block 项 → 该查询多半政治/赌博主题 → sticky 标 is_blocked 排除出 trending
+        sensitive = len(outcome.blocked) > 0
+        await search_cache.upsert_results(db, normalized, display, hits, sensitive=sensitive)
         was_cached = False
 
     # 响应前剔除被拉黑频道:覆盖 cache-hit 路径(缓存存原始结果,拉黑读时即时);miss 路径上方已剔,此处幂等。

@@ -36,23 +36,34 @@ async def get_cached_results(db: AsyncSession, normalized: str) -> list[VideoHit
     return [VideoHit.model_validate(item) for item in (row.results_json or [])]
 
 
-async def upsert_results(db: AsyncSession, normalized: str, display: str, hits: list[VideoHit]) -> None:
-    """写入/刷新结果与 fetched_at(成功抓取后调用;失败路径不调用 => 不写负缓存)。"""
+async def upsert_results(
+    db: AsyncSession, normalized: str, display: str, hits: list[VideoHit], *, sensitive: bool = False
+) -> None:
+    """写入/刷新结果与 fetched_at(成功抓取后调用;失败路径不调用 => 不写负缓存)。
+
+    sensitive=True(本批结果含被 CMS block 项)→ sticky 置 is_blocked=true,排除出 trending;
+    sensitive=False 不碰 is_blocked(只升不降,新行靠列 server_default false)。
+    """
     payload = [h.model_dump() for h in hits]
     now = datetime.now(UTC)
     # last_searched_at 故意不在此写:register_query_heat 是唯一写入者,
     # 避免崩在两次 commit 之间留下「count=0 但已进热门窗口」的孤儿行。
+    values = {
+        "normalized_query": normalized,
+        "display_query": display,
+        "results_json": payload,
+        "fetched_at": now,
+    }
+    update_set = {"display_query": display, "results_json": payload, "fetched_at": now}
+    if sensitive:
+        values["is_blocked"] = True
+        update_set["is_blocked"] = True
     stmt = (
         pg_insert(YouTubeSearchQuery)
-        .values(
-            normalized_query=normalized,
-            display_query=display,
-            results_json=payload,
-            fetched_at=now,
-        )
+        .values(**values)
         .on_conflict_do_update(
             index_elements=[YouTubeSearchQuery.normalized_query],
-            set_={"display_query": display, "results_json": payload, "fetched_at": now},
+            set_=update_set,
         )
     )
     await db.execute(stmt)

@@ -113,7 +113,9 @@ async def test_cache_miss_calls_service_and_upserts(monkeypatch: pytest.MonkeyPa
     async def _search(_self: Any, query: str, limit: int) -> list[VideoHit]:
         return [_hit("v2")]
 
-    async def _upsert(_db: Any, normalized: str, display: str, hits: list[VideoHit]) -> None:
+    async def _upsert(
+        _db: Any, normalized: str, display: str, hits: list[VideoHit], *, sensitive: bool = False
+    ) -> None:
         upserts.append((normalized, display, len(hits)))
 
     monkeypatch.setattr(search_cache, "get_cached_results", _miss)
@@ -157,7 +159,7 @@ async def test_blocked_channel_filtered_from_live(monkeypatch: pytest.MonkeyPatc
     async def _search(_self: Any, query: str, limit: int) -> list[VideoHit]:
         return [_hit("v3", channel_id="UCbad"), _hit("v4", channel_id="UCgood")]
 
-    async def _upsert(_db: Any, _n: str, _d: str, _h: list[VideoHit]) -> None:
+    async def _upsert(_db: Any, _n: str, _d: str, _h: list[VideoHit], *, sensitive: bool = False) -> None:
         return None
 
     async def _bl(_db: Any) -> blocklist_service.Blocklist:
@@ -204,7 +206,7 @@ async def test_blocklisted_channel_skips_moderation_on_miss(monkeypatch: pytest.
     async def _record(blocked: list[VideoHit]) -> None:
         recorded.append([h.video_id for h in blocked])
 
-    async def _upsert(_db: Any, _n: str, _d: str, hits: list[VideoHit]) -> None:
+    async def _upsert(_db: Any, _n: str, _d: str, hits: list[VideoHit], *, sensitive: bool = False) -> None:
         upserts.append([h.video_id for h in hits])
 
     monkeypatch.setattr(search_cache, "get_cached_results", _miss)
@@ -235,7 +237,7 @@ async def test_display_moderation_filters_before_upsert(monkeypatch: pytest.Monk
     async def _search(_self: Any, query: str, limit: int) -> list[VideoHit]:
         return [_hit("v1"), _hit("v2")]
 
-    async def _upsert(_db: Any, _n: str, _d: str, hits: list[VideoHit]) -> None:
+    async def _upsert(_db: Any, _n: str, _d: str, hits: list[VideoHit], *, sensitive: bool = False) -> None:
         upserts.append([h.video_id for h in hits])
 
     async def _filter(hits: list[VideoHit], *, request_id: Any) -> moderation_gate.DisplayModerationOutcome:
@@ -309,7 +311,9 @@ async def test_miss_records_blocked_and_upserts_kept(monkeypatch: pytest.MonkeyP
     async def _fd(hits: list[VideoHit], *, request_id: Any) -> moderation_gate.DisplayModerationOutcome:
         return moderation_gate.DisplayModerationOutcome(kept=hits[:1], blocked=hits[1:])
 
-    async def _upsert(_db: Any, normalized: str, display: str, hits: list[VideoHit]) -> None:
+    async def _upsert(
+        _db: Any, normalized: str, display: str, hits: list[VideoHit], *, sensitive: bool = False
+    ) -> None:
         upserts.append(len(hits))
 
     async def _record(blocked: list[VideoHit]) -> None:
@@ -326,6 +330,72 @@ async def test_miss_records_blocked_and_upserts_kept(monkeypatch: pytest.MonkeyP
     assert [i["video_id"] for i in body["data"]["items"]] == ["a"]  # 只返回 kept
     assert upserts == [1]  # 只缓存 kept(干净子集)
     assert recorded == [["b"]]  # blocked 交给 record_flags
+
+
+async def test_blocked_results_mark_query_sensitive(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    captured: dict[str, object] = {}
+
+    async def _miss(_db: Any, _n: str) -> None:
+        return None
+
+    async def _search(_self: Any, query: str, limit: int) -> list[VideoHit]:
+        return [_hit("vok", channel_id="UCok"), _hit("vbad", channel_id="UCbad")]
+
+    async def _filter(hits: list[VideoHit], *, request_id: Any) -> moderation_gate.DisplayModerationOutcome:
+        # 一条被 block(shadow:kept 仍含全部,blocked 另列)
+        blocked = [h for h in hits if h.channel_id == "UCbad"]
+        return moderation_gate.DisplayModerationOutcome(kept=list(hits), blocked=blocked)
+
+    async def _record(blocked: list[VideoHit]) -> None:
+        pass
+
+    async def _upsert(_db: Any, _n: str, _d: str, hits: list[VideoHit], *, sensitive: bool = False) -> None:
+        captured["sensitive"] = sensitive
+
+    monkeypatch.setattr(search_cache, "get_cached_results", _miss)
+    monkeypatch.setattr(YouTubeSearchService, "search", _search)
+    monkeypatch.setattr(youtube_search.moderation_gate, "filter_display", _filter)
+    monkeypatch.setattr(channel_flag_service, "record_flags", _record)
+    monkeypatch.setattr(search_cache, "upsert_results", _upsert)
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search?q=foo")).json()
+    assert body["code"] == 0
+    assert captured["sensitive"] is True
+
+
+async def test_clean_results_not_sensitive(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    captured: dict[str, object] = {}
+
+    async def _miss(_db: Any, _n: str) -> None:
+        return None
+
+    async def _search(_self: Any, query: str, limit: int) -> list[VideoHit]:
+        return [_hit("vok", channel_id="UCok")]
+
+    async def _filter(hits: list[VideoHit], *, request_id: Any) -> moderation_gate.DisplayModerationOutcome:
+        return moderation_gate.DisplayModerationOutcome(kept=list(hits), blocked=[])
+
+    async def _record(blocked: list[VideoHit]) -> None:
+        pass
+
+    async def _upsert(_db: Any, _n: str, _d: str, hits: list[VideoHit], *, sensitive: bool = False) -> None:
+        captured["sensitive"] = sensitive
+
+    monkeypatch.setattr(search_cache, "get_cached_results", _miss)
+    monkeypatch.setattr(YouTubeSearchService, "search", _search)
+    monkeypatch.setattr(youtube_search.moderation_gate, "filter_display", _filter)
+    monkeypatch.setattr(channel_flag_service, "record_flags", _record)
+    monkeypatch.setattr(search_cache, "upsert_results", _upsert)
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search?q=bar")).json()
+    assert body["code"] == 0
+    assert captured["sensitive"] is False
 
 
 @pytest.mark.asyncio
