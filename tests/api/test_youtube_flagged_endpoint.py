@@ -77,7 +77,12 @@ async def test_resolve_calls_service(monkeypatch: pytest.MonkeyPatch) -> None:
 
     async def _resolve(_db: Any, *, flag_id: str, action: str, admin_id: str, note: Any = None) -> Any:
         captured.update(flag_id=flag_id, action=action, admin_id=admin_id)
-        return SimpleNamespace(id=flag_id, status="blocked")
+        return SimpleNamespace(
+            id=flag_id, match_field="channel_id", match_value="UCx", channel_id="UCx",
+            channel_handle=None, channel_name="Evil", block_count=3,
+            last_video_id="v9", last_title="bad", status="blocked",
+            created_at=None, last_flagged_at=None,
+        )
 
     monkeypatch.setattr(channel_flag_service, "resolve", _resolve)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:

@@ -52,4 +52,4 @@ async def resolve_flagged_channel(
     flag = await channel_flag_service.resolve(
         db, flag_id=flag_id, action=body.action, admin_id=admin.id, note=body.note
     )
-    return success(data={"id": flag.id, "status": flag.status})
+    return success(data=jsonable_encoder(_to_out(flag)))
