@@ -88,6 +88,7 @@ def _pending_flag():
         channel_name="Evil",
         resolved_by=None,
         resolved_at=None,
+        last_title="敏感样本标题",
     )
 
 
@@ -159,3 +160,33 @@ def test_resolve_block_add_entry_failure_rolls_back(monkeypatch) -> None:
         asyncio.run(cfs.resolve(db, flag_id="f1", action="block", admin_id="a"))
     assert flag.status == "pending"  # 未改
     assert db.rolled_back and not db.committed
+
+
+def test_conflict_last_title_is_status_guarded_case() -> None:
+    from sqlalchemy.dialects import postgresql
+
+    expr = cfs._conflict_last_title("新标题")
+    sql = str(expr.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    # 仅当行 status='pending' 才更新为新标题,否则保留既有值(即保住 resolve 置的 NULL)
+    assert "CASE" in sql.upper()
+    assert "pending" in sql
+    assert "last_title" in sql.lower()
+
+
+def test_resolve_block_clears_last_title(monkeypatch) -> None:
+    async def _add(db, *, kind, value, note, created_by):
+        pass
+
+    monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
+    monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
+    flag = _pending_flag()
+    out = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="block", admin_id="a"))
+    assert out.last_title is None
+
+
+def test_resolve_dismiss_clears_last_title(monkeypatch) -> None:
+    monkeypatch.setattr(cfs.blocklist_service, "add_entry", lambda *a, **k: None)
+    monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
+    flag = _pending_flag()
+    out = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="dismiss", admin_id="a"))
+    assert out.last_title is None
