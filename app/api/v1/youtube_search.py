@@ -56,6 +56,9 @@ async def search_youtube(
     else:
         # 失败抛 YOUTUBE_SEARCH_UNAVAILABLE,经全局 handler 转 200,不写负缓存
         hits = await YouTubeSearchService().search(display, limit)
+        # 展示态审核:剔除 block 项后再 upsert → 缓存只存干净子集;
+        # enforce+degraded 在此抛 51400 → 不到 upsert、不缓存(fail-closed)。off 态即时短路。
+        hits = await moderation_gate.filter_display(hits, request_id=getattr(request.state, "trace_id", None))
         await search_cache.upsert_results(db, normalized, display, hits)
         was_cached = False
 

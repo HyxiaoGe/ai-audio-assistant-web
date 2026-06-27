@@ -186,6 +186,10 @@ class Settings(BaseSettings):
     MODERATION_PUBLISH_MODE: Literal["off", "shadow", "enforce"] = Field(default="off")
     # CMS 单次调用紧超时(秒)。同步内联在搜索/发布路径,必须短;失败即 degraded 交 gate 按 flag 处理。
     MODERATION_TIMEOUT: float = Field(default=3.0)
+    # 展示态(搜索结果 title+频道名)三态灰度,默认 off。与 search/publish 同语义。
+    MODERATION_DISPLAY_MODE: Literal["off", "shadow", "enforce"] = Field(default="off")
+    # 展示态逐项审的并发上限(asyncio.Semaphore)。内联在搜索 miss 路径:过高压垮 CMS,过低拖慢首屏。
+    MODERATION_DISPLAY_CONCURRENCY: int = Field(default=8)
 
     OPENAI_API_KEY: str | None = Field(default=None)
     OPENAI_BASE_URL: str | None = Field(default="https://api.openai.com/v1")

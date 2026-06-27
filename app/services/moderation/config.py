@@ -18,3 +18,8 @@ def search_mode() -> str:
 def publish_mode() -> str:
     """ugc_publish 场景三态:off | shadow | enforce。"""
     return settings.MODERATION_PUBLISH_MODE
+
+
+def display_mode() -> str:
+    """ugc_display 场景三态:off | shadow | enforce。"""
+    return settings.MODERATION_DISPLAY_MODE
