@@ -56,6 +56,9 @@ async def search_youtube(
     else:
         # 失败抛 YOUTUBE_SEARCH_UNAVAILABLE,经全局 handler 转 200,不写负缓存
         hits = await YouTubeSearchService().search(display, limit)
+        # 先剔除已拉黑频道,再送审:被拉黑的频道彻底不进 CMS/TMS(也不再被重复标记)。
+        # 代价:缓存存的是「已剔黑名单」子集 → 解禁需待该 query 缓存过期(≤6h)才复现;拉黑仍读时瞬时。
+        hits = blocklist_service.filter_hits(hits, bl)
         # 展示态审核:剔除 block 项后再 upsert → 缓存只存干净子集;
         # enforce+degraded 在此抛 51400 → 不到 upsert、不缓存(fail-closed)。off 态即时短路。
         request_id = getattr(request.state, "trace_id", None)
@@ -66,7 +69,7 @@ async def search_youtube(
         await search_cache.upsert_results(db, normalized, display, hits)
         was_cached = False
 
-    # 响应前剔除被拉黑频道:缓存存原始结果,过滤只在读时 → 拉黑/解禁即时,旧缓存不泄露。
+    # 响应前剔除被拉黑频道:覆盖 cache-hit 路径(缓存存原始结果,拉黑读时即时);miss 路径上方已剔,此处幂等。
     hits = blocklist_service.filter_hits(hits, bl)
 
     searcher_key = viewer.id if viewer is not None else _client_ip(request)
