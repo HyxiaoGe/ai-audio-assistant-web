@@ -48,15 +48,19 @@ async def record_flags(blocked: list[VideoHit]) -> None:
         async with async_session_factory() as session:
             now = datetime.now(UTC)
             for (match_field, match_value), hit in rows:
+                # 截断到各列宽,防超长第三方文本触发 insert 报错(best-effort 会吞掉→静默丢标记)
+                match_value = match_value[:256]
                 title = (hit.title or "")[:256]
+                channel_handle = hit.handle[:128] if hit.handle else None
+                channel_name = hit.channel[:256] if hit.channel else None
                 stmt = (
                     pg_insert(FlaggedChannel)
                     .values(
                         match_field=match_field,
                         match_value=match_value,
                         channel_id=hit.channel_id,
-                        channel_handle=hit.handle,
-                        channel_name=hit.channel,
+                        channel_handle=channel_handle,
+                        channel_name=channel_name,
                         block_count=1,
                         last_video_id=hit.video_id,
                         last_title=title,
