@@ -219,7 +219,7 @@ async def add_entry(
     note: str | None,
     created_by: str | None,
     name: str | None = None,
-) -> YouTubeBlocklistEntry:
+) -> tuple[YouTubeBlocklistEntry, bool]:
     """加黑名单条目:服务端归一化 + 频道判型 + 幂等/复活去重 + 频道名快照(display_name)。
 
     name 优先级:显式传入(promote 用 flag.channel_name)> @handle yt-dlp 解析名 > 裸名输入本身。
@@ -260,7 +260,7 @@ async def add_entry(
 
     if existing is not None:
         if existing.deleted_at is None:
-            return existing  # 已活跃 → 幂等
+            return existing, False  # 已活跃 → 幂等,created=False
         existing.deleted_at = None
         existing.raw_value = raw
         existing.note = note
@@ -268,7 +268,7 @@ async def add_entry(
         if display_name is not None:
             existing.display_name = display_name  # 仅有名时刷新,不拿空名覆盖既有好名
         await db.commit()
-        return existing
+        return existing, True  # 软删复活算正常重新拉黑,created=True
 
     entry = YouTubeBlocklistEntry(
         kind=kind,
@@ -281,7 +281,7 @@ async def add_entry(
     )
     db.add(entry)
     await db.commit()
-    return entry
+    return entry, True
 
 
 async def delete_entry(db: AsyncSession, entry_id: str) -> bool:
