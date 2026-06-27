@@ -31,7 +31,11 @@ async def add_youtube_blocklist(
     db: AsyncSession = Depends(get_db),
     admin: CurrentUser = Depends(get_admin_user),
 ) -> JSONResponse:
-    entry = await blocklist_service.add_entry(db, kind=body.kind, value=body.value, note=body.note, created_by=admin.id)
+    entry, created = await blocklist_service.add_entry(
+        db, kind=body.kind, value=body.value, note=body.note, created_by=admin.id
+    )
+    if not created:
+        raise BusinessError(ErrorCode.BLOCKLIST_ENTRY_EXISTS)
     blocklist_service.invalidate_cache()
     return success(data=jsonable_encoder(BlocklistEntryOut.model_validate(entry)))
 

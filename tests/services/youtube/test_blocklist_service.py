@@ -7,6 +7,7 @@ from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
 from app.models.youtube_blocklist import YouTubeBlocklistEntry
 from app.services.youtube.blocklist_service import Blocklist
+from app.services.youtube.search_cache import normalize_query
 from app.services.youtube.search_service import VideoHit
 
 
@@ -215,7 +216,7 @@ class _CrudSession:
 
 async def test_add_entry_inserts_new_term() -> None:
     db = _CrudSession(found=None)
-    entry = await bls.add_entry(db, kind="term", value="  Bad Word ", note="x", created_by="admin-1")
+    entry, _ = await bls.add_entry(db, kind="term", value="  Bad Word ", note="x", created_by="admin-1")
     assert entry.kind == "term"
     assert entry.match_field == "query"
     assert entry.normalized_value == "bad word"
@@ -226,7 +227,7 @@ async def test_add_entry_inserts_new_term() -> None:
 
 async def test_add_entry_classifies_channel_id() -> None:
     db = _CrudSession(found=None)
-    entry = await bls.add_entry(db, kind="channel", value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None)
+    entry, _ = await bls.add_entry(db, kind="channel", value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None)
     assert entry.match_field == "channel_id"
     assert entry.normalized_value == "UCXuqSBlHAE6Xw-yeJA0Tunw"
 
@@ -237,7 +238,7 @@ async def test_add_entry_resolves_handle_url_to_channel_id(monkeypatch: pytest.M
 
     monkeypatch.setattr(bls, "resolve_channel_meta", _fake_resolve_meta)
     db = _CrudSession(found=None)
-    entry = await bls.add_entry(
+    entry, _ = await bls.add_entry(
         db, kind="channel", value="https://www.youtube.com/@globalnewstw", note=None, created_by=None
     )
     assert entry.match_field == "channel_id"
@@ -251,7 +252,7 @@ async def test_add_entry_handle_falls_back_when_resolution_fails(monkeypatch: py
 
     monkeypatch.setattr(bls, "resolve_channel_meta", _fail_resolve_meta)
     db = _CrudSession(found=None)
-    entry = await bls.add_entry(
+    entry, _ = await bls.add_entry(
         db, kind="channel", value="https://www.youtube.com/@globalnewstw", note=None, created_by=None
     )
     # 解析失败 → 落库为 handle,匹配回落到结果 uploader_id
@@ -277,7 +278,7 @@ async def test_add_entry_idempotent_when_active_exists() -> None:
     )
     existing.deleted_at = None
     db = _CrudSession(found=existing)
-    out = await bls.add_entry(db, kind="term", value="Bad Word", note="new", created_by="admin-2")
+    out, _ = await bls.add_entry(db, kind="term", value="Bad Word", note="new", created_by="admin-2")
     assert out is existing
     assert db.added == []  # 未重复插入
     assert db.committed is False  # 活跃命中:纯幂等,不写库
@@ -294,7 +295,7 @@ async def test_add_entry_revives_soft_deleted() -> None:
     )
     existing.deleted_at = datetime(2020, 1, 1, tzinfo=UTC)
     db = _CrudSession(found=existing)
-    out = await bls.add_entry(db, kind="channel", value="Lex Fridman", note="new reason", created_by="admin-9")
+    out, _ = await bls.add_entry(db, kind="channel", value="Lex Fridman", note="new reason", created_by="admin-9")
     assert out is existing
     assert existing.deleted_at is None
     assert existing.note == "new reason"
@@ -392,7 +393,7 @@ def test_resolve_channel_meta_sync_handles_failure(monkeypatch: pytest.MonkeyPat
 async def test_add_entry_stores_explicit_name() -> None:
     # promote 路径:value 是裸 channel_id,name 显式传入 → 入库 display_name
     db = _CrudSession(found=None)
-    entry = await bls.add_entry(
+    entry, _ = await bls.add_entry(
         db, kind="channel", value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None, name="BBC News 中文"
     )
     assert entry.display_name == "BBC News 中文"
@@ -404,7 +405,7 @@ async def test_add_entry_handle_captures_resolved_name(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(bls, "resolve_channel_meta", _meta)
     db = _CrudSession(found=None)
-    entry = await bls.add_entry(
+    entry, _ = await bls.add_entry(
         db, kind="channel", value="https://www.youtube.com/@globalnewstw", note=None, created_by=None
     )
     assert entry.match_field == "channel_id"
@@ -413,7 +414,7 @@ async def test_add_entry_handle_captures_resolved_name(monkeypatch: pytest.Monke
 
 async def test_add_entry_bare_name_uses_input() -> None:
     db = _CrudSession(found=None)
-    entry = await bls.add_entry(db, kind="channel", value="Lex Fridman", note=None, created_by=None)
+    entry, _ = await bls.add_entry(db, kind="channel", value="Lex Fridman", note=None, created_by=None)
     assert entry.match_field == "channel_name"
     assert entry.display_name == "Lex Fridman"
 
@@ -421,12 +422,51 @@ async def test_add_entry_bare_name_uses_input() -> None:
 async def test_add_entry_bare_channel_id_without_name_leaves_display_none() -> None:
     # 有意收窄:裸 UCID 不在加黑名单时做 yt-dlp 取名 → display_name 留空(交回填脚本)
     db = _CrudSession(found=None)
-    entry = await bls.add_entry(db, kind="channel", value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None)
+    entry, _ = await bls.add_entry(db, kind="channel", value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None)
     assert entry.match_field == "channel_id"
     assert entry.display_name is None
 
 
 async def test_add_entry_term_has_no_display_name() -> None:
     db = _CrudSession(found=None)
-    entry = await bls.add_entry(db, kind="term", value="赌博", note=None, created_by=None, name="ignored")
+    entry, _ = await bls.add_entry(db, kind="term", value="赌博", note=None, created_by=None, name="ignored")
     assert entry.display_name is None
+
+
+async def test_add_entry_returns_created_true_on_insert() -> None:
+    db = _CrudSession(found=None)
+    entry, created = await bls.add_entry(db, kind="term", value="fresh word", note=None, created_by=None)
+    assert created is True
+    assert entry.raw_value == "fresh word"
+
+
+async def test_add_entry_returns_created_false_when_active_exists() -> None:
+    existing = YouTubeBlocklistEntry(
+        kind="term",
+        match_field="query",
+        raw_value="dup",
+        normalized_value=normalize_query("dup"),
+        note=None,
+        created_by=None,
+    )
+    existing.deleted_at = None
+    db = _CrudSession(found=existing)
+    out, created = await bls.add_entry(db, kind="term", value="dup", note="ignored", created_by=None)
+    assert created is False
+    assert out is existing
+
+
+async def test_add_entry_returns_created_true_on_revive() -> None:
+    revived = YouTubeBlocklistEntry(
+        kind="channel",
+        match_field="channel_name",
+        raw_value="Lex Fridman",
+        normalized_value=normalize_query("Lex Fridman"),
+        note=None,
+        created_by=None,
+    )
+    revived.deleted_at = datetime.now(UTC)
+    db = _CrudSession(found=revived)
+    out, created = await bls.add_entry(db, kind="channel", value="Lex Fridman", note="new", created_by="a")
+    assert created is True
+    assert out.deleted_at is None

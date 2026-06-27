@@ -80,9 +80,9 @@ async def test_add_channel_passes_admin_id_and_invalidates(monkeypatch: Any) -> 
     captured: dict[str, Any] = {}
     inval = {"n": 0}
 
-    async def _add(_db: Any, *, kind: str, value: str, note: Any, created_by: Any) -> _Entry:
+    async def _add(_db: Any, *, kind: str, value: str, note: Any, created_by: Any) -> tuple[_Entry, bool]:
         captured.update(kind=kind, value=value, note=note, created_by=created_by)
-        return _entry("e9", "channel", "channel_name", value)
+        return _entry("e9", "channel", "channel_name", value), True
 
     monkeypatch.setattr(blocklist_service, "add_entry", _add)
     monkeypatch.setattr(blocklist_service, "invalidate_cache", lambda: inval.__setitem__("n", inval["n"] + 1))
@@ -95,6 +95,22 @@ async def test_add_channel_passes_admin_id_and_invalidates(monkeypatch: Any) -> 
     assert captured["kind"] == "channel"
     assert captured["created_by"] == _ADMIN
     assert inval["n"] == 1
+
+
+async def test_add_duplicate_returns_conflict(monkeypatch: Any) -> None:
+    inval = {"n": 0}
+
+    async def _add(_db: Any, *, kind: str, value: str, note: Any, created_by: Any) -> tuple[_Entry, bool]:
+        return _entry("e9", "channel", "channel_name", value), False  # 已存在活跃行
+
+    monkeypatch.setattr(blocklist_service, "add_entry", _add)
+    monkeypatch.setattr(blocklist_service, "invalidate_cache", lambda: inval.__setitem__("n", inval["n"] + 1))
+    async with _client(_make_app(monkeypatch)) as client:
+        body = (
+            await client.post("/api/v1/admin/youtube-blocklist", json={"kind": "channel", "value": "Lex Fridman"})
+        ).json()
+    assert body["code"] == int(ErrorCode.BLOCKLIST_ENTRY_EXISTS)  # 40907
+    assert inval["n"] == 0  # 重复时不写缓存失效
 
 
 async def test_delete_missing_returns_not_found(monkeypatch: Any) -> None:
