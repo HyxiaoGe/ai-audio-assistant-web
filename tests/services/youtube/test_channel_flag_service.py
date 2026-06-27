@@ -118,9 +118,13 @@ def test_resolve_dismiss_marks_without_blocklist(monkeypatch) -> None:
     monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
     flag = _pending_flag()
-    out = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="dismiss", admin_id="a2"))
+    db = _FakeDB(flag)
+    out = asyncio.run(cfs.resolve(db, flag_id="f1", action="dismiss", admin_id="a2"))
     assert out.status == "dismissed"
     assert called["add"] is False
+    assert out.resolved_by == "a2"
+    assert out.resolved_at is not None
+    assert db.committed
 
 
 def test_resolve_not_found_raises() -> None:

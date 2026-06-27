@@ -120,7 +120,6 @@ async def resolve(
         except Exception:
             await db.rollback()
             raise
-        blocklist_service.invalidate_cache()
         flag.status = "blocked"
     elif action == "dismiss":
         flag.status = "dismissed"
@@ -130,4 +129,7 @@ async def resolve(
     flag.resolved_by = admin_id
     flag.resolved_at = datetime.now(UTC)
     await db.commit()
+    if action == "block":
+        # 缓存失效放在 commit 之后:确保 flag 行与黑名单条目都已落库,不依赖 add_entry 的内部 commit 时序
+        blocklist_service.invalidate_cache()
     return flag
