@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -114,6 +115,38 @@ async def test_delete_success(monkeypatch: Any) -> None:
     async with _client(_make_app(monkeypatch)) as client:
         body = (await client.delete("/api/v1/admin/youtube-blocklist/e1")).json()
     assert body["code"] == 0
+
+
+def test_blocklist_entry_out_maps_display_name_to_name() -> None:
+    from app.schemas.youtube_blocklist import BlocklistEntryOut
+
+    orm_like = SimpleNamespace(
+        id="e1",
+        kind="channel",
+        match_field="channel_id",
+        raw_value="UCabc",
+        note=None,
+        created_at=datetime(2026, 6, 27),
+        display_name="BBC News 中文",
+    )
+    out = BlocklistEntryOut.model_validate(orm_like)
+    dumped = out.model_dump()
+    assert dumped["name"] == "BBC News 中文"  # 列 display_name → 响应键 name
+
+
+def test_blocklist_entry_out_name_defaults_none() -> None:
+    from app.schemas.youtube_blocklist import BlocklistEntryOut
+
+    orm_like = SimpleNamespace(
+        id="e2",
+        kind="term",
+        match_field="query",
+        raw_value="bad",
+        note=None,
+        created_at=datetime(2026, 6, 27),
+        display_name=None,
+    )
+    assert BlocklistEntryOut.model_validate(orm_like).model_dump()["name"] is None
 
 
 async def test_requires_admin(monkeypatch: Any) -> None:
