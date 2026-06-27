@@ -173,3 +173,54 @@ async def test_blocked_channel_filtered_from_live(monkeypatch: pytest.MonkeyPatc
     assert body["code"] == 0
     assert [i["video_id"] for i in body["data"]["items"]] == ["v4"]
     assert body["data"]["cached"] is False
+
+
+async def test_display_moderation_filters_before_upsert(monkeypatch: pytest.MonkeyPatch) -> None:
+    # miss 路径:filter_display 剔 v1 → upsert 只收到干净子集 [v2],返回也只剩 v2
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    upserts: list[list[str]] = []
+
+    async def _miss(_db: Any, _n: str) -> None:
+        return None
+
+    async def _search(_self: Any, query: str, limit: int) -> list[VideoHit]:
+        return [_hit("v1"), _hit("v2")]
+
+    async def _upsert(_db: Any, _n: str, _d: str, hits: list[VideoHit]) -> None:
+        upserts.append([h.video_id for h in hits])
+
+    async def _filter(hits: list[VideoHit], *, request_id: Any) -> list[VideoHit]:
+        return [h for h in hits if h.video_id != "v1"]  # 剔 v1
+
+    monkeypatch.setattr(search_cache, "get_cached_results", _miss)
+    monkeypatch.setattr(YouTubeSearchService, "search", _search)
+    monkeypatch.setattr(search_cache, "upsert_results", _upsert)
+    monkeypatch.setattr(youtube_search.moderation_gate, "filter_display", _filter)
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search?q=dogs")).json()
+    assert body["code"] == 0
+    assert [i["video_id"] for i in body["data"]["items"]] == ["v2"]
+    assert upserts == [["v2"]]  # 缓存只存干净子集
+
+
+async def test_display_moderation_skipped_on_cache_hit(monkeypatch: pytest.MonkeyPatch) -> None:
+    # cache hit:filter_display 不应被调用(缓存即干净子集,不重复审)
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+
+    async def _cached(_db: Any, _n: str) -> list[VideoHit]:
+        return [_hit("v1")]
+
+    def _boom(*_a: Any, **_k: Any):
+        raise AssertionError("filter_display must not run on cache hit")
+
+    monkeypatch.setattr(search_cache, "get_cached_results", _cached)
+    monkeypatch.setattr(youtube_search.moderation_gate, "filter_display", _boom)
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search?q=cats")).json()
+    assert body["code"] == 0
+    assert [i["video_id"] for i in body["data"]["items"]] == ["v1"]
+    assert body["data"]["cached"] is True
