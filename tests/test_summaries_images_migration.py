@@ -48,6 +48,6 @@ def test_single_alembic_head_is_new_revision() -> None:
     )
     assert out.returncode == 0, out.stderr
     heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
-    # 必须恰好单 head（否则说明迁移链分叉）。head 随新迁移前移至 flagged_channels 表 e1f2a3b4c5d6。
+    # 必须恰好单 head（否则说明迁移链分叉）。head 随新迁移前移至 youtube_blocklist.display_name 列 b10c51d15914。
     assert len(heads) == 1, f"alembic 出现多 head：{out.stdout}"
-    assert "e1f2a3b4c5d6" in heads[0]
+    assert "b10c51d15914" in heads[0]

@@ -13,12 +13,13 @@ class BlocklistEntryCreate(BaseModel):
 
 
 class BlocklistEntryOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: str
     kind: str
     match_field: str
     raw_value: str
+    name: str | None = Field(default=None, validation_alias="display_name")
     note: str | None
     created_at: datetime
 

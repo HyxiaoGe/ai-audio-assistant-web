@@ -126,7 +126,9 @@ async def resolve(
         if not value:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="flag")
         try:
-            await blocklist_service.add_entry(db, kind="channel", value=value, note=note, created_by=admin_id)
+            await blocklist_service.add_entry(
+                db, kind="channel", value=value, note=note, created_by=admin_id, name=flag.channel_name
+            )
         except Exception:
             await db.rollback()
             raise

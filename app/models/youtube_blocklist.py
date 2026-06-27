@@ -27,3 +27,4 @@ class YouTubeBlocklistEntry(BaseModel):
     normalized_value: Mapped[str] = mapped_column(String(256), nullable=False)
     note: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_by: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(256), nullable=True)

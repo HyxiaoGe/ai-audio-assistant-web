@@ -232,10 +232,10 @@ async def test_add_entry_classifies_channel_id() -> None:
 
 
 async def test_add_entry_resolves_handle_url_to_channel_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_resolve(_raw: str) -> str:
-        return "UCp2f7tGJGN6R9Muxipem8Nw"
+    async def _fake_resolve_meta(_raw: str) -> tuple[str | None, str | None]:
+        return ("UCp2f7tGJGN6R9Muxipem8Nw", "全球新闻")
 
-    monkeypatch.setattr(bls, "resolve_channel_id", _fake_resolve)
+    monkeypatch.setattr(bls, "resolve_channel_meta", _fake_resolve_meta)
     db = _CrudSession(found=None)
     entry = await bls.add_entry(
         db, kind="channel", value="https://www.youtube.com/@globalnewstw", note=None, created_by=None
@@ -246,10 +246,10 @@ async def test_add_entry_resolves_handle_url_to_channel_id(monkeypatch: pytest.M
 
 
 async def test_add_entry_handle_falls_back_when_resolution_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fail_resolve(_raw: str) -> None:
-        return None
+    async def _fail_resolve_meta(_raw: str) -> tuple[str | None, str | None]:
+        return (None, None)
 
-    monkeypatch.setattr(bls, "resolve_channel_id", _fail_resolve)
+    monkeypatch.setattr(bls, "resolve_channel_meta", _fail_resolve_meta)
     db = _CrudSession(found=None)
     entry = await bls.add_entry(
         db, kind="channel", value="https://www.youtube.com/@globalnewstw", note=None, created_by=None
@@ -341,3 +341,92 @@ async def test_list_entries_returns_rows() -> None:
     db = _CrudSession(rows=rows)
     out = await bls.list_entries(db)
     assert out == rows
+
+
+# ---- _resolve_channel_meta_sync ----
+
+
+def test_resolve_channel_meta_sync_extracts_id_and_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeYDL:
+        def __init__(self, *a, **k): ...
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"channel_id": "UCp2f7tGJGN6R9Muxipem8Nw", "channel": "全球新闻", "uploader": "x", "title": "y"}
+
+    import yt_dlp
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+    cid, name = bls._resolve_channel_meta_sync("https://www.youtube.com/@globalnewstw")
+    assert cid == "UCp2f7tGJGN6R9Muxipem8Nw"
+    assert name == "全球新闻"
+
+
+def test_resolve_channel_meta_sync_handles_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _BoomYDL:
+        def __init__(self, *a, **k): ...
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise RuntimeError("network down")
+
+    import yt_dlp
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _BoomYDL)
+    assert bls._resolve_channel_meta_sync("https://www.youtube.com/@x") == (None, None)
+
+
+# ---- add_entry 抓名 ----
+
+
+async def test_add_entry_stores_explicit_name() -> None:
+    # promote 路径:value 是裸 channel_id,name 显式传入 → 入库 display_name
+    db = _CrudSession(found=None)
+    entry = await bls.add_entry(
+        db, kind="channel", value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None, name="BBC News 中文"
+    )
+    assert entry.display_name == "BBC News 中文"
+
+
+async def test_add_entry_handle_captures_resolved_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _meta(_raw: str) -> tuple[str | None, str | None]:
+        return ("UCp2f7tGJGN6R9Muxipem8Nw", "全球新闻")
+
+    monkeypatch.setattr(bls, "resolve_channel_meta", _meta)
+    db = _CrudSession(found=None)
+    entry = await bls.add_entry(
+        db, kind="channel", value="https://www.youtube.com/@globalnewstw", note=None, created_by=None
+    )
+    assert entry.match_field == "channel_id"
+    assert entry.display_name == "全球新闻"
+
+
+async def test_add_entry_bare_name_uses_input() -> None:
+    db = _CrudSession(found=None)
+    entry = await bls.add_entry(db, kind="channel", value="Lex Fridman", note=None, created_by=None)
+    assert entry.match_field == "channel_name"
+    assert entry.display_name == "Lex Fridman"
+
+
+async def test_add_entry_bare_channel_id_without_name_leaves_display_none() -> None:
+    # 有意收窄:裸 UCID 不在加黑名单时做 yt-dlp 取名 → display_name 留空(交回填脚本)
+    db = _CrudSession(found=None)
+    entry = await bls.add_entry(db, kind="channel", value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None)
+    assert entry.match_field == "channel_id"
+    assert entry.display_name is None
+
+
+async def test_add_entry_term_has_no_display_name() -> None:
+    db = _CrudSession(found=None)
+    entry = await bls.add_entry(db, kind="term", value="赌博", note=None, created_by=None, name="ignored")
+    assert entry.display_name is None
