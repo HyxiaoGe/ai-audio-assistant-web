@@ -112,7 +112,8 @@ def _extract_handle(s: str) -> str | None:
     return None
 
 
-def _resolve_channel_id_sync(url: str) -> str | None:
+def _resolve_channel_meta_sync(url: str) -> tuple[str | None, str | None]:
+    """yt-dlp 抓 (channel_id, channel_name);任何失败返 (None, None)。"""
     from yt_dlp import YoutubeDL
 
     opts = {
@@ -121,27 +122,44 @@ def _resolve_channel_id_sync(url: str) -> str | None:
         "quiet": True,
         "no_warnings": True,
         "socket_timeout": settings.YOUTUBE_SOCKET_TIMEOUT,
-        "playlist_items": "1",  # 只取频道元数据,不拉全部视频
+        "playlist_items": "1",  # 只取频道元数据
     }
     try:
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception:
-        return None
-    cid = info.get("channel_id") if isinstance(info, dict) else None
-    return cid if isinstance(cid, str) and _CHANNEL_ID_RE.match(cid) else None
+        return (None, None)
+    if not isinstance(info, dict):
+        return (None, None)
+    cid = info.get("channel_id")
+    cid = cid if isinstance(cid, str) and _CHANNEL_ID_RE.match(cid) else None
+    name = info.get("channel") or info.get("uploader") or info.get("title")
+    name = name.strip() if isinstance(name, str) and name.strip() else None
+    return (cid, name)
+
+
+async def resolve_channel_meta(handle: str) -> tuple[str | None, str | None]:
+    """@handle → (规范 channel_id, 频道名);从 handle 拼 youtube.com 规范 URL,杜绝 SSRF。"""
+    h = handle.strip().lstrip("@")
+    if not h:
+        return (None, None)
+    url = f"https://www.youtube.com/@{h}"
+    return await asyncio.to_thread(_resolve_channel_meta_sync, url)
 
 
 async def resolve_channel_id(handle: str) -> str | None:
-    """用 yt-dlp 把频道 @handle 解析为规范 channel_id(UC...);失败返 None。
+    """@handle → 规范 channel_id(薄包装,仅取 id)。"""
+    return (await resolve_channel_meta(handle))[0]
 
-    始终从 handle 拼 youtube.com 规范 URL,不接受任意外部 URL —— 杜绝 SSRF。
-    """
-    h = handle.strip().lstrip("@")
-    if not h:
+
+async def resolve_channel_name_by_id(channel_id: str) -> str | None:
+    """channel_id → 频道名(Task 3 回填用);拼 /channel/UCx 规范 URL,杜绝 SSRF。失败返 None。"""
+    cid = channel_id.strip()
+    if not _CHANNEL_ID_RE.match(cid):
         return None
-    url = f"https://www.youtube.com/@{h}"
-    return await asyncio.to_thread(_resolve_channel_id_sync, url)
+    url = f"https://www.youtube.com/channel/{cid}"
+    _, name = await asyncio.to_thread(_resolve_channel_meta_sync, url)
+    return name
 
 
 def is_channel_blocked(hit: VideoHit, bl: Blocklist) -> bool:
@@ -205,28 +223,35 @@ async def add_entry(
     value: str,
     note: str | None,
     created_by: str | None,
+    name: str | None = None,
 ) -> YouTubeBlocklistEntry:
-    """加黑名单条目:服务端归一化 + 频道判型 + 幂等/复活去重。
+    """加黑名单条目:服务端归一化 + 频道判型 + 幂等/复活去重 + 频道名快照(display_name)。
 
-    - 同键活跃行已存在 → 幂等返回(不写库)。
-    - 同键软删行存在 → 复活(清 deleted_at,刷新 raw_value/note/created_by)。
-    - 无 → 插入。
+    name 优先级:显式传入(promote 用 flag.channel_name)> @handle yt-dlp 解析名 > 裸名输入本身。
+    term 与"裸 UCID 无名"→ display_name 留空(纯展示,前端回落 raw_value)。
     """
     raw = value.strip()
     if not raw:
         raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="value")
 
+    display_name = name.strip() if name and name.strip() else None
+
     if kind == "term":
         match_field, normalized_value = "query", normalize_query(raw)
         if not normalized_value:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="value")
+        display_name = None  # 屏蔽词无频道名
     else:  # "channel"
         match_field, normalized_value = classify_channel_input(raw)
         if match_field == "channel_handle":
-            # 优先把 handle 解析为规范 channel_id;解析失败保留 handle 兜底(匹配结果 uploader_id)
-            resolved = await resolve_channel_id(normalized_value)
-            if resolved:
-                match_field, normalized_value = "channel_id", resolved
+            # 优先把 handle 解析为规范 channel_id;顺手取频道名(解析失败保留 handle 兜底)
+            resolved_id, resolved_name = await resolve_channel_meta(normalized_value)
+            if resolved_id:
+                match_field, normalized_value = "channel_id", resolved_id
+                if display_name is None:
+                    display_name = resolved_name
+        elif display_name is None and match_field == "channel_name":
+            display_name = raw  # 裸频道名输入本身就是名字
 
     existing = (
         await db.execute(
@@ -245,6 +270,8 @@ async def add_entry(
         existing.raw_value = raw
         existing.note = note
         existing.created_by = created_by
+        if display_name is not None:
+            existing.display_name = display_name  # 仅有名时刷新,不拿空名覆盖既有好名
         await db.commit()
         return existing
 
@@ -255,6 +282,7 @@ async def add_entry(
         normalized_value=normalized_value,
         note=note,
         created_by=created_by,
+        display_name=display_name,
     )
     db.add(entry)
     await db.commit()

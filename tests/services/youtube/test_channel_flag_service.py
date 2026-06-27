@@ -95,8 +95,8 @@ def _pending_flag():
 def test_resolve_block_promotes_and_marks(monkeypatch) -> None:
     calls = {}
 
-    async def _add(db, *, kind, value, note, created_by):
-        calls["add"] = (kind, value, created_by)
+    async def _add(db, *, kind, value, note, created_by, name=None):
+        calls["add"] = (kind, value, created_by, name)
 
     monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: calls.setdefault("inval", True))
@@ -104,7 +104,7 @@ def test_resolve_block_promotes_and_marks(monkeypatch) -> None:
     db = _FakeDB(flag)
     out = asyncio.run(cfs.resolve(db, flag_id="f1", action="block", admin_id="admin-1"))
     assert out.status == "blocked"
-    assert calls["add"] == ("channel", "UCx", "admin-1")  # 取最强原值 channel_id
+    assert calls["add"] == ("channel", "UCx", "admin-1", "Evil")  # 频道名快照随 promote 传入
     assert calls.get("inval") is True
     assert flag.resolved_by == "admin-1" and flag.resolved_at is not None
     assert db.committed
@@ -174,7 +174,7 @@ def test_conflict_last_title_is_status_guarded_case() -> None:
 
 
 def test_resolve_block_clears_last_title(monkeypatch) -> None:
-    async def _add(db, *, kind, value, note, created_by):
+    async def _add(db, *, kind, value, note, created_by, name=None):
         pass
 
     monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
