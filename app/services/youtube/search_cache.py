@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -110,3 +110,24 @@ async def get_trending(db: AsyncSession) -> list[TrendingItem]:
     eligible.sort(key=lambda r: r.search_count, reverse=True)
     top = eligible[: settings.YOUTUBE_TRENDING_TOP_N]
     return [TrendingItem(query=r.display_query, count=r.search_count) for r in top]
+
+
+async def purge_stale_queries(db: AsyncSession) -> int:
+    """缓存 GC:删「出 trending 窗口」或「敏感且缓存过期」的查询行,返删除条数。
+
+    双保留期:普通行按 trending 窗口(默认 7d)留;敏感行(is_blocked)一旦缓存过期(默认 6h)即删,
+    不等 7d——政治/赌博探针查询词+结果标题最多 6h 后消失(若无人再搜)。
+    用 Python 计算 cutoff + Core delete,避免 Postgres-only 的 now()/INTERVAL,兼容 sqlite 测试引擎。
+    """
+    now = datetime.now(UTC)
+    window_cutoff = now - timedelta(days=settings.YOUTUBE_TRENDING_WINDOW_DAYS)
+    ttl_cutoff = now - timedelta(seconds=settings.YOUTUBE_SEARCH_CACHE_TTL_SECONDS)
+    stmt = delete(YouTubeSearchQuery).where(
+        or_(
+            func.coalesce(YouTubeSearchQuery.last_searched_at, YouTubeSearchQuery.fetched_at) < window_cutoff,
+            and_(YouTubeSearchQuery.is_blocked.is_(True), YouTubeSearchQuery.fetched_at < ttl_cutoff),
+        )
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.rowcount or 0

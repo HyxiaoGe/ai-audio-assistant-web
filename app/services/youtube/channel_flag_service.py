@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import case, select
+from sqlalchemy import case, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.exceptions import BusinessError
@@ -144,3 +144,19 @@ async def resolve(
         # 缓存失效放在 commit 之后:确保 flag 行与黑名单条目都已落库,不依赖 add_entry 的内部 commit 时序
         blocklist_service.invalidate_cache()
     return flag
+
+
+async def scrub_resolved_titles(db: AsyncSession) -> int:
+    """把已处置(非 pending)行的 last_title 置 NULL,返影响条数。
+
+    幂等:既一次性回填既有已 blocked/dismissed 行(脱敏历史明文),又是组件① 的长期安全网。
+    pending 行不动(复核面板要靠 last_title 展示样本)。
+    """
+    stmt = (
+        update(FlaggedChannel)
+        .where(FlaggedChannel.status != "pending", FlaggedChannel.last_title.is_not(None))
+        .values(last_title=None)
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.rowcount or 0
