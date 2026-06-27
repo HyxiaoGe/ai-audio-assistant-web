@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, case, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.exceptions import BusinessError
@@ -34,6 +34,12 @@ def _flag_identity(hit: VideoHit) -> tuple[str, str] | None:
     if hit.channel:
         return ("channel_name", normalize_query(hit.channel))
     return None
+
+
+def _conflict_last_title(title: str) -> ColumnElement[str | None]:
+    """on_conflict 时 last_title 的更新值:仅 pending 行更新为新标题,
+    已 resolved(dismissed/blocked)行保留现值——保住 resolve 置的 NULL,防再次标记把政治明文回填。"""
+    return case((FlaggedChannel.status == "pending", title), else_=FlaggedChannel.last_title)
 
 
 async def record_flags(blocked: list[VideoHit]) -> None:
@@ -72,7 +78,7 @@ async def record_flags(blocked: list[VideoHit]) -> None:
                         set_={
                             "block_count": FlaggedChannel.block_count + 1,
                             "last_video_id": hit.video_id,
-                            "last_title": title,
+                            "last_title": _conflict_last_title(title),
                             "last_flagged_at": now,
                             # status 故意不动:dismissed/blocked 行仍累积 count 但不回 pending 队列
                         },
@@ -132,8 +138,25 @@ async def resolve(
 
     flag.resolved_by = admin_id
     flag.resolved_at = datetime.now(UTC)
+    flag.last_title = None  # 脱敏:复核处置后样本标题已无用,清掉政治敏感明文
     await db.commit()
     if action == "block":
         # 缓存失效放在 commit 之后:确保 flag 行与黑名单条目都已落库,不依赖 add_entry 的内部 commit 时序
         blocklist_service.invalidate_cache()
     return flag
+
+
+async def scrub_resolved_titles(db: AsyncSession) -> int:
+    """把已处置(非 pending)行的 last_title 置 NULL,返影响条数。
+
+    幂等:既一次性回填既有已 blocked/dismissed 行(脱敏历史明文),又是组件① 的长期安全网。
+    pending 行不动(复核面板要靠 last_title 展示样本)。
+    """
+    stmt = (
+        update(FlaggedChannel)
+        .where(FlaggedChannel.status != "pending", FlaggedChannel.last_title.is_not(None))
+        .values(last_title=None)
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.rowcount or 0

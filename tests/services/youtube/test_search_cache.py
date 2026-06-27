@@ -152,6 +152,47 @@ async def test_get_trending_sorts_filters_denylist_and_limits(monkeypatch: pytes
     assert out[0] == TrendingItem(query="B", count=10)
 
 
+async def test_upsert_sensitive_false_excludes_is_blocked() -> None:
+    """sensitive=False → 编译 SQL 里不含 is_blocked(sticky 单向:新行靠列默认值,绝不回写 false)。"""
+    from sqlalchemy.dialects import postgresql
+
+    captured: list = []
+
+    class _CaptureSession:
+        async def execute(self, stmt) -> _Result:  # type: ignore[override]
+            captured.append(stmt)
+            return _Result()
+
+        async def commit(self) -> None:
+            pass
+
+    await sc.upsert_results(_CaptureSession(), "cats", "Cats", [_hit("v1")], sensitive=False)
+    assert captured, "execute should have been called"
+    # 不用 literal_binds:JSONB 列无法渲染字面量;列名本身已在 DDL 部分可见
+    sql = str(captured[0].compile(dialect=postgresql.dialect()))
+    assert "is_blocked" not in sql
+
+
+async def test_upsert_sensitive_true_includes_is_blocked() -> None:
+    """sensitive=True → 编译 SQL 的 INSERT values 与 ON CONFLICT DO UPDATE 均含 is_blocked。"""
+    from sqlalchemy.dialects import postgresql
+
+    captured: list = []
+
+    class _CaptureSession:
+        async def execute(self, stmt) -> _Result:  # type: ignore[override]
+            captured.append(stmt)
+            return _Result()
+
+        async def commit(self) -> None:
+            pass
+
+    await sc.upsert_results(_CaptureSession(), "bad", "Bad", [_hit("v2")], sensitive=True)
+    assert captured
+    sql = str(captured[0].compile(dialect=postgresql.dialect()))
+    assert "is_blocked" in sql
+
+
 async def test_get_trending_threshold_uses_post_denylist_count(monkeypatch: pytest.MonkeyPatch) -> None:
     # Raw rows = 3 distinct queries; 2 被黑名单 → eligible = 1 < MIN_VOLUME=2 → expect []
     monkeypatch.setattr(sc.settings, "YOUTUBE_TRENDING_MIN_VOLUME", 2)

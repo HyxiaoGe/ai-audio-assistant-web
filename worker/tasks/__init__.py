@@ -3,8 +3,9 @@ from __future__ import annotations
 # Import all task modules so Celery can discover them
 from worker.tasks import (
     download_youtube,  # noqa: F401
+    moderation_hygiene,  # noqa: F401
     process_audio,  # noqa: F401
     process_youtube,  # noqa: F401
 )
 
-__all__ = ["download_youtube", "process_audio", "process_youtube"]
+__all__ = ["download_youtube", "moderation_hygiene", "process_audio", "process_youtube"]
