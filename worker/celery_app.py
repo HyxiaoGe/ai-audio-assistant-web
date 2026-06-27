@@ -87,6 +87,12 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.run_dead_task_sweep",
         "schedule": crontab(minute="*/15"),
     },
+    # 审核卫生巡检 - 每小时 :05:缓存 GC + flagged last_title 脱敏 backfill。
+    # 不设 options.queue(worker 无 -Q,只消费默认 celery 队列;历史死信教训)。
+    "run-moderation-hygiene": {
+        "task": "worker.tasks.run_moderation_hygiene",
+        "schedule": crontab(minute=5),
+    },
 }
 
 ConfigManager.configure_db(worker_async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL)
