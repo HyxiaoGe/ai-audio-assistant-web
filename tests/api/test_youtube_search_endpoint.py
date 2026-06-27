@@ -176,6 +176,52 @@ async def test_blocked_channel_filtered_from_live(monkeypatch: pytest.MonkeyPatc
     assert body["data"]["cached"] is False
 
 
+async def test_blocklisted_channel_skips_moderation_on_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    # miss 路径:被拉黑频道在送审前就被剔除 → filter_display/record_flags 都收不到它
+    # (彻底不进 CMS/TMS),只有未拉黑频道进审;响应与缓存也只剩未拉黑项。
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    moderated: list[list[str]] = []
+    recorded: list[list[str]] = []
+    upserts: list[list[str]] = []
+
+    async def _miss(_db: Any, _n: str) -> None:
+        return None
+
+    async def _search(_self: Any, query: str, limit: int) -> list[VideoHit]:
+        return [_hit("vbad", channel_id="UCbad"), _hit("vok", channel_id="UCok")]
+
+    async def _bl(_db: Any) -> blocklist_service.Blocklist:
+        return blocklist_service.Blocklist(
+            terms=frozenset(), channel_ids=frozenset({"UCbad"}), channel_names=frozenset()
+        )
+
+    async def _filter(hits: list[VideoHit], *, request_id: Any) -> moderation_gate.DisplayModerationOutcome:
+        moderated.append([h.video_id for h in hits])  # 记录 filter_display 实际看到了哪些
+        return moderation_gate.DisplayModerationOutcome(kept=list(hits), blocked=[])
+
+    async def _record(blocked: list[VideoHit]) -> None:
+        recorded.append([h.video_id for h in blocked])
+
+    async def _upsert(_db: Any, _n: str, _d: str, hits: list[VideoHit]) -> None:
+        upserts.append([h.video_id for h in hits])
+
+    monkeypatch.setattr(search_cache, "get_cached_results", _miss)
+    monkeypatch.setattr(YouTubeSearchService, "search", _search)
+    monkeypatch.setattr(blocklist_service, "get_blocklist", _bl)
+    monkeypatch.setattr(youtube_search.moderation_gate, "filter_display", _filter)
+    monkeypatch.setattr(channel_flag_service, "record_flags", _record)
+    monkeypatch.setattr(search_cache, "upsert_results", _upsert)
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search?q=dogs")).json()
+    assert body["code"] == 0
+    assert moderated == [["vok"]]  # 被拉黑的 vbad 根本没进 filter_display(不进 TMS)
+    assert recorded == [[]]  # 也没被 record_flags 重复标记
+    assert upserts == [["vok"]]  # 缓存只存未拉黑项
+    assert [i["video_id"] for i in body["data"]["items"]] == ["vok"]
+
+
 async def test_display_moderation_filters_before_upsert(monkeypatch: pytest.MonkeyPatch) -> None:
     # miss 路径:filter_display 剔 v1 → upsert 只收到干净子集 [v2],返回也只剩 v2
     from app.api.v1 import youtube_search
