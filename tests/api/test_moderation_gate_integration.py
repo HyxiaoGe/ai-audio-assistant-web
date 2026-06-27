@@ -77,7 +77,9 @@ async def test_manual_denylist_short_circuits_before_cms(monkeypatch: pytest.Mon
     monkeypatch.setattr(gate.config, "search_mode", lambda: "enforce")
 
     async def _bl(_db: Any) -> blocklist_service.Blocklist:
-        return blocklist_service.Blocklist(terms=frozenset({"spam"}), channel_ids=frozenset(), channel_names=frozenset())
+        return blocklist_service.Blocklist(
+            terms=frozenset({"spam"}), channel_ids=frozenset(), channel_names=frozenset()
+        )
 
     monkeypatch.setattr(blocklist_service, "get_blocklist", _bl)
 
@@ -111,7 +113,7 @@ async def test_youtube_search_off_allows_and_calls_service(monkeypatch: pytest.M
             )
         ]
 
-    async def _upsert(_db: Any, n: str, d: str, hits: list[VideoHit]) -> None:
+    async def _upsert(_db: Any, n: str, d: str, hits: list[VideoHit], *, sensitive: bool = False) -> None:
         return None
 
     monkeypatch.setattr(search_cache, "get_cached_results", _miss)

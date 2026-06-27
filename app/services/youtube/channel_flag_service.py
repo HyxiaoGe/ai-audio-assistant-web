@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import case, select, update
+from sqlalchemy import ColumnElement, case, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.exceptions import BusinessError
@@ -36,7 +36,7 @@ def _flag_identity(hit: VideoHit) -> tuple[str, str] | None:
     return None
 
 
-def _conflict_last_title(title: str) -> object:
+def _conflict_last_title(title: str) -> ColumnElement[str | None]:
     """on_conflict 时 last_title 的更新值:仅 pending 行更新为新标题,
     已 resolved(dismissed/blocked)行保留现值——保住 resolve 置的 NULL,防再次标记把政治明文回填。"""
     return case((FlaggedChannel.status == "pending", title), else_=FlaggedChannel.last_title)

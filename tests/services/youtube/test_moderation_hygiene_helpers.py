@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import insert, text
+from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -117,9 +117,7 @@ def test_purge_deletes_out_of_trending_window_and_stale_sensitive() -> None:
             )
             await s.commit()
             deleted = await search_cache.purge_stale_queries(s)
-            rows = (
-                (await s.execute(__import__("sqlalchemy").select(YouTubeSearchQuery.normalized_query))).scalars().all()
-            )
+            rows = (await s.execute(select(YouTubeSearchQuery.normalized_query))).scalars().all()
         assert deleted == 2
         assert set(rows) == {"fresh", "sens_fresh"}
 
