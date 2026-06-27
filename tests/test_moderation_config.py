@@ -11,6 +11,16 @@ def test_moderation_settings_defaults() -> None:
     assert settings.MODERATION_SEARCH_MODE == "off"
     assert settings.MODERATION_PUBLISH_MODE == "off"
     assert isinstance(settings.MODERATION_TIMEOUT, float)
+    # 展示态新增：默认 off + 并发默认 8
+    assert settings.MODERATION_DISPLAY_MODE == "off"
+    assert settings.MODERATION_DISPLAY_CONCURRENCY == 8
+
+
+def test_display_mode_seam_reads_setting(monkeypatch) -> None:
+    from app.services.moderation import config as mod_config
+
+    monkeypatch.setattr(settings, "MODERATION_DISPLAY_MODE", "enforce")
+    assert mod_config.display_mode() == "enforce"
 
 
 def test_new_error_codes_have_messages() -> None:
