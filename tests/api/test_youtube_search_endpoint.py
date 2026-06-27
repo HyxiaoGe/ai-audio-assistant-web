@@ -3,13 +3,14 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI, Request
-from httpx import ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 from app.api import deps
 from app.core.exceptions import BusinessError
 from app.core.response import error
 from app.i18n.codes import ErrorCode
-from app.services.youtube import blocklist_service, search_cache
+from app.services.moderation import gate as moderation_gate
+from app.services.youtube import blocklist_service, channel_flag_service, search_cache
 from app.services.youtube.search_service import VideoHit, YouTubeSearchService
 
 
@@ -191,8 +192,10 @@ async def test_display_moderation_filters_before_upsert(monkeypatch: pytest.Monk
     async def _upsert(_db: Any, _n: str, _d: str, hits: list[VideoHit]) -> None:
         upserts.append([h.video_id for h in hits])
 
-    async def _filter(hits: list[VideoHit], *, request_id: Any) -> list[VideoHit]:
-        return [h for h in hits if h.video_id != "v1"]  # 剔 v1
+    async def _filter(hits: list[VideoHit], *, request_id: Any) -> moderation_gate.DisplayModerationOutcome:
+        kept = [h for h in hits if h.video_id != "v1"]
+        blocked = [h for h in hits if h.video_id == "v1"]
+        return moderation_gate.DisplayModerationOutcome(kept=kept, blocked=blocked)
 
     monkeypatch.setattr(search_cache, "get_cached_results", _miss)
     monkeypatch.setattr(YouTubeSearchService, "search", _search)
@@ -224,3 +227,78 @@ async def test_display_moderation_skipped_on_cache_hit(monkeypatch: pytest.Monke
     assert body["code"] == 0
     assert [i["video_id"] for i in body["data"]["items"]] == ["v1"]
     assert body["data"]["cached"] is True
+
+
+@pytest.mark.asyncio
+async def test_miss_records_blocked_and_upserts_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _make_app(monkeypatch)
+    upserts: list[int] = []
+    recorded: list[list[str]] = []
+
+    async def _miss(_db: Any, _n: str) -> None:
+        return None
+
+    async def _search(_self: Any, query: str, limit: int) -> list[VideoHit]:
+        return [
+            VideoHit(
+                video_id="a",
+                title="good",
+                channel=None,
+                channel_id="UCa",
+                handle=None,
+                thumbnail=None,
+                url="https://y/a",
+            ),
+            VideoHit(
+                video_id="b",
+                title="bad",
+                channel=None,
+                channel_id="UCb",
+                handle=None,
+                thumbnail=None,
+                url="https://y/b",
+            ),
+        ]
+
+    async def _fd(hits: list[VideoHit], *, request_id: Any) -> moderation_gate.DisplayModerationOutcome:
+        return moderation_gate.DisplayModerationOutcome(kept=hits[:1], blocked=hits[1:])
+
+    async def _upsert(_db: Any, normalized: str, display: str, hits: list[VideoHit]) -> None:
+        upserts.append(len(hits))
+
+    async def _record(blocked: list[VideoHit]) -> None:
+        recorded.append([h.video_id for h in blocked])
+
+    monkeypatch.setattr(search_cache, "get_cached_results", _miss)
+    monkeypatch.setattr(YouTubeSearchService, "search", _search)
+    monkeypatch.setattr(moderation_gate, "filter_display", _fd)
+    monkeypatch.setattr(search_cache, "upsert_results", _upsert)
+    monkeypatch.setattr(channel_flag_service, "record_flags", _record)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        body = (await client.get("/api/v1/youtube/search?q=Dogs")).json()
+    assert body["code"] == 0
+    assert [i["video_id"] for i in body["data"]["items"]] == ["a"]  # 只返回 kept
+    assert upserts == [1]  # 只缓存 kept(干净子集)
+    assert recorded == [["b"]]  # blocked 交给 record_flags
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_does_not_record_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _make_app(monkeypatch)
+
+    async def _cached(_db: Any, _n: str) -> list[VideoHit]:
+        return [
+            VideoHit(
+                video_id="a", title="x", channel=None, channel_id=None, handle=None, thumbnail=None, url="https://y/a"
+            )
+        ]
+
+    async def _record_boom(_blocked: list[VideoHit]) -> None:
+        raise AssertionError("cache hit 不该标记")
+
+    monkeypatch.setattr(search_cache, "get_cached_results", _cached)
+    monkeypatch.setattr(channel_flag_service, "record_flags", _record_boom)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        body = (await client.get("/api/v1/youtube/search?q=cats")).json()
+    assert body["code"] == 0
+    assert [i["video_id"] for i in body["data"]["items"]] == ["a"]

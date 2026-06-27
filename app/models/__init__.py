@@ -2,6 +2,7 @@ from app.models.asr_pricing_config import AsrPricingConfig
 from app.models.asr_usage import ASRUsage
 from app.models.asr_usage_period import AsrUsagePeriod
 from app.models.asr_user_quota import AsrUserQuota
+from app.models.flagged_channel import FlaggedChannel  # noqa: F401
 from app.models.llm_usage import LLMUsage
 from app.models.notification import Notification
 from app.models.rag_chunk import RagChunk  # noqa: F401
@@ -35,6 +36,7 @@ __all__ = [
     "ServiceConfigHistory",
     "YouTubeAutoTranscribeLog",
     "YouTubeSummaryStyleRecommendation",
+    "FlaggedChannel",
     "YouTubeBlocklistEntry",
     "YouTubeSearchQuery",
     "YouTubeSubscription",

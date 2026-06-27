@@ -137,7 +137,8 @@ async def test_display_off_returns_all_no_cms(monkeypatch, _route_moderate) -> N
     calls = _route_moderate(lambda t: "block")  # 即便会 block,off 也不该调
     hits = [_vh("a", "x"), _vh("b", "y")]
     out = await gate.filter_display(hits, request_id=None)
-    assert [h.video_id for h in out] == ["a", "b"]
+    assert [h.video_id for h in out.kept] == ["a", "b"]
+    assert out.blocked == []
     assert calls["n"] == 0
 
 
@@ -146,7 +147,8 @@ async def test_display_empty_hits_short_circuits(monkeypatch, _route_moderate) -
     monkeypatch.setattr(gate.config, "display_mode", lambda: "enforce")
     calls = _route_moderate(lambda t: "pass")
     out = await gate.filter_display([], request_id=None)
-    assert out == []
+    assert out.kept == []
+    assert out.blocked == []
     assert calls["n"] == 0
 
 
@@ -156,7 +158,8 @@ async def test_display_enforce_all_pass_kept(monkeypatch, _route_moderate) -> No
     calls = _route_moderate(lambda t: "pass")
     hits = [_vh("a", "x"), _vh("b", "y")]
     out = await gate.filter_display(hits, request_id=None)
-    assert [h.video_id for h in out] == ["a", "b"]
+    assert [h.video_id for h in out.kept] == ["a", "b"]
+    assert out.blocked == []
     assert calls["scenes"] == {"ugc_display"}  # 场景正确
 
 
@@ -167,7 +170,8 @@ async def test_display_enforce_block_dropped_and_logged(monkeypatch, _route_mode
     hits = [_vh("a", "good"), _vh("b", "bad title", channel="EvilCh", channel_id="UCbad")]
     with caplog.at_level(logging.WARNING, logger="app.services.moderation.gate"):
         out = await gate.filter_display(hits, request_id="rid-1")
-    assert [h.video_id for h in out] == ["a"]  # block 项剔除
+    assert [h.video_id for h in out.kept] == ["a"]  # block 项剔除
+    assert [h.video_id for h in out.blocked] == ["b"]  # 但进 blocked 供标记
     msgs = [r.getMessage() for r in caplog.records]
     assert any("moderation_display_block" in m and "UCbad" in m and "mode=enforce" in m for m in msgs)
 
@@ -177,7 +181,8 @@ async def test_display_enforce_review_kept(monkeypatch, _route_moderate) -> None
     monkeypatch.setattr(gate.config, "display_mode", lambda: "enforce")
     _route_moderate(lambda t: "review")
     out = await gate.filter_display([_vh("a", "x")], request_id=None)
-    assert [h.video_id for h in out] == ["a"]  # review 恒放行
+    assert [h.video_id for h in out.kept] == ["a"]  # review 恒放行
+    assert out.blocked == []
 
 
 @pytest.mark.asyncio
@@ -197,7 +202,8 @@ async def test_display_shadow_block_kept_and_logged(monkeypatch, _route_moderate
     hits = [_vh("a", "good"), _vh("b", "bad", channel_id="UCx")]
     with caplog.at_level(logging.WARNING, logger="app.services.moderation.gate"):
         out = await gate.filter_display(hits, request_id=None)
-    assert [h.video_id for h in out] == ["a", "b"]  # shadow 不剔
+    assert [h.video_id for h in out.kept] == ["a", "b"]  # shadow 不剔
+    assert [h.video_id for h in out.blocked] == ["b"]  # shadow 也产标记
     assert any("moderation_display_block" in r.getMessage() and "mode=shadow" in r.getMessage() for r in caplog.records)
 
 
@@ -207,7 +213,8 @@ async def test_display_shadow_degraded_kept(monkeypatch, _route_moderate) -> Non
     _route_moderate(lambda t: "degraded")
     hits = [_vh("a", "x"), _vh("b", "y")]
     out = await gate.filter_display(hits, request_id=None)
-    assert [h.video_id for h in out] == ["a", "b"]  # shadow degraded 不拦
+    assert [h.video_id for h in out.kept] == ["a", "b"]  # shadow degraded 不拦
+    assert out.blocked == []  # degraded 不诬频道,不进 blocked
 
 
 @pytest.mark.asyncio
@@ -216,7 +223,8 @@ async def test_display_blank_text_skips_cms(monkeypatch, _route_moderate) -> Non
     calls = _route_moderate(lambda t: "block")  # 若误调会被剔,断言保留即证未调
     hits = [_vh("a", "", channel=None)]  # title 空 + channel None → 无可审文本
     out = await gate.filter_display(hits, request_id=None)
-    assert [h.video_id for h in out] == ["a"]
+    assert [h.video_id for h in out.kept] == ["a"]
+    assert out.blocked == []
     assert calls["n"] == 0
 
 
@@ -227,5 +235,5 @@ async def test_display_concurrency_bounded(monkeypatch, _route_moderate) -> None
     calls = _route_moderate(lambda t: "pass")
     hits = [_vh(str(i), f"t{i}") for i in range(5)]
     out = await gate.filter_display(hits, request_id=None)
-    assert len(out) == 5
+    assert len(out.kept) == 5
     assert calls["peak"] == 2  # Semaphore=2 严格限并发,5 项分批
