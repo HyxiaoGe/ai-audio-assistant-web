@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.config import settings
@@ -20,6 +21,18 @@ if TYPE_CHECKING:
     from app.services.youtube.search_service import VideoHit
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DisplayModerationOutcome:
+    """filter_display 结果信封:kept=要 upsert+返回的;blocked=被 CMS 判 block 的(供频道标记)。
+
+    kept 与 blocked 解耦:shadow 下 kept=全部 & blocked=[判block项];enforce 下 kept=非block & blocked=[判block项]。
+    标记发生于两态,剔除只在 enforce。注解在 `from __future__ import annotations` 下为字符串,VideoHit 仍仅 TYPE_CHECKING import。
+    """
+
+    kept: list[VideoHit]
+    blocked: list[VideoHit]
 
 
 async def _moderate(text: str, scene: str, request_id: str | None) -> ModerationResult:
@@ -83,18 +96,19 @@ async def publish(text: str, *, request_id: str | None) -> None:
     )
 
 
-async def filter_display(hits: list[VideoHit], *, request_id: str | None) -> list[VideoHit]:
+async def filter_display(hits: list[VideoHit], *, request_id: str | None) -> DisplayModerationOutcome:
     """搜索结果展示态审核(scene=ugc_display)。审 title+频道名 拼接文本,逐项并发。
 
-    off / 空列表 → 原样返回(零 CMS 调用)。
-    enforce:block 项剔除并打频道归因日志;任一 degraded → 抛 51400(整批 fail-closed,
-            调用方不应缓存)。pass / review → 保留。
-    shadow:恒保留;block 项打 would_block 频道归因日志(量误杀 + 预热 Spec#2);degraded 不拦。
-    空/纯空白文本项不调 CMS、直接保留。
+    返回 DisplayModerationOutcome:kept=要 upsert+返回的;blocked=被判 block 的(shadow+enforce 都填,供标记)。
+    off / 空列表 → kept=原样、blocked=[](零 CMS 调用)。
+    enforce:block 项剔除(进 blocked)并打频道归因日志;任一 degraded → 抛 51400(整批 fail-closed,
+            调用方不应缓存、不标记该批)。pass / review → 保留。
+    shadow:恒保留;block 项进 blocked 并打 would_block 日志(量误杀 + 喂标记);degraded 不拦、不进 blocked。
+    空/纯空白文本项不调 CMS、直接保留、不进 blocked。
     """
     mode = config.display_mode()
     if mode == "off" or not hits:
-        return hits
+        return DisplayModerationOutcome(kept=hits, blocked=[])
 
     sem = asyncio.Semaphore(settings.MODERATION_DISPLAY_CONCURRENCY)
 
@@ -108,6 +122,7 @@ async def filter_display(hits: list[VideoHit], *, request_id: str | None) -> lis
     judged = await asyncio.gather(*(_judge(h) for h in hits))
 
     kept: list[VideoHit] = []
+    blocked: list[VideoHit] = []
     counts = {"pass": 0, "review": 0, "block": 0, "degraded": 0, "skip": 0}
     for hit, result in judged:
         if result is None:
@@ -117,17 +132,18 @@ async def filter_display(hits: list[VideoHit], *, request_id: str | None) -> lis
         counts[result.action] = counts.get(result.action, 0) + 1
         if result.action == "block":
             _log_display_block(mode, hit, result, request_id)
+            blocked.append(hit)  # 标记源:shadow+enforce 都记
             if mode == "enforce":
                 continue  # 剔除
             kept.append(hit)  # shadow:保留但已记 would_block
         elif result.action == "degraded":
             if mode == "enforce":
                 raise BusinessError(ErrorCode.MODERATION_SERVICE_UNAVAILABLE)  # 全局 fail-closed
-            kept.append(hit)  # shadow:不拦
+            kept.append(hit)  # shadow:不拦、不诬频道
         else:
             kept.append(hit)  # pass / review → 保留
     _log_display_summary(mode, len(hits), counts, request_id)
-    return kept
+    return DisplayModerationOutcome(kept=kept, blocked=blocked)
 
 
 def _log_display_block(mode: str, hit: VideoHit, result: ModerationResult, request_id: str | None) -> None:
