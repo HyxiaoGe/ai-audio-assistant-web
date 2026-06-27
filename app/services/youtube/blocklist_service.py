@@ -147,11 +147,6 @@ async def resolve_channel_meta(handle: str) -> tuple[str | None, str | None]:
     return await asyncio.to_thread(_resolve_channel_meta_sync, url)
 
 
-async def resolve_channel_id(handle: str) -> str | None:
-    """@handle → 规范 channel_id(薄包装,仅取 id)。"""
-    return (await resolve_channel_meta(handle))[0]
-
-
 async def resolve_channel_name_by_id(channel_id: str) -> str | None:
     """channel_id → 频道名(Task 3 回填用);拼 /channel/UCx 规范 URL,杜绝 SSRF。失败返 None。"""
     cid = channel_id.strip()
