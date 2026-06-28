@@ -50,7 +50,7 @@ def test_extract_youtube_info_returns_duration(monkeypatch: pytest.MonkeyPatch) 
     _FakeYDL._side_effects = [{"title": "X", "url": "u", "duration": 321}]
     monkeypatch.setattr(process_youtube, "YoutubeDL", _FakeYDL)
 
-    direct_url, title, duration, channel_id, channel_name = process_youtube._extract_youtube_info("https://x/y")
+    direct_url, title, duration, channel_id, handle, channel_name = process_youtube._extract_youtube_info("https://x/y")
     assert (direct_url, title, duration) == ("u", "X", 321)
 
 
@@ -62,7 +62,7 @@ def test_extract_youtube_info_duration_none_when_absent(monkeypatch: pytest.Monk
     _FakeYDL._side_effects = [{"title": "X", "url": "u"}]
     monkeypatch.setattr(process_youtube, "YoutubeDL", _FakeYDL)
 
-    _, _, duration, _, _ = process_youtube._extract_youtube_info("https://x/y")
+    _, _, duration, _, _, _ = process_youtube._extract_youtube_info("https://x/y")
     assert duration is None
 
 
@@ -71,8 +71,10 @@ def test_extract_youtube_info_returns_channel(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(process_youtube.settings, "YOUTUBE_RESOLVE_MAX_ATTEMPTS", 1)
     monkeypatch.setattr(process_youtube, "_youtube_ydl_opts", lambda: {})
     _FakeYDL._calls["n"] = 0
-    _FakeYDL._side_effects = [{"title": "X", "url": "u", "duration": 10, "channel_id": "UCabc", "channel": "Lex"}]
+    _FakeYDL._side_effects = [
+        {"title": "X", "url": "u", "duration": 10, "channel_id": "UCabc", "uploader_id": "@lex", "channel": "Lex"}
+    ]
     monkeypatch.setattr(process_youtube, "YoutubeDL", _FakeYDL)
 
-    _, _, _, channel_id, channel_name = process_youtube._extract_youtube_info("https://x/y")
-    assert (channel_id, channel_name) == ("UCabc", "Lex")
+    _, _, _, channel_id, handle, channel_name = process_youtube._extract_youtube_info("https://x/y")
+    assert (channel_id, handle, channel_name) == ("UCabc", "@lex", "Lex")

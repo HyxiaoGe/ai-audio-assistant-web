@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import unquote
@@ -58,7 +59,7 @@ _BLOCKLIST_STMT = select(YouTubeBlocklistEntry.match_field, YouTubeBlocklistEntr
 )
 
 
-def _build_blocklist(rows) -> Blocklist:
+def _build_blocklist(rows: Iterable[tuple[str, str]]) -> Blocklist:
     terms = _env_terms()
     channel_ids: set[str] = set()
     channel_names: set[str] = set()
