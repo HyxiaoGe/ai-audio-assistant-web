@@ -578,17 +578,19 @@ def _duration_over_cap(duration: int | None) -> bool:
     return bool(cap and cap > 0 and duration and duration > cap)
 
 
-def _extract_youtube_info(url: str) -> tuple[str | None, str | None, int | None]:
-    def _do() -> tuple[str | None, str | None, int | None]:
+def _extract_youtube_info(url: str) -> tuple[str | None, str | None, int | None, str | None, str | None]:
+    def _do() -> tuple[str | None, str | None, int | None, str | None, str | None]:
         with YoutubeDL(_youtube_ydl_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
             if isinstance(info, str):
-                return info, None, None
+                return info, None, None, None, None
             title = info.get("title") if isinstance(info, dict) else None
             direct_url = _extract_direct_url(info) if isinstance(info, dict) else None
             raw = info.get("duration") if isinstance(info, dict) else None
             duration = int(raw) if isinstance(raw, (int, float)) and raw > 0 else None
-            return direct_url, title, duration
+            channel_id = (info.get("channel_id") or info.get("uploader_id")) if isinstance(info, dict) else None
+            channel_name = (info.get("channel") or info.get("uploader")) if isinstance(info, dict) else None
+            return direct_url, title, duration, channel_id, channel_name
 
     return _run_with_youtube_retry(_do, max_attempts=settings.YOUTUBE_RESOLVE_MAX_ATTEMPTS, what="resolve")
 
@@ -906,7 +908,7 @@ def _process_youtube(
             stage_manager.start_stage(session, StageType.RESOLVE_YOUTUBE)
 
         try:
-            direct_url, title, resolved_duration = _extract_youtube_info(task.source_url)
+            direct_url, title, resolved_duration, channel_id, channel_name = _extract_youtube_info(task.source_url)
             if _duration_over_cap(resolved_duration):
                 # 下载前即拦截：省掉下载 + ASR 成本。BusinessError 经下方 except → 终态 failed、不重试。
                 raise BusinessError(
