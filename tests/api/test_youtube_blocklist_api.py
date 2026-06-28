@@ -22,16 +22,17 @@ _ADMIN = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 class _Entry:
     """BlocklistEntryOut.model_validate(...) 用的鸭子类型行(from_attributes)。"""
 
-    def __init__(self, *, id, kind, match_field, raw_value, note, created_at):
+    def __init__(self, *, id, kind, match_field, raw_value, note, created_at, normalized_value=""):
         self.id = id
         self.kind = kind
         self.match_field = match_field
         self.raw_value = raw_value
         self.note = note
         self.created_at = created_at
+        self.normalized_value = normalized_value
 
 
-def _entry(eid: str, kind: str, match_field: str, raw_value: str) -> _Entry:
+def _entry(eid: str, kind: str, match_field: str, raw_value: str, normalized_value: str = "") -> _Entry:
     return _Entry(
         id=eid,
         kind=kind,
@@ -39,6 +40,7 @@ def _entry(eid: str, kind: str, match_field: str, raw_value: str) -> _Entry:
         raw_value=raw_value,
         note=None,
         created_at=datetime(2026, 6, 26, tzinfo=UTC),
+        normalized_value=normalized_value,
     )
 
 
@@ -74,6 +76,23 @@ async def test_list_returns_entries(monkeypatch: Any) -> None:
     assert body["code"] == 0
     raws = [i["raw_value"] for i in body["data"]["items"]]
     assert raws == ["bad word", "Lex Fridman"]
+
+
+async def test_list_includes_normalized_value(monkeypatch: Any) -> None:
+    async def _list(_db: Any) -> list[_Entry]:
+        return [
+            _entry("e1", "channel", "channel_id", "https://youtube.com/channel/UC1234567890abcdefghijkl",
+                   normalized_value="UC1234567890abcdefghijkl"),
+            _entry("e2", "channel", "channel_handle", "https://youtube.com/@LexFridman", normalized_value="lexfridman"),
+            _entry("e3", "channel", "channel_name", "Lex Fridman", normalized_value="lex fridman"),
+        ]
+
+    monkeypatch.setattr(blocklist_service, "list_entries", _list)
+    async with _client(_make_app(monkeypatch)) as client:
+        body = (await client.get("/api/v1/admin/youtube-blocklist")).json()
+    assert body["code"] == 0
+    normals = [i["normalized_value"] for i in body["data"]["items"]]
+    assert normals == ["UC1234567890abcdefghijkl", "lexfridman", "lex fridman"]
 
 
 async def test_add_channel_passes_admin_id_and_invalidates(monkeypatch: Any) -> None:
@@ -141,6 +160,7 @@ def test_blocklist_entry_out_maps_display_name_to_name() -> None:
         kind="channel",
         match_field="channel_id",
         raw_value="UCabc",
+        normalized_value="ucabc",
         note=None,
         created_at=datetime(2026, 6, 27),
         display_name="BBC News 中文",
@@ -158,6 +178,7 @@ def test_blocklist_entry_out_name_defaults_none() -> None:
         kind="term",
         match_field="query",
         raw_value="bad",
+        normalized_value="bad",
         note=None,
         created_at=datetime(2026, 6, 27),
         display_name=None,
