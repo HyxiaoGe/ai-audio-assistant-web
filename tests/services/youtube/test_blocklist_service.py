@@ -150,7 +150,53 @@ def test_normalize_handle_strips_before_stripping_at() -> None:
     assert bls.normalize_handle("@夸克说") == "夸克说"
 
 
+def test_is_channel_blocked_by_fields_three_dimensions() -> None:
+    bl = Blocklist(
+        terms=frozenset(),
+        channel_ids=frozenset({"UCabc"}),
+        channel_names=frozenset({"lex fridman"}),
+        channel_handles=frozenset({"globalnewstw"}),
+    )
+    assert bls.is_channel_blocked_by_fields("UCabc", None, None, bl) is True
+    assert bls.is_channel_blocked_by_fields(None, "@GlobalNewsTW", None, bl) is True  # handle 归一化
+    assert bls.is_channel_blocked_by_fields(None, None, "Lex  Fridman", bl) is True   # name normalize_query
+    assert bls.is_channel_blocked_by_fields(None, None, None, bl) is False            # 全 None 放行
+    assert bls.is_channel_blocked_by_fields("UCxyz", "@other", "Other", bl) is False  # 均未命中
+
+
 # ---- 加载 + 缓存 ----
+
+
+class _SyncFakeSession:
+    """get_blocklist_sync 的同步假会话:execute(...).all() 返回 (match_field, normalized_value)。"""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.execute_calls = 0
+
+    def execute(self, _stmt):
+        self.execute_calls += 1
+        return _Result(self._rows)
+
+
+def test_get_blocklist_sync_partitions_and_shares_cache() -> None:
+    bls.invalidate_cache()
+    rows = [
+        ("channel_id", "UCbad"),
+        ("query", "bad word"),
+        ("channel_handle", "h1"),
+        ("channel_name", "some name"),
+    ]
+    session = _SyncFakeSession(rows)
+    bl = bls.get_blocklist_sync(session)
+    assert "UCbad" in bl.channel_ids
+    assert "bad word" in bl.terms
+    assert "h1" in bl.channel_handles
+    assert "some name" in bl.channel_names
+    # 第二次命中缓存,不再查库
+    bls.get_blocklist_sync(session)
+    assert session.execute_calls == 1
+    bls.invalidate_cache()
 
 
 async def test_get_blocklist_partitions_rows_and_unions_env(monkeypatch: pytest.MonkeyPatch) -> None:

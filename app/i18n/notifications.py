@@ -70,6 +70,10 @@ _TASK_FAILED_BODY_BY_ERROR_CODE: dict[int, dict[str, str]] = {
         "zh": "《{task_title}》文件过大，处理失败，请压缩后重试。",
         "en": "“{task_title}” is too large to process. Please compress it and try again.",
     },
+    40018: {  # CHANNEL_BLOCKED
+        "zh": "《{task_title}》所在频道已被屏蔽，无法转写。",
+        "en": "“{task_title}” belongs to a blocked channel and cannot be transcribed.",
+    },
 }
 
 # 任何兜底场景下的通用友好串（绝不露原始错误）。

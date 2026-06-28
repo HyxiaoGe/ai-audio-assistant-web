@@ -384,7 +384,7 @@ def test_extract_youtube_info_retries_transient_then_resolves(monkeypatch: pytes
     ]
     monkeypatch.setattr(process_youtube, "YoutubeDL", _FakeYDL)
 
-    direct_url, title, duration = process_youtube._extract_youtube_info("https://youtu.be/abc")
+    direct_url, title, duration, _channel_id, _handle, _channel_name = process_youtube._extract_youtube_info("https://youtu.be/abc")
     assert title == "Hello"
     assert direct_url == "https://cdn.example/direct.m4a"
     assert duration == 123

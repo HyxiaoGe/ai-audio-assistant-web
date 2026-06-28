@@ -51,6 +51,7 @@ from app.services.youtube import (
     YouTubeOAuthService,
     YouTubeSubscriptionService,
     YouTubeVideoService,
+    blocklist_service,
 )
 from app.services.youtube.summary_style_recommendation import recommend_summary_style_for_video
 
@@ -1014,6 +1015,11 @@ async def transcribe_video(
                 ErrorCode.TASK_PROCESSING,
                 reason="Video is already being processed",
             )
+
+    # 频道黑名单:管理员屏蔽的频道不允许转写(创建前即时拦,前端按钮立刻报错)
+    bl = await blocklist_service.get_blocklist(db)
+    if blocklist_service.is_channel_blocked_by_fields(video.channel_id, None, None, bl):
+        raise BusinessError(ErrorCode.CHANNEL_BLOCKED)
 
     # Create task using TaskService
     from app.schemas.task import TaskCreateRequest, TaskOptions

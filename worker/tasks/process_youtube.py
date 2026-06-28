@@ -46,6 +46,7 @@ from app.services.summary.style_resolution import (
 )
 from app.services.task_service import TaskService
 from app.services.transcript_polish import polish_transcripts
+from app.services.youtube import blocklist_service
 from worker.celery_app import celery_app
 from worker.db import get_sync_db_session
 from worker.redis_client import publish_task_update_sync
@@ -578,17 +579,31 @@ def _duration_over_cap(duration: int | None) -> bool:
     return bool(cap and cap > 0 and duration and duration > cap)
 
 
-def _extract_youtube_info(url: str) -> tuple[str | None, str | None, int | None]:
-    def _do() -> tuple[str | None, str | None, int | None]:
+def _check_channel_blocklist(channel_id: str | None, handle: str | None, channel_name: str | None) -> None:
+    """命中频道黑名单则 raise CHANNEL_BLOCKED。供 RESOLVE_YOUTUBE 阶段在下载/ASR 之前调用:
+    raise 由调用处的 except → _classify_youtube_error(对 BusinessError 原样返回)→ 终态 failed、不重试。"""
+    if not channel_id and not handle and not channel_name:
+        return
+    with get_sync_db_session() as session:
+        bl = blocklist_service.get_blocklist_sync(session)
+    if blocklist_service.is_channel_blocked_by_fields(channel_id, handle, channel_name, bl):
+        raise BusinessError(ErrorCode.CHANNEL_BLOCKED)
+
+
+def _extract_youtube_info(url: str) -> tuple[str | None, str | None, int | None, str | None, str | None, str | None]:
+    def _do() -> tuple[str | None, str | None, int | None, str | None, str | None, str | None]:
         with YoutubeDL(_youtube_ydl_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
             if isinstance(info, str):
-                return info, None, None
+                return info, None, None, None, None, None
             title = info.get("title") if isinstance(info, dict) else None
             direct_url = _extract_direct_url(info) if isinstance(info, dict) else None
             raw = info.get("duration") if isinstance(info, dict) else None
             duration = int(raw) if isinstance(raw, (int, float)) and raw > 0 else None
-            return direct_url, title, duration
+            channel_id = info.get("channel_id") if isinstance(info, dict) else None
+            handle = info.get("uploader_id") if isinstance(info, dict) else None
+            channel_name = (info.get("channel") or info.get("uploader")) if isinstance(info, dict) else None
+            return direct_url, title, duration, channel_id, handle, channel_name
 
     return _run_with_youtube_retry(_do, max_attempts=settings.YOUTUBE_RESOLVE_MAX_ATTEMPTS, what="resolve")
 
@@ -906,13 +921,15 @@ def _process_youtube(
             stage_manager.start_stage(session, StageType.RESOLVE_YOUTUBE)
 
         try:
-            direct_url, title, resolved_duration = _extract_youtube_info(task.source_url)
+            direct_url, title, resolved_duration, channel_id, handle, channel_name = _extract_youtube_info(task.source_url)
             if _duration_over_cap(resolved_duration):
                 # 下载前即拦截：省掉下载 + ASR 成本。BusinessError 经下方 except → 终态 failed、不重试。
                 raise BusinessError(
                     ErrorCode.MEDIA_TOO_LONG,
                     max_minutes=settings.INGEST_MAX_DURATION_SECONDS // 60,
                 )
+            # 频道黑名单:下载+ASR 之前拦,命中即终态 failed、不重试不扣费(同 MEDIA_TOO_LONG 路径)
+            _check_channel_blocklist(channel_id, handle, channel_name)
             with get_sync_db_session() as session:
                 stage_manager.complete_stage(session, StageType.RESOLVE_YOUTUBE, {"title": title})
         except Exception as exc:
