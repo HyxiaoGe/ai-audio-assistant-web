@@ -19,6 +19,7 @@ class BlocklistEntryOut(BaseModel):
     kind: str
     match_field: str
     raw_value: str
+    normalized_value: str
     name: str | None = Field(default=None, validation_alias="display_name")
     note: str | None
     created_at: datetime
