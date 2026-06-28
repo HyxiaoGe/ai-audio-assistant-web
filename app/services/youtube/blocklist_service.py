@@ -8,6 +8,7 @@ from urllib.parse import unquote
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.exceptions import BusinessError
@@ -52,21 +53,12 @@ def _env_terms() -> set[str]:
     return {normalize_query(w) for w in settings.YOUTUBE_SEARCH_DENYLIST if w and w.strip()}
 
 
-async def get_blocklist(db: AsyncSession) -> Blocklist:
-    """加载黑名单(env terms ∪ DB 活跃行),30s TTL 进程缓存。"""
-    global _cache, _cache_expires_at
-    now = datetime.now(UTC)
-    if _cache is not None and _cache_expires_at is not None and now < _cache_expires_at:
-        return _cache
+_BLOCKLIST_STMT = select(YouTubeBlocklistEntry.match_field, YouTubeBlocklistEntry.normalized_value).where(
+    YouTubeBlocklistEntry.deleted_at.is_(None)
+)
 
-    rows = (
-        await db.execute(
-            select(YouTubeBlocklistEntry.match_field, YouTubeBlocklistEntry.normalized_value).where(
-                YouTubeBlocklistEntry.deleted_at.is_(None)
-            )
-        )
-    ).all()
 
+def _build_blocklist(rows) -> Blocklist:
     terms = _env_terms()
     channel_ids: set[str] = set()
     channel_names: set[str] = set()
@@ -80,13 +72,35 @@ async def get_blocklist(db: AsyncSession) -> Blocklist:
             channel_handles.add(normalized_value)
         elif match_field == "channel_name":
             channel_names.add(normalized_value)
-
-    bl = Blocklist(
+    return Blocklist(
         terms=frozenset(terms),
         channel_ids=frozenset(channel_ids),
         channel_names=frozenset(channel_names),
         channel_handles=frozenset(channel_handles),
     )
+
+
+async def get_blocklist(db: AsyncSession) -> Blocklist:
+    """加载黑名单(env terms ∪ DB 活跃行),30s TTL 进程缓存。"""
+    global _cache, _cache_expires_at
+    now = datetime.now(UTC)
+    if _cache is not None and _cache_expires_at is not None and now < _cache_expires_at:
+        return _cache
+    rows = (await db.execute(_BLOCKLIST_STMT)).all()
+    bl = _build_blocklist(rows)
+    _cache = bl
+    _cache_expires_at = now + timedelta(seconds=settings.BLOCKLIST_CACHE_TTL_SECONDS)
+    return bl
+
+
+def get_blocklist_sync(session: Session) -> Blocklist:
+    """get_blocklist 的同步版(worker get_sync_db_session 调用),共享同一进程 TTL 缓存。"""
+    global _cache, _cache_expires_at
+    now = datetime.now(UTC)
+    if _cache is not None and _cache_expires_at is not None and now < _cache_expires_at:
+        return _cache
+    rows = session.execute(_BLOCKLIST_STMT).all()
+    bl = _build_blocklist(rows)
     _cache = bl
     _cache_expires_at = now + timedelta(seconds=settings.BLOCKLIST_CACHE_TTL_SECONDS)
     return bl

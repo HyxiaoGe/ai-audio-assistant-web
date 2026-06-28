@@ -167,6 +167,38 @@ def test_is_channel_blocked_by_fields_three_dimensions() -> None:
 # ---- 加载 + 缓存 ----
 
 
+class _SyncFakeSession:
+    """get_blocklist_sync 的同步假会话:execute(...).all() 返回 (match_field, normalized_value)。"""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.execute_calls = 0
+
+    def execute(self, _stmt):
+        self.execute_calls += 1
+        return _Result(self._rows)
+
+
+def test_get_blocklist_sync_partitions_and_shares_cache() -> None:
+    bls.invalidate_cache()
+    rows = [
+        ("channel_id", "UCbad"),
+        ("query", "bad word"),
+        ("channel_handle", "h1"),
+        ("channel_name", "some name"),
+    ]
+    session = _SyncFakeSession(rows)
+    bl = bls.get_blocklist_sync(session)
+    assert "UCbad" in bl.channel_ids
+    assert "bad word" in bl.terms
+    assert "h1" in bl.channel_handles
+    assert "some name" in bl.channel_names
+    # 第二次命中缓存,不再查库
+    bls.get_blocklist_sync(session)
+    assert session.execute_calls == 1
+    bls.invalidate_cache()
+
+
 async def test_get_blocklist_partitions_rows_and_unions_env(monkeypatch: pytest.MonkeyPatch) -> None:
     bls.invalidate_cache()
     monkeypatch.setattr(bls.settings, "YOUTUBE_SEARCH_DENYLIST", ["  Env Bad "])
