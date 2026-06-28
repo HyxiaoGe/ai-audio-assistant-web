@@ -18,6 +18,7 @@ from app.models.task import Task
 from app.models.youtube_auto_transcribe_log import YouTubeAutoTranscribeLog
 from app.models.youtube_subscription import YouTubeSubscription
 from app.models.youtube_video import YouTubeVideo
+from app.services.youtube import blocklist_service
 from worker.db import get_sync_db_session
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,26 @@ def _process_single_video(
             "video_id": video_id,
             "reason": "task_exists",
             "task_id": str(existing_task.id),
+        }
+
+    # 频道黑名单:管理员屏蔽的频道不自动转写(与时长/重复 skip 同档处理)
+    bl = blocklist_service.get_blocklist_sync(session)
+    if blocklist_service.is_channel_blocked_by_fields(
+        subscription.channel_id, None, subscription.channel_title, bl
+    ):
+        log = YouTubeAutoTranscribeLog(
+            user_id=user_id,
+            video_id=video_id,
+            subscription_id=str(subscription.id),
+            status="skipped",
+            skip_reason="channel_blocked",
+        )
+        session.add(log)
+        session.commit()
+        return {
+            "status": "skipped",
+            "video_id": video_id,
+            "reason": "channel_blocked",
         }
 
     # Create task
