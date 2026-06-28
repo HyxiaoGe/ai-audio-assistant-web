@@ -150,6 +150,20 @@ def test_normalize_handle_strips_before_stripping_at() -> None:
     assert bls.normalize_handle("@夸克说") == "夸克说"
 
 
+def test_is_channel_blocked_by_fields_three_dimensions() -> None:
+    bl = Blocklist(
+        terms=frozenset(),
+        channel_ids=frozenset({"UCabc"}),
+        channel_names=frozenset({"lex fridman"}),
+        channel_handles=frozenset({"globalnewstw"}),
+    )
+    assert bls.is_channel_blocked_by_fields("UCabc", None, None, bl) is True
+    assert bls.is_channel_blocked_by_fields(None, "@GlobalNewsTW", None, bl) is True  # handle 归一化
+    assert bls.is_channel_blocked_by_fields(None, None, "Lex  Fridman", bl) is True   # name normalize_query
+    assert bls.is_channel_blocked_by_fields(None, None, None, bl) is False            # 全 None 放行
+    assert bls.is_channel_blocked_by_fields("UCxyz", "@other", "Other", bl) is False  # 均未命中
+
+
 # ---- 加载 + 缓存 ----
 
 

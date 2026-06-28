@@ -167,6 +167,22 @@ def is_channel_blocked(hit: VideoHit, bl: Blocklist) -> bool:
     return False
 
 
+def is_channel_blocked_by_fields(
+    channel_id: str | None,
+    handle: str | None,
+    name: str | None,
+    bl: Blocklist,
+) -> bool:
+    """裸字符串版频道判定,与 is_channel_blocked(hit, bl) 同三维同优先级(id > handle > name)。"""
+    if channel_id and channel_id in bl.channel_ids:
+        return True
+    if handle and normalize_handle(handle) in bl.channel_handles:
+        return True
+    if name and normalize_query(name) in bl.channel_names:
+        return True
+    return False
+
+
 def filter_hits(hits: list[VideoHit], bl: Blocklist) -> list[VideoHit]:
     return [h for h in hits if not is_channel_blocked(h, bl)]
 
