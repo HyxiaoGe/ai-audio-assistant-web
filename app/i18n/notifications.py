@@ -75,3 +75,50 @@ _TASK_FAILED_BODY_BY_ERROR_CODE: dict[int, dict[str, str]] = {
         "en": "“{task_title}” belongs to a blocked channel and cannot be transcribed.",
     },
 }
+
+# 任何兜底场景下的通用友好串（绝不露原始错误）。
+_GENERIC_FALLBACK: dict[str, dict[str, str]] = {
+    "zh": {"title": "通知", "body": "您有一条新通知。"},
+    "en": {"title": "Notification", "body": "You have a new notification."},
+}
+
+
+def _safe_format(template: str, params: dict) -> str:
+    """format_map 容错：缺键 / 类型问题都不抛，安全返回模板本体（对齐 core/i18n.py）。"""
+    try:
+        return template.format_map(params)
+    except (KeyError, IndexError, ValueError):
+        return template
+
+
+def render_notification(i18n_key: str, params: dict, locale: str) -> tuple[str, str]:
+    """渲染通知 (title, body)。永不抛；未知 key / locale / 缺 param 安全降级。
+
+    Args:
+        i18n_key: 形如 "notif.task_completed"
+        params: 语言无关渲染参数（task_failed 走 params["error_code"] 选正文）
+        locale: "zh" | "en"，未知回落 zh
+
+    Returns:
+        (title, body) 二元组，均为已渲染字符串。
+    """
+    loc = locale if locale in (_DEFAULT_LOCALE, "en") else _DEFAULT_LOCALE
+    entry = NOTIFICATION_TEXT.get(i18n_key)
+    if entry is None:
+        fb = _GENERIC_FALLBACK[loc]
+        return fb["title"], fb["body"]
+
+    # 假设 catalog 条目永不为空 dict（or 短路靠真值判断）：本表是模块级常量，扩充时须保证
+    # 每个 locale 项含非空 title/body，否则会意外回落到默认语言。
+    texts = entry.get(loc) or entry.get(_DEFAULT_LOCALE) or _GENERIC_FALLBACK[loc]
+    title_tmpl = texts.get("title", _GENERIC_FALLBACK[loc]["title"])
+    body_tmpl = texts.get("body", _GENERIC_FALLBACK[loc]["body"])
+
+    # task_failed：按 error_code 覆盖正文为友好文案；未映射保持默认正文（不露原始错误）。
+    if i18n_key == "notif.task_failed":
+        error_code = params.get("error_code")
+        mapped = _TASK_FAILED_BODY_BY_ERROR_CODE.get(error_code) if isinstance(error_code, int) else None
+        if mapped is not None:
+            body_tmpl = mapped.get(loc) or mapped.get(_DEFAULT_LOCALE, body_tmpl)
+
+    return _safe_format(title_tmpl, params), _safe_format(body_tmpl, params)
