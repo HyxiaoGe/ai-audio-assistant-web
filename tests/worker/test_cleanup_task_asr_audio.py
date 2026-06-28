@@ -36,6 +36,7 @@ _ASR_KEY = "upload/user-1/2026/05/30/" + "a" * 32 + ".asr16k.mp3"
 def test_cleanup_deletes_derived_asr_audio_for_upload(monkeypatch) -> None:
     deleted: list[tuple[str, str]] = []
     monkeypatch.setattr(ct, "_delete_storage_object", lambda provider, key, user_id: deleted.append((provider, key)))
+    monkeypatch.setattr(ct, "_storage_cleanup_providers", lambda: ["oss", "cos", "minio"])
     monkeypatch.setattr(
         ct,
         "_load_task",
@@ -57,6 +58,7 @@ def test_cleanup_deletes_derived_asr_audio_for_upload(monkeypatch) -> None:
 def test_cleanup_skips_derived_key_for_non_upload(monkeypatch) -> None:
     deleted: list[tuple[str, str]] = []
     monkeypatch.setattr(ct, "_delete_storage_object", lambda provider, key, user_id: deleted.append((provider, key)))
+    monkeypatch.setattr(ct, "_storage_cleanup_providers", lambda: ["oss", "cos", "minio"])
     # youtube 任务的 source_key 是转码后的 wav，没有 asr16k.mp3 派生副本
     yt_key = "youtube/user-1/2026/05/30/" + "b" * 32 + ".wav"
     monkeypatch.setattr(

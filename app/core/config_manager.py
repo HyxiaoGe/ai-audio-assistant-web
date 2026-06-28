@@ -361,6 +361,31 @@ class ConfigManager:
             return False
 
     @classmethod
+    def is_configured(cls, service_type: str, name: str) -> bool:
+        """静默判断某 provider 是否已通过 settings 完整配置。
+
+        与 ``validate_config`` / ``get_config`` 不同，本方法在配置缺失或校验失败时
+        **不打任何 ERROR/WARNING 日志、不写缓存、不查 DB 配置中心**——仅依据
+        settings 能否构造出合法配置实例来判定。
+
+        专供 best-effort 多 provider 探测场景（如任务清理遍历 oss/cos/minio）：
+        某个可选 provider 未配置是预期的良性情况，不应产生错误日志，更不应被运维
+        哨兵当作故障告警。需要正常实例化/报错语义时仍用 ``get_config``。
+
+        Returns:
+            True 当且仅当该 schema 已注册且能用 settings 构造出合法配置实例。
+        """
+        if not cls.is_schema_registered(service_type, name):
+            return False
+        try:
+            config_class = cls._schemas[service_type][name]
+            config_data = cls._load_config_from_settings(service_type, name)
+            config_class(**config_data)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
     def validate_config_data(cls, service_type: str, name: str, data: dict[str, Any]) -> ServiceConfig:
         if service_type not in cls._schemas or name not in cls._schemas[service_type]:
             raise ValueError(f"Unknown config schema for {service_type}/{name}")
