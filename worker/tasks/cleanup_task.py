@@ -6,6 +6,7 @@ import logging
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.core.config_manager import ConfigManager
 from app.core.smart_factory import SmartFactory
 from app.models.llm_usage import LLMUsage
 from app.models.notification import Notification
@@ -20,6 +21,20 @@ from worker.db import get_sync_db_session
 from worker.tasks.process_audio import _derive_asr_audio_key
 
 logger = logging.getLogger("worker.cleanup_task")
+
+# 历史上对象可能落在不同存储后端；清理时按优先级 best-effort 遍历。
+_STORAGE_CLEANUP_PROVIDERS = ("oss", "cos", "minio")
+
+
+def _storage_cleanup_providers() -> list[str]:
+    """返回本部署真实配置了的存储 provider，用于清理时按需遍历。
+
+    只遍历已配置的 provider，避免对未启用的可选后端（如本部署从未配置的
+    cos/minio）发起实例化——那会在 config_manager/registry 触发误导性 ERROR
+    日志，进而被运维哨兵当作故障转发飞书告警（实为良性）。仍保留多 provider
+    清理意图：一旦某后端被配置，清理会自动覆盖它。
+    """
+    return [p for p in _STORAGE_CLEANUP_PROVIDERS if ConfigManager.is_configured("storage", p)]
 
 
 def _load_task(session: Session, task_id: str, user_id: str) -> Task | None:
@@ -83,11 +98,17 @@ def cleanup_task_data(self, task_id: str, user_id: str) -> None:
         keys_to_delete = [source_key]
         if source_type == "upload":
             keys_to_delete.append(_derive_asr_audio_key(source_key))
-        # 统一以 OSS 为主；过渡期一并清理 cos/minio 历史副本（best-effort，缺凭证则跳过）
+        # 仅遍历真实配置的存储后端（best-effort 清历史副本）。跳过未配置的可选后端，
+        # 避免实例化失败时打出误导性 ERROR 日志触发运维告警。
+        providers = _storage_cleanup_providers()
+        if not providers:
+            logger.warning(
+                "Cleanup: no configured storage provider; skip object deletion task_id=%s",
+                task_id,
+            )
         for key in keys_to_delete:
-            _delete_storage_object("oss", key, user_id)
-            _delete_storage_object("cos", key, user_id)
-            _delete_storage_object("minio", key, user_id)
+            for provider in providers:
+                _delete_storage_object(provider, key, user_id)
 
     with get_sync_db_session() as session:
         session.execute(delete(Transcript).where(Transcript.task_id == task_id))
