@@ -14,6 +14,12 @@ _UID_B = "22222222-2222-2222-2222-222222222222"
 _TID = "33333333-3333-3333-3333-333333333333"
 
 
+def datetime_fixed() -> Any:
+    import datetime as _dt
+
+    return _dt.datetime(2026, 6, 29, tzinfo=_dt.UTC)
+
+
 class _Result:
     def __init__(self, *, one: Any = None, rows: Any = None, count: int | None = None) -> None:
         self._one = one
@@ -70,3 +76,48 @@ async def test_get_admin_task_bad_uuid_raises_task_not_found() -> None:
     with pytest.raises(BusinessError) as ei:
         await TaskService.get_admin_task(db, "not-a-uuid")  # type: ignore[arg-type]
     assert ei.value.code == ErrorCode.TASK_NOT_FOUND
+
+
+async def test_list_user_tasks_for_admin_maps_rows(monkeypatch: Any) -> None:
+    from app.schemas.public import PublicYouTubeInfo
+
+    yt_row = SimpleNamespace(
+        id="a-id",
+        title="YT 视频",
+        source_type="youtube",
+        status="completed",
+        progress=100,
+        duration_seconds=120,
+        created_at=datetime_fixed(),
+        error_message=None,
+    )
+    up_row = SimpleNamespace(
+        id="b-id",
+        title=None,
+        source_type="upload",
+        status="failed",
+        progress=0,
+        duration_seconds=None,
+        created_at=datetime_fixed(),
+        error_message="转写失败",
+    )
+
+    def _fake_yt(task: Any) -> Any:
+        return PublicYouTubeInfo(video_id="v1", channel_title="频道名") if task.source_type == "youtube" else None
+
+    monkeypatch.setattr(TaskService, "_build_public_youtube_info", staticmethod(_fake_yt))
+    db = _QueueDB([_Result(count=2), _Result(rows=[yt_row, up_row])])
+
+    items, total = await TaskService.list_user_tasks_for_admin(db, _UID_B, 1, 20, "all")  # type: ignore[arg-type]
+
+    assert total == 2
+    assert items[0].channel_title == "频道名"  # youtube 行透出频道名
+    assert items[1].channel_title is None  # 非 youtube → None(先判空再取属性)
+    assert items[1].error_message == "转写失败"  # 失败原因透出
+    assert items[0].title == "YT 视频"
+
+
+async def test_list_user_tasks_for_admin_bad_uuid_returns_empty(monkeypatch: Any) -> None:
+    db = _QueueDB([])  # 不应触达 db
+    items, total = await TaskService.list_user_tasks_for_admin(db, "not-a-uuid", 1, 20, "all")  # type: ignore[arg-type]
+    assert items == [] and total == 0

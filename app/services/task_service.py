@@ -25,6 +25,7 @@ from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
 from app.models.user import UserProfile
+from app.schemas.admin_task import AdminUserTaskItem
 from app.schemas.public import PublicOwner, PublicTaskDetailResponse, PublicTaskListItem, PublicYouTubeInfo
 from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem, TaskVisibilityResponse
 from app.services.asr_quota_service import check_any_provider_available
@@ -475,6 +476,55 @@ class TaskService:
         if task is None:
             raise BusinessError(ErrorCode.TASK_NOT_FOUND)
         return task
+
+    @staticmethod
+    async def list_user_tasks_for_admin(
+        db: AsyncSession,
+        target_user_id: str,
+        page: int,
+        page_size: int,
+        status_filter: str,
+    ) -> tuple[list[AdminUserTaskItem], int]:
+        """列「目标用户」的任务(管理员只读)。镜像 list_tasks 的伞形 status 分桶 + 分页,
+        但按 target_user_id 过滤(非 caller)。target_user_id 非法 UUID → 空结果(不抛,避免
+        管理员手输/粘错炸 500)。channel_title 取自纯函数 _build_public_youtube_info(先判空)。
+        """
+        try:
+            UUID(target_user_id)
+        except (ValueError, TypeError):
+            return [], 0
+
+        base_query = select(Task).where(
+            Task.user_id == target_user_id,
+            Task.deleted_at.is_(None),
+        )
+        if status_filter == "processing":
+            base_query = base_query.where(Task.status.in_(PROCESSING_STATUSES))
+        elif status_filter != "all":
+            base_query = base_query.where(Task.status == status_filter)
+
+        count_query = select(func.count()).select_from(base_query.subquery())
+        total = int((await db.execute(count_query)).scalar_one())
+
+        items_query = base_query.order_by(Task.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        rows = (await db.execute(items_query)).scalars().all()
+        items: list[AdminUserTaskItem] = []
+        for row in rows:
+            info = TaskService._build_public_youtube_info(row)
+            items.append(
+                AdminUserTaskItem(
+                    id=str(row.id),
+                    title=row.title,
+                    source_type=row.source_type,
+                    status=row.status,
+                    progress=row.progress,
+                    duration_seconds=row.duration_seconds,
+                    created_at=row.created_at,
+                    channel_title=info.channel_title if info else None,
+                    error_message=row.error_message,
+                )
+            )
+        return items, total
 
     @staticmethod
     async def list_public_tasks(
