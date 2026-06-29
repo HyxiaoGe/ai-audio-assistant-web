@@ -218,3 +218,49 @@ def test_resolve_dismiss_returns_created_true(monkeypatch) -> None:
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
     flag, created = asyncio.run(cfs.resolve(_FakeDB(_pending_flag()), flag_id="f1", action="dismiss", admin_id="a"))
     assert flag.status == "dismissed" and created is True
+
+
+# ---- batch_resolve ----
+
+
+def test_batch_resolve_mixed_three_states(monkeypatch) -> None:
+    async def _fake_resolve(db, *, flag_id, action, admin_id, note=None):
+        if flag_id == "new":
+            return SimpleNamespace(id="new"), True
+        if flag_id == "dup":
+            return SimpleNamespace(id="dup"), False
+        if flag_id == "stale":
+            raise BusinessError(ErrorCode.FLAG_ALREADY_RESOLVED)
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+
+    monkeypatch.setattr(cfs, "resolve", _fake_resolve)
+    db = _FakeDB(None)
+    out = asyncio.run(cfs.batch_resolve(db, flag_ids=["new", "dup", "stale", "gone"], action="block", admin_id="a"))
+    assert out == [
+        ("new", "succeeded", None),
+        ("dup", "skipped", None),
+        ("stale", "failed", ErrorCode.FLAG_ALREADY_RESOLVED.value),
+        ("gone", "failed", ErrorCode.RESOURCE_NOT_FOUND.value),
+    ]
+    assert db.rolled_back  # 失败条目触发了 rollback,循环未中断
+
+
+def test_batch_resolve_invalid_action_raises_top_level() -> None:
+    with pytest.raises(BusinessError) as ei:
+        asyncio.run(cfs.batch_resolve(_FakeDB(None), flag_ids=["x"], action="frob", admin_id="a"))
+    assert ei.value.code == ErrorCode.INVALID_PARAMETER
+
+
+def test_batch_resolve_one_failure_does_not_stop_others(monkeypatch) -> None:
+    seen = []
+
+    async def _fake_resolve(db, *, flag_id, action, admin_id, note=None):
+        seen.append(flag_id)
+        if flag_id == "boom":
+            raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+        return SimpleNamespace(id=flag_id), True
+
+    monkeypatch.setattr(cfs, "resolve", _fake_resolve)
+    out = asyncio.run(cfs.batch_resolve(_FakeDB(None), flag_ids=["a", "boom", "b"], action="block", admin_id="x"))
+    assert seen == ["a", "boom", "b"]  # 全部尝试过
+    assert [s for _, s, _ in out] == ["succeeded", "failed", "succeeded"]

@@ -152,6 +152,34 @@ async def resolve(
     return flag, created
 
 
+async def batch_resolve(
+    db: AsyncSession,
+    *,
+    flag_ids: list[str],
+    action: str,
+    admin_id: str,
+    note: str | None = None,
+) -> list[tuple[str, str, int | None]]:
+    """逐条复用 resolve() 的 best-effort 批量复核。
+
+    返 [(flag_id, status, code)];status ∈ {succeeded, skipped, failed}。
+    succeeded/skipped 均表示该 flag 已移出 pending 队列;failed 带错误码(int)。
+    add_entry 内部已 commit、resolve 各自 commit → 跨批真原子不可得,故 best-effort 逐条。
+    """
+    if action not in ("block", "dismiss"):
+        # 整批共享同一 action;非法 → 顶层错误,不让每条各报一次
+        raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="action")
+    results: list[tuple[str, str, int | None]] = []
+    for flag_id in flag_ids:
+        try:
+            _flag, created = await resolve(db, flag_id=flag_id, action=action, admin_id=admin_id, note=note)
+            results.append((flag_id, "succeeded" if created else "skipped", None))
+        except BusinessError as e:
+            await db.rollback()  # 清掉本条失败的 session 残留,保后续条目可继续
+            results.append((flag_id, "failed", int(e.code)))
+    return results
+
+
 async def scrub_resolved_titles(db: AsyncSession) -> int:
     """把已处置(非 pending)行的 last_title 置 NULL,返影响条数。
 
