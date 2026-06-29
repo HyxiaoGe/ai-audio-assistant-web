@@ -153,7 +153,6 @@ async def test_get_admin_task_detail_omits_media_keeps_debug(monkeypatch: Any) -
         return task
 
     monkeypatch.setattr(TaskService, "get_admin_task", _fake_get)
-    monkeypatch.setattr(TaskService, "_build_public_youtube_info", staticmethod(lambda _t: None))
 
     detail = await TaskService.get_admin_task_detail(object(), _TID)  # type: ignore[arg-type]
 

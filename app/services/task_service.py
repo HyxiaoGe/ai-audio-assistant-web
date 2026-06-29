@@ -27,7 +27,13 @@ from app.models.task import Task
 from app.models.user import UserProfile
 from app.schemas.admin_task import AdminUserTaskItem
 from app.schemas.public import PublicOwner, PublicTaskDetailResponse, PublicTaskListItem, PublicYouTubeInfo
-from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem, TaskVisibilityResponse
+from app.schemas.task import (
+    TaskCreateRequest,
+    TaskDetailResponse,
+    TaskListItem,
+    TaskStageResponse,
+    TaskVisibilityResponse,
+)
 from app.services.asr_quota_service import check_any_provider_available
 from app.services.media_url import build_media_download_url, build_presigned_media_url
 from app.services.moderation import config as moderation_config
@@ -530,11 +536,9 @@ class TaskService:
     async def get_admin_task_detail(db: AsyncSession, task_id: str) -> TaskDetailResponse:
         """管理员只读任务详情:复用 TaskDetailResponse(含 status/error_message/stages/providers,
         排障刚需),但 audio_url=None + source_key=None(v1 不做音频、不外泄存储键);
-        YouTube 信息走纯函数 _build_public_youtube_info(目标态,不调 caller-id 范围的查询)。
+        YouTube 信息当前置 None(PublicYouTubeInfo 与 TaskDetailResponse.youtube_info 要求的 YouTubeVideoInfo 不兼容;频道名已在列表态 list_user_tasks_for_admin 透出)。
         """
         task = await TaskService.get_admin_task(db, task_id)
-
-        from app.schemas.task import TaskStageResponse
 
         stages = []
         if getattr(task, "stages", None):
