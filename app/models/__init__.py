@@ -13,6 +13,7 @@ from app.models.task import Task
 from app.models.task_stage import TaskStage
 from app.models.transcript import Transcript
 from app.models.user import UserProfile
+from app.models.youtube_allowlist import YouTubeAllowlistEntry  # noqa: F401
 from app.models.youtube_auto_transcribe_log import YouTubeAutoTranscribeLog
 from app.models.youtube_blocklist import YouTubeBlocklistEntry  # noqa: F401
 from app.models.youtube_search import YouTubeSearchQuery  # noqa: F401
@@ -37,6 +38,7 @@ __all__ = [
     "YouTubeAutoTranscribeLog",
     "YouTubeSummaryStyleRecommendation",
     "FlaggedChannel",
+    "YouTubeAllowlistEntry",
     "YouTubeBlocklistEntry",
     "YouTubeSearchQuery",
     "YouTubeSubscription",
