@@ -24,9 +24,26 @@ from app.core.youtube_thumbnail import public_thumbnail_path
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
+from app.models.transcript import Transcript
 from app.models.user import UserProfile
-from app.schemas.public import PublicOwner, PublicTaskDetailResponse, PublicTaskListItem, PublicYouTubeInfo
-from app.schemas.task import TaskCreateRequest, TaskDetailResponse, TaskListItem, TaskVisibilityResponse
+from app.schemas.admin_task import AdminUserTaskItem
+from app.schemas.public import (
+    PublicOwner,
+    PublicSummaryItem,
+    PublicSummaryListResponse,
+    PublicTaskDetailResponse,
+    PublicTaskListItem,
+    PublicTranscriptItem,
+    PublicTranscriptListResponse,
+    PublicYouTubeInfo,
+)
+from app.schemas.task import (
+    TaskCreateRequest,
+    TaskDetailResponse,
+    TaskListItem,
+    TaskStageResponse,
+    TaskVisibilityResponse,
+)
 from app.services.asr_quota_service import check_any_provider_available
 from app.services.media_url import build_media_download_url, build_presigned_media_url
 from app.services.moderation import config as moderation_config
@@ -456,6 +473,179 @@ class TaskService:
         if task is None:
             raise BusinessError(ErrorCode.TASK_NOT_FOUND)
         return task
+
+    @staticmethod
+    async def get_admin_task(db: AsyncSession, task_id: str) -> Task:
+        """管理员只读读路径的资格收口:存在 + 未删即可(无 user_id / is_public / status 过滤)。
+
+        get_public_task 的孪生,但去掉 is_public/completed 闸门——管理员要看私有及失败任务。
+        task_id 先做 UUID 形态校验,防恶意输入打到 DB 层 UUID cast 异常变 500;
+        miss 统一 TASK_NOT_FOUND,不泄露存在性。
+        """
+        try:
+            UUID(task_id)
+        except (ValueError, TypeError):
+            raise BusinessError(ErrorCode.TASK_NOT_FOUND) from None
+        task = (
+            await db.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_(None)))
+        ).scalar_one_or_none()
+        if task is None:
+            raise BusinessError(ErrorCode.TASK_NOT_FOUND)
+        return task
+
+    @staticmethod
+    async def list_user_tasks_for_admin(
+        db: AsyncSession,
+        target_user_id: str,
+        page: int,
+        page_size: int,
+        status_filter: str,
+    ) -> tuple[list[AdminUserTaskItem], int]:
+        """列「目标用户」的任务(管理员只读)。镜像 list_tasks 的伞形 status 分桶 + 分页,
+        但按 target_user_id 过滤(非 caller)。target_user_id 非法 UUID → 空结果(不抛,避免
+        管理员手输/粘错炸 500)。channel_title 取自纯函数 _build_public_youtube_info(先判空)。
+        """
+        try:
+            UUID(target_user_id)
+        except (ValueError, TypeError):
+            return [], 0
+
+        base_query = select(Task).where(
+            Task.user_id == target_user_id,
+            Task.deleted_at.is_(None),
+        )
+        if status_filter == "processing":
+            base_query = base_query.where(Task.status.in_(PROCESSING_STATUSES))
+        elif status_filter != "all":
+            base_query = base_query.where(Task.status == status_filter)
+
+        count_query = select(func.count()).select_from(base_query.subquery())
+        total = int((await db.execute(count_query)).scalar_one())
+
+        items_query = base_query.order_by(Task.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        rows = (await db.execute(items_query)).scalars().all()
+        items: list[AdminUserTaskItem] = []
+        for row in rows:
+            info = TaskService._build_public_youtube_info(row)
+            items.append(
+                AdminUserTaskItem(
+                    id=str(row.id),
+                    title=row.title,
+                    source_type=row.source_type,
+                    status=row.status,
+                    progress=row.progress,
+                    duration_seconds=row.duration_seconds,
+                    created_at=row.created_at,
+                    channel_title=info.channel_title if info else None,
+                    error_message=row.error_message,
+                )
+            )
+        return items, total
+
+    @staticmethod
+    async def get_admin_task_detail(db: AsyncSession, task_id: str) -> TaskDetailResponse:
+        """管理员只读任务详情:复用 TaskDetailResponse(含 status/error_message/stages/providers,
+        排障刚需),但 audio_url=None + source_key=None(v1 不做音频、不外泄存储键);
+        YouTube 信息当前置 None(PublicYouTubeInfo 与 TaskDetailResponse.youtube_info 要求的 YouTubeVideoInfo 不兼容;频道名已在列表态 list_user_tasks_for_admin 透出)。
+        """
+        task = await TaskService.get_admin_task(db, task_id)
+
+        stages = []
+        if getattr(task, "stages", None):
+            stages = [
+                TaskStageResponse(
+                    stage_type=stage.stage_type,
+                    status=stage.status,
+                    started_at=stage.started_at,
+                    completed_at=stage.completed_at,
+                    error_code=stage.error_code,
+                    error_message=stage.error_message,
+                    attempt=stage.attempt,
+                )
+                for stage in task.stages
+                if stage.is_active
+            ]
+
+        return TaskDetailResponse(
+            id=task.id,
+            title=task.title,
+            source_type=task.source_type,
+            source_key=None,
+            source_url=task.source_url,
+            audio_url=None,
+            status=task.status,
+            progress=task.progress,
+            stage=task.stage,
+            duration_seconds=task.duration_seconds,
+            language=task.detected_language,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+            error_message=task.error_message,
+            stages=stages,
+            youtube_info=None,  # PublicYouTubeInfo 与 YouTubeVideoInfo 不兼容;channel 名已在列表透出
+            detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(task.options),
+            is_public=bool(task.is_public),
+            published_at=task.published_at,
+            asr_provider=task.asr_provider,
+            asr_engine=task.asr_engine,
+            asr_variant=task.asr_variant,
+            llm_provider=task.llm_provider,
+        )
+
+    @staticmethod
+    async def get_admin_task_transcript(db: AsyncSession, task_id: str) -> PublicTranscriptListResponse:
+        """管理员只读转写:SELECT-only,绝不 DELETE/INSERT/commit(本方法不含任何惰性切分逻辑,
+        从根上避开私有 transcripts.py 端点的首读写副作用)。复用公开裁剪 schema(无
+        original_content/is_edited,天然不暴露用户修订历史)。
+        """
+        task = await TaskService.get_admin_task(db, task_id)
+        rows = (
+            (await db.execute(select(Transcript).where(Transcript.task_id == task.id).order_by(Transcript.sequence)))
+            .scalars()
+            .all()
+        )
+        items = [
+            PublicTranscriptItem(
+                sequence=row.sequence,
+                speaker_id=row.speaker_id,
+                speaker_label=row.speaker_label,
+                content=row.content,
+                start_time=float(row.start_time),
+                end_time=float(row.end_time),
+            )
+            for row in rows
+        ]
+        return PublicTranscriptListResponse(task_id=str(task.id), total=len(items), items=items)
+
+    @staticmethod
+    async def get_admin_task_summary(db: AsyncSession, task_id: str) -> PublicSummaryListResponse:
+        """管理员只读摘要:active 版本,纯文本——image_url/images 恒 None(v1 不做配图,
+        且管理员媒体票对他人 object_key 会 403)。SELECT-only。
+        """
+        task = await TaskService.get_admin_task(db, task_id)
+        rows = (
+            (
+                await db.execute(
+                    select(Summary)
+                    .where(Summary.task_id == task.id, Summary.is_active.is_(True))
+                    .order_by(Summary.summary_type)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        items = [
+            PublicSummaryItem(
+                summary_type=row.summary_type,
+                version=row.version,
+                content=row.content,
+                image_url=None,
+                images=None,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+        return PublicSummaryListResponse(task_id=str(task.id), total=len(items), items=items)
 
     @staticmethod
     async def list_public_tasks(
