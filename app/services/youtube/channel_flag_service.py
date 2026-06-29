@@ -11,7 +11,7 @@ from app.core.exceptions import BusinessError
 from app.db import async_session_factory
 from app.i18n.codes import ErrorCode
 from app.models.flagged_channel import FlaggedChannel
-from app.services.youtube import blocklist_service
+from app.services.youtube import allowlist_service, blocklist_service
 from app.services.youtube.search_cache import normalize_query
 
 if TYPE_CHECKING:
@@ -114,9 +114,9 @@ async def resolve(
     admin_id: str,
     note: str | None = None,
 ) -> tuple[FlaggedChannel, bool]:
-    """复核处置:block→提升频道黑名单(复用 add_entry)+加白;dismiss→永久加白。仅作用于 pending。
+    """复核处置:block→提升频道黑名单(复用 blocklist_service.add_entry);dismiss→放行加白(复用 allowlist_service.add_entry)并清出复核队列。仅作用于 pending。
 
-    返 (flag, created):created 为 block 时 add_entry 的新建标志(已活跃黑名单=False),dismiss 恒 True。
+    返 (flag, created):created 为对应 add_entry 的新建标志(目标频道已活跃于该名单时为 False，幂等)。
     """
     flag = await db.get(FlaggedChannel, flag_id)
     if flag is None:
@@ -124,9 +124,9 @@ async def resolve(
     if flag.status != "pending":
         raise BusinessError(ErrorCode.FLAG_ALREADY_RESOLVED)
 
+    value = flag.channel_id or (f"@{flag.channel_handle}" if flag.channel_handle else flag.channel_name)
     created = True
     if action == "block":
-        value = flag.channel_id or (f"@{flag.channel_handle}" if flag.channel_handle else flag.channel_name)
         if not value:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="flag")
         try:
@@ -138,6 +138,15 @@ async def resolve(
             raise
         flag.status = "blocked"
     elif action == "dismiss":
+        if not value:
+            raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="flag")
+        try:
+            _entry, created = await allowlist_service.add_entry(
+                db, value=value, note=note, created_by=admin_id, name=flag.channel_name
+            )
+        except Exception:
+            await db.rollback()
+            raise
         flag.status = "dismissed"
     else:
         raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="action")
@@ -149,6 +158,8 @@ async def resolve(
     if action == "block":
         # 缓存失效放在 commit 之后:确保 flag 行与黑名单条目都已落库,不依赖 add_entry 的内部 commit 时序
         blocklist_service.invalidate_cache()
+    elif action == "dismiss":
+        allowlist_service.invalidate_cache()
     return flag, created
 
 

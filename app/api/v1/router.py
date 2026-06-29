@@ -20,6 +20,7 @@ from app.api.v1 import (
     users,
     ws,
     youtube,
+    youtube_allowlist,
     youtube_blocklist,
     youtube_flagged,
     youtube_search,
@@ -45,6 +46,7 @@ api_router.include_router(stats.router)
 api_router.include_router(ws.router)
 api_router.include_router(media.router, prefix="/media", tags=["media"])
 api_router.include_router(youtube.router)
+api_router.include_router(youtube_allowlist.router)
 api_router.include_router(youtube_blocklist.router)
 api_router.include_router(youtube_flagged.router)
 api_router.include_router(youtube_search.router)

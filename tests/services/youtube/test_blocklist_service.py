@@ -159,8 +159,8 @@ def test_is_channel_blocked_by_fields_three_dimensions() -> None:
     )
     assert bls.is_channel_blocked_by_fields("UCabc", None, None, bl) is True
     assert bls.is_channel_blocked_by_fields(None, "@GlobalNewsTW", None, bl) is True  # handle 归一化
-    assert bls.is_channel_blocked_by_fields(None, None, "Lex  Fridman", bl) is True   # name normalize_query
-    assert bls.is_channel_blocked_by_fields(None, None, None, bl) is False            # 全 None 放行
+    assert bls.is_channel_blocked_by_fields(None, None, "Lex  Fridman", bl) is True  # name normalize_query
+    assert bls.is_channel_blocked_by_fields(None, None, None, bl) is False  # 全 None 放行
     assert bls.is_channel_blocked_by_fields("UCxyz", "@other", "Other", bl) is False  # 均未命中
 
 
@@ -330,7 +330,13 @@ async def test_add_entry_idempotent_when_active_exists() -> None:
     assert db.committed is False  # 活跃命中:纯幂等,不写库
 
 
-async def test_add_entry_revives_soft_deleted() -> None:
+async def test_add_entry_revives_soft_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
+    # channel 路径会查放行表;_CrudSession 对每次 execute 都返回同一 found(此处是软删黑名单条目),
+    # 会污染放行表查询 → stub 掉 _allowlist_has_active 解耦(同既有 channel 测试 stub resolve_channel_meta)。
+    async def _no_conflict(_db, _mf, _nv):
+        return False
+
+    monkeypatch.setattr(bls, "_allowlist_has_active", _no_conflict)
     existing = YouTubeBlocklistEntry(
         kind="channel",
         match_field="channel_name",
@@ -502,7 +508,12 @@ async def test_add_entry_returns_created_false_when_active_exists() -> None:
     assert out is existing
 
 
-async def test_add_entry_returns_created_true_on_revive() -> None:
+async def test_add_entry_returns_created_true_on_revive(monkeypatch: pytest.MonkeyPatch) -> None:
+    # channel revive 路径会查放行表;_CrudSession 共享 found 会污染该查询 → stub 解耦放行检查。
+    async def _no_conflict(_db, _mf, _nv):
+        return False
+
+    monkeypatch.setattr(bls, "_allowlist_has_active", _no_conflict)
     revived = YouTubeBlocklistEntry(
         kind="channel",
         match_field="channel_name",
@@ -516,3 +527,41 @@ async def test_add_entry_returns_created_true_on_revive() -> None:
     out, created = await bls.add_entry(db, kind="channel", value="Lex Fridman", note="new", created_by="a")
     assert created is True
     assert out.deleted_at is None
+
+
+# ---- 反向冲突检查(channel 分支) ----
+
+
+async def test_add_channel_rejects_when_allowlisted(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _conflict(_db, _mf, _nv):
+        return True
+
+    monkeypatch.setattr(bls, "_allowlist_has_active", _conflict)
+    db = _CrudSession(found=None)
+    with pytest.raises(BusinessError) as ei:
+        await bls.add_entry(db, kind="channel", value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None)
+    assert ei.value.code == ErrorCode.CHANNEL_BLOCKLIST_ALLOWLIST_CONFLICT
+    assert db.added == [] and db.committed is False
+
+
+async def test_add_term_skips_allowlist_conflict_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    # term 不查放行表:即便 _allowlist_has_active 恒 True,加词也不受影响
+    async def _boom(_db, _mf, _nv):
+        raise AssertionError("term 不应查放行表")
+
+    monkeypatch.setattr(bls, "_allowlist_has_active", _boom)
+    db = _CrudSession(found=None)
+    entry, created = await bls.add_entry(db, kind="term", value="赌博", note=None, created_by=None)
+    assert created is True and entry.match_field == "query"
+
+
+async def test_add_channel_passes_when_not_allowlisted(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _none(_db, _mf, _nv):
+        return False
+
+    monkeypatch.setattr(bls, "_allowlist_has_active", _none)
+    db = _CrudSession(found=None)
+    entry, created = await bls.add_entry(
+        db, kind="channel", value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None
+    )
+    assert created is True and entry.match_field == "channel_id"

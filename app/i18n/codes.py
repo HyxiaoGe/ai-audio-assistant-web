@@ -41,6 +41,8 @@ class ErrorCode(IntEnum):
     SUMMARY_REGENERATING = 40905
     FLAG_ALREADY_RESOLVED = 40906  # 频道标记已被复核处理(非 pending 态再 resolve)
     BLOCKLIST_ENTRY_EXISTS = 40907  # 重复添加已在黑名单中的频道/搜索词
+    ALLOWLIST_ENTRY_EXISTS = 40908  # 重复添加已在放行列表中的频道
+    CHANNEL_BLOCKLIST_ALLOWLIST_CONFLICT = 40909  # 同一频道不能同时在黑/白名单(须先在对应面板移除)
     ASR_QUOTA_EXCEEDED = 40910
     ALL_ASR_QUOTAS_EXCEEDED = 40911
     ASR_PROVIDER_NOT_AVAILABLE = 40912
