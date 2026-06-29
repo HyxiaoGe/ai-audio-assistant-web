@@ -13,7 +13,7 @@ from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.schemas.youtube_search import SearchData, TrendingData, TrendingItemOut
 from app.services.moderation import gate as moderation_gate
-from app.services.youtube import blocklist_service, channel_flag_service, search_cache
+from app.services.youtube import allowlist_service, blocklist_service, channel_flag_service, search_cache
 from app.services.youtube.search_service import YouTubeSearchService
 
 router = APIRouter(prefix="/youtube", tags=["youtube-search"])
@@ -62,10 +62,15 @@ async def search_youtube(
         # 展示态审核:剔除 block 项后再 upsert → 缓存只存干净子集;
         # enforce+degraded 在此抛 51400 → 不到 upsert、不缓存(fail-closed)。off 态即时短路。
         request_id = getattr(request.state, "trace_id", None)
-        outcome = await moderation_gate.filter_display(hits, request_id=request_id)
+        # 放行表:命中频道在送审前分流,跳过 CMS 直接保留 → 不进 record_flags(不再被标记),省 TMS 配额。
+        al = await allowlist_service.get_allowlist(db)
+        to_moderate = [h for h in hits if not allowlist_service.is_channel_allowed(h, al)]
+        outcome = await moderation_gate.filter_display(to_moderate, request_id=request_id)
         # 旁路:把被 block 的频道累积进复核队列(best-effort,record_flags 内部吞异常,不影响搜索)
         await channel_flag_service.record_flags(outcome.blocked)
-        hits = outcome.kept
+        kept_ids = {id(h) for h in outcome.kept}
+        # 原相关性顺序重建:放行项原样保留,送审项按 outcome.kept 取舍。
+        hits = [h for h in hits if allowlist_service.is_channel_allowed(h, al) or id(h) in kept_ids]
         # 结果含被 CMS block 项 → 该查询多半政治/赌博主题 → sticky 标 is_blocked 排除出 trending
         sensitive = len(outcome.blocked) > 0
         await search_cache.upsert_results(db, normalized, display, hits, sensitive=sensitive)

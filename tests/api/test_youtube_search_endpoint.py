@@ -10,7 +10,7 @@ from app.core.exceptions import BusinessError
 from app.core.response import error
 from app.i18n.codes import ErrorCode
 from app.services.moderation import gate as moderation_gate
-from app.services.youtube import blocklist_service, channel_flag_service, search_cache
+from app.services.youtube import allowlist_service, blocklist_service, channel_flag_service, search_cache
 from app.services.youtube.search_service import VideoHit, YouTubeSearchService
 
 
@@ -56,6 +56,11 @@ def _make_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
         return blocklist_service.Blocklist(terms=frozenset(), channel_ids=frozenset(), channel_names=frozenset())
 
     monkeypatch.setattr(blocklist_service, "get_blocklist", _empty_blocklist)
+
+    async def _empty_allowlist(_db: Any) -> allowlist_service.Allowlist:
+        return allowlist_service.Allowlist(frozenset(), frozenset(), frozenset())
+
+    monkeypatch.setattr(youtube_search.allowlist_service, "get_allowlist", _empty_allowlist)
     return app
 
 
@@ -418,3 +423,71 @@ async def test_cache_hit_does_not_record_flags(monkeypatch: pytest.MonkeyPatch) 
         body = (await client.get("/api/v1/youtube/search?q=cats")).json()
     assert body["code"] == 0
     assert [i["video_id"] for i in body["data"]["items"]] == ["a"]
+
+
+async def test_allowlisted_channel_skips_moderation_and_preserves_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    # miss 路径:放行频道在送审前被分流 → filter_display/record_flags 都收不到它,但仍在结果里且保持原序
+    from app.api.v1 import youtube_search
+    from app.services.moderation import gate as _gate
+
+    app = _make_app(monkeypatch)
+
+    hit_allow = VideoHit(
+        video_id="a1",
+        title="政经分析",
+        channel="时事频道",
+        channel_id="UCallow",
+        handle=None,
+        thumbnail="https://i.ytimg.com/vi/a1/hqdefault.jpg",
+        url="https://www.youtube.com/watch?v=a1",
+    )
+    hit_normal = VideoHit(
+        video_id="n1",
+        title="普通视频",
+        channel="别的频道",
+        channel_id="UCnormal",
+        handle=None,
+        thumbnail="https://i.ytimg.com/vi/n1/hqdefault.jpg",
+        url="https://www.youtube.com/watch?v=n1",
+    )
+
+    async def _miss(_db: Any, _n: str) -> None:
+        return None
+
+    async def _search(_self: Any, _q: str, _limit: int) -> list[VideoHit]:
+        return [hit_allow, hit_normal]  # 放行频道排在前
+
+    async def _upsert(_db: Any, _n: str, _d: str, hits: list[VideoHit], *, sensitive: bool = False) -> None:
+        return None
+
+    moderated: list[list[str]] = []
+
+    async def _filter_real(hits: list[VideoHit], *, request_id: Any) -> _gate.DisplayModerationOutcome:
+        moderated.append([h.video_id for h in hits])
+        return _gate.DisplayModerationOutcome(kept=list(hits), blocked=[])
+
+    recorded: list[list[str]] = []
+
+    async def _record(blocked: list[VideoHit]) -> None:
+        recorded.append([h.video_id for h in blocked])
+
+    async def _allowlist(_db: Any) -> allowlist_service.Allowlist:
+        return allowlist_service.Allowlist(
+            channel_ids=frozenset({"UCallow"}),
+            channel_handles=frozenset(),
+            channel_names=frozenset(),
+        )
+
+    monkeypatch.setattr(search_cache, "get_cached_results", _miss)
+    monkeypatch.setattr(YouTubeSearchService, "search", _search)
+    monkeypatch.setattr(search_cache, "upsert_results", _upsert)
+    monkeypatch.setattr(youtube_search.moderation_gate, "filter_display", _filter_real)
+    monkeypatch.setattr(channel_flag_service, "record_flags", _record)
+    monkeypatch.setattr(youtube_search.allowlist_service, "get_allowlist", _allowlist)
+
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search?q=政经")).json()
+    assert body["code"] == 0
+    assert moderated == [["n1"]]  # 放行频道未送审
+    assert recorded == [[]]  # 放行频道未进 record_flags
+    assert [i["video_id"] for i in body["data"]["items"]] == ["a1", "n1"]  # 原序保持,放行项在前
