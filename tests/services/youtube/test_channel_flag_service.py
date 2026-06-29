@@ -97,12 +97,13 @@ def test_resolve_block_promotes_and_marks(monkeypatch) -> None:
 
     async def _add(db, *, kind, value, note, created_by, name=None):
         calls["add"] = (kind, value, created_by, name)
+        return SimpleNamespace(id="e1"), True
 
     monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: calls.setdefault("inval", True))
     flag = _pending_flag()
     db = _FakeDB(flag)
-    out = asyncio.run(cfs.resolve(db, flag_id="f1", action="block", admin_id="admin-1"))
+    out, _ = asyncio.run(cfs.resolve(db, flag_id="f1", action="block", admin_id="admin-1"))
     assert out.status == "blocked"
     assert calls["add"] == ("channel", "UCx", "admin-1", "Evil")  # 频道名快照随 promote 传入
     assert calls.get("inval") is True
@@ -120,7 +121,7 @@ def test_resolve_dismiss_marks_without_blocklist(monkeypatch) -> None:
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
     flag = _pending_flag()
     db = _FakeDB(flag)
-    out = asyncio.run(cfs.resolve(db, flag_id="f1", action="dismiss", admin_id="a2"))
+    out, _ = asyncio.run(cfs.resolve(db, flag_id="f1", action="dismiss", admin_id="a2"))
     assert out.status == "dismissed"
     assert called["add"] is False
     assert out.resolved_by == "a2"
@@ -175,12 +176,12 @@ def test_conflict_last_title_is_status_guarded_case() -> None:
 
 def test_resolve_block_clears_last_title(monkeypatch) -> None:
     async def _add(db, *, kind, value, note, created_by, name=None):
-        pass
+        return SimpleNamespace(id="e1"), True
 
     monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
     flag = _pending_flag()
-    out = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="block", admin_id="a"))
+    out, _ = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="block", admin_id="a"))
     assert out.last_title is None
 
 
@@ -188,5 +189,95 @@ def test_resolve_dismiss_clears_last_title(monkeypatch) -> None:
     monkeypatch.setattr(cfs.blocklist_service, "add_entry", lambda *a, **k: None)
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
     flag = _pending_flag()
-    out = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="dismiss", admin_id="a"))
+    out, _ = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="dismiss", admin_id="a"))
     assert out.last_title is None
+
+
+def test_resolve_block_returns_created_true_when_new(monkeypatch) -> None:
+    async def _add(db, *, kind, value, note, created_by, name=None):
+        return SimpleNamespace(id="e1"), True
+
+    monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
+    monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
+    flag, created = asyncio.run(cfs.resolve(_FakeDB(_pending_flag()), flag_id="f1", action="block", admin_id="a"))
+    assert flag.status == "blocked" and created is True
+
+
+def test_resolve_block_returns_created_false_when_existing(monkeypatch) -> None:
+    async def _add(db, *, kind, value, note, created_by, name=None):
+        return SimpleNamespace(id="e1"), False  # 已活跃黑名单 → 幂等
+
+    monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
+    monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
+    flag, created = asyncio.run(cfs.resolve(_FakeDB(_pending_flag()), flag_id="f1", action="block", admin_id="a"))
+    assert flag.status == "blocked" and created is False  # 仍置 blocked,不报错
+
+
+def test_resolve_dismiss_returns_created_true(monkeypatch) -> None:
+    monkeypatch.setattr(cfs.blocklist_service, "add_entry", lambda *a, **k: None)
+    monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
+    flag, created = asyncio.run(cfs.resolve(_FakeDB(_pending_flag()), flag_id="f1", action="dismiss", admin_id="a"))
+    assert flag.status == "dismissed" and created is True
+
+
+# ---- batch_resolve ----
+
+
+def test_batch_resolve_mixed_three_states(monkeypatch) -> None:
+    async def _fake_resolve(db, *, flag_id, action, admin_id, note=None):
+        if flag_id == "new":
+            return SimpleNamespace(id="new"), True
+        if flag_id == "dup":
+            return SimpleNamespace(id="dup"), False
+        if flag_id == "stale":
+            raise BusinessError(ErrorCode.FLAG_ALREADY_RESOLVED)
+        raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+
+    monkeypatch.setattr(cfs, "resolve", _fake_resolve)
+    db = _FakeDB(None)
+    out = asyncio.run(cfs.batch_resolve(db, flag_ids=["new", "dup", "stale", "gone"], action="block", admin_id="a"))
+    assert out == [
+        ("new", "succeeded", None),
+        ("dup", "skipped", None),
+        ("stale", "failed", ErrorCode.FLAG_ALREADY_RESOLVED.value),
+        ("gone", "failed", ErrorCode.RESOURCE_NOT_FOUND.value),
+    ]
+    assert db.rolled_back  # 失败条目触发了 rollback,循环未中断
+
+
+def test_batch_resolve_invalid_action_raises_top_level() -> None:
+    with pytest.raises(BusinessError) as ei:
+        asyncio.run(cfs.batch_resolve(_FakeDB(None), flag_ids=["x"], action="frob", admin_id="a"))
+    assert ei.value.code == ErrorCode.INVALID_PARAMETER
+
+
+def test_batch_resolve_one_failure_does_not_stop_others(monkeypatch) -> None:
+    seen = []
+
+    async def _fake_resolve(db, *, flag_id, action, admin_id, note=None):
+        seen.append(flag_id)
+        if flag_id == "boom":
+            raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
+        return SimpleNamespace(id=flag_id), True
+
+    monkeypatch.setattr(cfs, "resolve", _fake_resolve)
+    out = asyncio.run(cfs.batch_resolve(_FakeDB(None), flag_ids=["a", "boom", "b"], action="block", admin_id="x"))
+    assert seen == ["a", "boom", "b"]  # 全部尝试过
+    assert [s for _, s, _ in out] == ["succeeded", "failed", "succeeded"]
+
+
+def test_batch_resolve_non_business_exception_isolated(monkeypatch) -> None:
+    async def _fake_resolve(db, *, flag_id, action, admin_id, note=None):
+        if flag_id == "boom":
+            raise RuntimeError("integrity error")  # 非 BusinessError
+        return SimpleNamespace(id=flag_id), True
+
+    monkeypatch.setattr(cfs, "resolve", _fake_resolve)
+    db = _FakeDB(None)
+    out = asyncio.run(cfs.batch_resolve(db, flag_ids=["a", "boom", "b"], action="block", admin_id="x"))
+    assert out == [
+        ("a", "succeeded", None),
+        ("boom", "failed", ErrorCode.SYSTEM_ERROR.value),
+        ("b", "succeeded", None),
+    ]
+    assert db.rolled_back

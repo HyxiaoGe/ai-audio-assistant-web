@@ -7,7 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_admin_user, get_db
 from app.core.response import success
-from app.schemas.youtube_flagged import FlaggedChannelListOut, FlaggedChannelOut, FlagResolveRequest
+from app.schemas.youtube_flagged import (
+    FlagBatchResolveItem,
+    FlagBatchResolveRequest,
+    FlagBatchResolveResponse,
+    FlaggedChannelListOut,
+    FlaggedChannelOut,
+    FlagResolveRequest,
+)
 from app.services.youtube import channel_flag_service
 
 router = APIRouter(prefix="/admin", tags=["youtube-flagged"])
@@ -41,6 +48,22 @@ async def list_flagged_channels(
     return success(data=jsonable_encoder(data))
 
 
+@router.post("/flagged-channels/batch-resolve")
+async def batch_resolve_flagged_channels(
+    body: FlagBatchResolveRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: CurrentUser = Depends(get_admin_user),
+) -> JSONResponse:
+    """批量复核处置(best-effort 逐条):返 per-item 三态明细。当前前端仅 action=block。"""
+    results = await channel_flag_service.batch_resolve(
+        db, flag_ids=body.flag_ids, action=body.action, admin_id=admin.id, note=body.note
+    )
+    items = [FlagBatchResolveItem(flag_id=fid, status=st, code=code) for fid, st, code in results]
+    resolved_count = sum(1 for it in items if it.status in ("succeeded", "skipped"))
+    data = FlagBatchResolveResponse(resolved_count=resolved_count, items=items)
+    return success(data=jsonable_encoder(data))
+
+
 @router.post("/flagged-channels/{flag_id}/resolve")
 async def resolve_flagged_channel(
     flag_id: str,
@@ -49,7 +72,7 @@ async def resolve_flagged_channel(
     admin: CurrentUser = Depends(get_admin_user),
 ) -> JSONResponse:
     """复核处置:action=block 提升频道黑名单 / action=dismiss 永久加白。"""
-    flag = await channel_flag_service.resolve(
+    flag, _ = await channel_flag_service.resolve(
         db, flag_id=flag_id, action=body.action, admin_id=admin.id, note=body.note
     )
     return success(data=jsonable_encoder(_to_out(flag)))

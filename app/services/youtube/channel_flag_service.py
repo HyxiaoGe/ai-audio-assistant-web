@@ -113,20 +113,24 @@ async def resolve(
     action: str,
     admin_id: str,
     note: str | None = None,
-) -> FlaggedChannel:
-    """复核处置:block→提升频道黑名单(复用 add_entry)+加白;dismiss→永久加白。仅作用于 pending。"""
+) -> tuple[FlaggedChannel, bool]:
+    """复核处置:block→提升频道黑名单(复用 add_entry)+加白;dismiss→永久加白。仅作用于 pending。
+
+    返 (flag, created):created 为 block 时 add_entry 的新建标志(已活跃黑名单=False),dismiss 恒 True。
+    """
     flag = await db.get(FlaggedChannel, flag_id)
     if flag is None:
         raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
     if flag.status != "pending":
         raise BusinessError(ErrorCode.FLAG_ALREADY_RESOLVED)
 
+    created = True
     if action == "block":
         value = flag.channel_id or (f"@{flag.channel_handle}" if flag.channel_handle else flag.channel_name)
         if not value:
             raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="flag")
         try:
-            await blocklist_service.add_entry(
+            _entry, created = await blocklist_service.add_entry(
                 db, kind="channel", value=value, note=note, created_by=admin_id, name=flag.channel_name
             )
         except Exception:
@@ -145,7 +149,40 @@ async def resolve(
     if action == "block":
         # 缓存失效放在 commit 之后:确保 flag 行与黑名单条目都已落库,不依赖 add_entry 的内部 commit 时序
         blocklist_service.invalidate_cache()
-    return flag
+    return flag, created
+
+
+async def batch_resolve(
+    db: AsyncSession,
+    *,
+    flag_ids: list[str],
+    action: str,
+    admin_id: str,
+    note: str | None = None,
+) -> list[tuple[str, str, int | None]]:
+    """逐条复用 resolve() 的 best-effort 批量复核。
+
+    返 [(flag_id, status, code)];status ∈ {succeeded, skipped, failed}。
+    succeeded/skipped 均表示该 flag 已移出 pending 队列;failed 带错误码(int)。
+    add_entry 内部已 commit、resolve 各自 commit → 跨批真原子不可得,故 best-effort 逐条。
+    """
+    if action not in ("block", "dismiss"):
+        # 整批共享同一 action;非法 → 顶层错误,不让每条各报一次
+        raise BusinessError(ErrorCode.INVALID_PARAMETER, detail="action")
+    results: list[tuple[str, str, int | None]] = []
+    for flag_id in flag_ids:
+        try:
+            _flag, created = await resolve(db, flag_id=flag_id, action=action, admin_id=admin_id, note=note)
+            results.append((flag_id, "succeeded" if created else "skipped", None))
+        except BusinessError as e:
+            await db.rollback()  # 清掉本条失败的 session 残留,保后续条目可继续
+            results.append((flag_id, "failed", int(e.code)))
+        except Exception:
+            # 非业务异常(如并发唯一键 IntegrityError、DB 故障):同样隔离本条,不打断整批
+            await db.rollback()
+            logger.exception("batch_resolve item failed: flag_id=%s", flag_id)
+            results.append((flag_id, "failed", int(ErrorCode.SYSTEM_ERROR)))
+    return results
 
 
 async def scrub_resolved_titles(db: AsyncSession) -> int:
