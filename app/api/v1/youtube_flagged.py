@@ -49,7 +49,7 @@ async def resolve_flagged_channel(
     admin: CurrentUser = Depends(get_admin_user),
 ) -> JSONResponse:
     """复核处置:action=block 提升频道黑名单 / action=dismiss 永久加白。"""
-    flag = await channel_flag_service.resolve(
+    flag, _ = await channel_flag_service.resolve(
         db, flag_id=flag_id, action=body.action, admin_id=admin.id, note=body.note
     )
     return success(data=jsonable_encoder(_to_out(flag)))

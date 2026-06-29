@@ -97,12 +97,13 @@ def test_resolve_block_promotes_and_marks(monkeypatch) -> None:
 
     async def _add(db, *, kind, value, note, created_by, name=None):
         calls["add"] = (kind, value, created_by, name)
+        return SimpleNamespace(id="e1"), True
 
     monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: calls.setdefault("inval", True))
     flag = _pending_flag()
     db = _FakeDB(flag)
-    out = asyncio.run(cfs.resolve(db, flag_id="f1", action="block", admin_id="admin-1"))
+    out, _ = asyncio.run(cfs.resolve(db, flag_id="f1", action="block", admin_id="admin-1"))
     assert out.status == "blocked"
     assert calls["add"] == ("channel", "UCx", "admin-1", "Evil")  # 频道名快照随 promote 传入
     assert calls.get("inval") is True
@@ -120,7 +121,7 @@ def test_resolve_dismiss_marks_without_blocklist(monkeypatch) -> None:
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
     flag = _pending_flag()
     db = _FakeDB(flag)
-    out = asyncio.run(cfs.resolve(db, flag_id="f1", action="dismiss", admin_id="a2"))
+    out, _ = asyncio.run(cfs.resolve(db, flag_id="f1", action="dismiss", admin_id="a2"))
     assert out.status == "dismissed"
     assert called["add"] is False
     assert out.resolved_by == "a2"
@@ -175,12 +176,12 @@ def test_conflict_last_title_is_status_guarded_case() -> None:
 
 def test_resolve_block_clears_last_title(monkeypatch) -> None:
     async def _add(db, *, kind, value, note, created_by, name=None):
-        pass
+        return SimpleNamespace(id="e1"), True
 
     monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
     flag = _pending_flag()
-    out = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="block", admin_id="a"))
+    out, _ = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="block", admin_id="a"))
     assert out.last_title is None
 
 
@@ -188,5 +189,32 @@ def test_resolve_dismiss_clears_last_title(monkeypatch) -> None:
     monkeypatch.setattr(cfs.blocklist_service, "add_entry", lambda *a, **k: None)
     monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
     flag = _pending_flag()
-    out = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="dismiss", admin_id="a"))
+    out, _ = asyncio.run(cfs.resolve(_FakeDB(flag), flag_id="f1", action="dismiss", admin_id="a"))
     assert out.last_title is None
+
+
+def test_resolve_block_returns_created_true_when_new(monkeypatch) -> None:
+    async def _add(db, *, kind, value, note, created_by, name=None):
+        return SimpleNamespace(id="e1"), True
+
+    monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
+    monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
+    flag, created = asyncio.run(cfs.resolve(_FakeDB(_pending_flag()), flag_id="f1", action="block", admin_id="a"))
+    assert flag.status == "blocked" and created is True
+
+
+def test_resolve_block_returns_created_false_when_existing(monkeypatch) -> None:
+    async def _add(db, *, kind, value, note, created_by, name=None):
+        return SimpleNamespace(id="e1"), False  # 已活跃黑名单 → 幂等
+
+    monkeypatch.setattr(cfs.blocklist_service, "add_entry", _add)
+    monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
+    flag, created = asyncio.run(cfs.resolve(_FakeDB(_pending_flag()), flag_id="f1", action="block", admin_id="a"))
+    assert flag.status == "blocked" and created is False  # 仍置 blocked,不报错
+
+
+def test_resolve_dismiss_returns_created_true(monkeypatch) -> None:
+    monkeypatch.setattr(cfs.blocklist_service, "add_entry", lambda *a, **k: None)
+    monkeypatch.setattr(cfs.blocklist_service, "invalidate_cache", lambda: None)
+    flag, created = asyncio.run(cfs.resolve(_FakeDB(_pending_flag()), flag_id="f1", action="dismiss", admin_id="a"))
+    assert flag.status == "dismissed" and created is True
