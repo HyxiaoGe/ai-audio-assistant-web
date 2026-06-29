@@ -264,3 +264,20 @@ def test_batch_resolve_one_failure_does_not_stop_others(monkeypatch) -> None:
     out = asyncio.run(cfs.batch_resolve(_FakeDB(None), flag_ids=["a", "boom", "b"], action="block", admin_id="x"))
     assert seen == ["a", "boom", "b"]  # 全部尝试过
     assert [s for _, s, _ in out] == ["succeeded", "failed", "succeeded"]
+
+
+def test_batch_resolve_non_business_exception_isolated(monkeypatch) -> None:
+    async def _fake_resolve(db, *, flag_id, action, admin_id, note=None):
+        if flag_id == "boom":
+            raise RuntimeError("integrity error")  # 非 BusinessError
+        return SimpleNamespace(id=flag_id), True
+
+    monkeypatch.setattr(cfs, "resolve", _fake_resolve)
+    db = _FakeDB(None)
+    out = asyncio.run(cfs.batch_resolve(db, flag_ids=["a", "boom", "b"], action="block", admin_id="x"))
+    assert out == [
+        ("a", "succeeded", None),
+        ("boom", "failed", ErrorCode.SYSTEM_ERROR.value),
+        ("b", "succeeded", None),
+    ]
+    assert db.rolled_back

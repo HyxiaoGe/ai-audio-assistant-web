@@ -177,6 +177,11 @@ async def batch_resolve(
         except BusinessError as e:
             await db.rollback()  # 清掉本条失败的 session 残留,保后续条目可继续
             results.append((flag_id, "failed", int(e.code)))
+        except Exception:
+            # 非业务异常(如并发唯一键 IntegrityError、DB 故障):同样隔离本条,不打断整批
+            await db.rollback()
+            logger.exception("batch_resolve item failed: flag_id=%s", flag_id)
+            results.append((flag_id, "failed", int(ErrorCode.SYSTEM_ERROR)))
     return results
 
 

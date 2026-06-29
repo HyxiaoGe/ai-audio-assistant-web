@@ -6,11 +6,13 @@ from typing import Any
 import pytest
 from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 
 from app.api.deps import get_admin_user, get_current_user, get_db
 from app.api.v1 import youtube_flagged
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
+from app.schemas.youtube_flagged import FlagBatchResolveRequest
 from app.services.youtube import channel_flag_service
 
 
@@ -167,3 +169,24 @@ async def test_batch_resolve_non_admin_forbidden(monkeypatch: pytest.MonkeyPatch
             )
         ).json()
     assert body["code"] == ErrorCode.PERMISSION_DENIED.value
+
+
+# ---- FlagBatchResolveRequest._dedup_nonempty 边界单测 ----
+
+
+def test_flag_batch_resolve_request_dedup_preserves_order() -> None:
+    """strip + 去重保序:["a", " a ", "b"] → ["a", "b"]"""
+    req = FlagBatchResolveRequest(flag_ids=["a", " a ", "b"], action="block")
+    assert req.flag_ids == ["a", "b"]
+
+
+def test_flag_batch_resolve_request_all_whitespace_raises() -> None:
+    """全空白 → ValueError → ValidationError(全空 after strip,min_length=1 列表项数过但 dedup 后空)"""
+    with pytest.raises(ValidationError):
+        FlagBatchResolveRequest(flag_ids=["  ", ""], action="block")
+
+
+def test_flag_batch_resolve_request_over_limit_raises() -> None:
+    """51 个 id → max_length=50 → ValidationError"""
+    with pytest.raises(ValidationError):
+        FlagBatchResolveRequest(flag_ids=[str(i) for i in range(51)], action="block")
