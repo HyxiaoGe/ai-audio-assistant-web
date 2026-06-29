@@ -458,6 +458,25 @@ class TaskService:
         return task
 
     @staticmethod
+    async def get_admin_task(db: AsyncSession, task_id: str) -> Task:
+        """管理员只读读路径的资格收口:存在 + 未删即可(无 user_id / is_public / status 过滤)。
+
+        get_public_task 的孪生,但去掉 is_public/completed 闸门——管理员要看私有及失败任务。
+        task_id 先做 UUID 形态校验,防恶意输入打到 DB 层 UUID cast 异常变 500;
+        miss 统一 TASK_NOT_FOUND,不泄露存在性。
+        """
+        try:
+            UUID(task_id)
+        except (ValueError, TypeError):
+            raise BusinessError(ErrorCode.TASK_NOT_FOUND) from None
+        task = (
+            await db.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_(None)))
+        ).scalar_one_or_none()
+        if task is None:
+            raise BusinessError(ErrorCode.TASK_NOT_FOUND)
+        return task
+
+    @staticmethod
     async def list_public_tasks(
         db: AsyncSession, page: int, page_size: int, viewer_id: str | None = None
     ) -> tuple[list[PublicTaskListItem], int]:
