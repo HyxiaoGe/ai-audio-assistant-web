@@ -30,8 +30,9 @@ async def list_user_tasks(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=50),
     status: str = Query(default="all"),
+    q: str | None = Query(default=None),
 ) -> JSONResponse:
-    items, total = await TaskService.list_user_tasks_for_admin(db, user_id, page, page_size, status)
+    items, total = await TaskService.list_user_tasks_for_admin(db, user_id, page, page_size, status, q)
     data = PageResponse[AdminUserTaskItem](items=items, total=total, page=page, page_size=page_size)
     return success(data=jsonable_encoder(data))
 

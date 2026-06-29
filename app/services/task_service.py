@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import ipaddress
 import logging
@@ -13,7 +14,7 @@ from uuid import UUID
 if TYPE_CHECKING:
     from app.schemas.task import YouTubeVideoInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, is_admin_user
@@ -500,10 +501,14 @@ class TaskService:
         page: int,
         page_size: int,
         status_filter: str,
+        q: str | None = None,
     ) -> tuple[list[AdminUserTaskItem], int]:
         """列「目标用户」的任务(管理员只读)。镜像 list_tasks 的伞形 status 分桶 + 分页,
         但按 target_user_id 过滤(非 caller)。target_user_id 非法 UUID → 空结果(不抛,避免
         管理员手输/粘错炸 500)。channel_title 取自纯函数 _build_public_youtube_info(先判空)。
+
+        q(可选搜索词,去空白后):标题 ILIKE 模糊 OR 任务 id 精确。id 精确仅当 q 是合法 UUID 才纳入
+        (uuid 列 == 非法串在真 PG 会报错);标题模糊对 % / _ / \\ 做 LIKE 转义,避免当通配符。
         """
         try:
             UUID(target_user_id)
@@ -518,6 +523,14 @@ class TaskService:
             base_query = base_query.where(Task.status.in_(PROCESSING_STATUSES))
         elif status_filter != "all":
             base_query = base_query.where(Task.status == status_filter)
+
+        term = (q or "").strip()
+        if term:
+            escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions = [Task.title.ilike(f"%{escaped}%", escape="\\")]
+            with contextlib.suppress(ValueError, TypeError):
+                conditions.append(Task.id == UUID(term))
+            base_query = base_query.where(or_(*conditions))
 
         count_query = select(func.count()).select_from(base_query.subquery())
         total = int((await db.execute(count_query)).scalar_one())

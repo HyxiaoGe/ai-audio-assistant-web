@@ -50,7 +50,7 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
 
 
 async def test_list_tasks_ok(monkeypatch: Any) -> None:
-    async def _list(_db: Any, uid: str, page: int, page_size: int, status_filter: str) -> Any:
+    async def _list(_db: Any, uid: str, page: int, page_size: int, status_filter: str, q: Any = None) -> Any:
         assert uid == _UID_B
         return [
             AdminUserTaskItem(
@@ -73,6 +73,20 @@ async def test_list_tasks_ok(monkeypatch: Any) -> None:
     assert body["code"] == 0
     assert body["data"]["total"] == 1
     assert body["data"]["items"][0]["channel_title"] == "频道"
+
+
+async def test_list_tasks_passes_q(monkeypatch: Any) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _list(_db: Any, uid: str, page: int, page_size: int, status_filter: str, q: Any = None) -> Any:
+        seen["q"] = q
+        return [], 0
+
+    monkeypatch.setattr(TaskService, "list_user_tasks_for_admin", _list)
+    async with _client(_make_app()) as c:
+        r = await c.get(f"/api/v1/admin/users/{_UID_B}/tasks?q=预算")
+    assert r.json()["code"] == 0
+    assert seen["q"] == "预算"  # 查询词透传到 service 层
 
 
 async def test_detail_ok(monkeypatch: Any) -> None:
