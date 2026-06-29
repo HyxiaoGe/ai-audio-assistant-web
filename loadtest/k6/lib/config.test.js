@@ -33,6 +33,7 @@ export default function () {
   assert(opts.thresholds.http_req_failed[0].abortOnFail === true, '错误率阈值带 abortOnFail');
   assert(opts.thresholds.http_req_duration[0].abortOnFail === true, 'p95 阈值带 abortOnFail');
   assert(Array.isArray(opts.thresholds.rate_429), '429 仅记录(无 abortOnFail)');
+  assert(typeof opts.thresholds.rate_429[0] === 'string', 'rate_429 元素为字符串,无 abortOnFail');
 
   console.log('config.test.js 全部断言通过');
 }

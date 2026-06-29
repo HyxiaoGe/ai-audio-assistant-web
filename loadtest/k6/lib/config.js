@@ -39,7 +39,7 @@ export function rampStages(env) {
 
 // 目标 URL + Host 头(直连 :80 绕 CF,靠 Host 头路由)。
 export function target(env, path) {
-  const base = requireEnv(env, 'LOADTEST_BASE_URL'); // 如 http://192.168.1.11
+  const base = requireEnv(env, 'LOADTEST_BASE_URL'); // 主机直连基址,见 loadtest/README.md
   const host = requireEnv(env, 'LOADTEST_HOST');     // nginx 路由用 Host 头
   return {
     url: `${base}${path}`,
