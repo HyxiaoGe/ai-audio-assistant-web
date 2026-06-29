@@ -54,6 +54,7 @@ REMOTE
 
   # 生产邻居探针(从本机经其公网 URL,反映真实用户视角)——防线③核心信号。
   local neigh_code neigh_ms neigh_ms_int
+  # 000 99 = 探测失败哨兵:99s(≫NEIGHBOR_MAX_MS)且 code≠200,必触发 NEIGHBOR!/NEIGHBOR_DOWN!
   read -r neigh_code neigh_ms < <(curl -o /dev/null -s -w '%{http_code} %{time_total}\n' --max-time 5 "$LOADTEST_NEIGHBOR_URL" || echo "000 99")
   neigh_ms_int="$(awk -v s="$neigh_ms" 'BEGIN{printf "%d", s*1000}')"
 
@@ -66,6 +67,7 @@ REMOTE
   breach "$pg_pct" "$PG_CONN_MAX_PCT"       && flags+="PG_CONN "
   breach "$neigh_ms_int" "$NEIGHBOR_MAX_MS" && flags+="NEIGHBOR! "
   [[ "$neigh_code" != "200" ]]              && flags+="NEIGHBOR_DOWN! "
+  [[ -z "$line" ]]                          && flags+="MONITOR_BLIND! "
 
   printf '%s\t%s\t%s\t%sMB\t%s\t%s/%s(%s%%)\t%s\t%sms(%s)\t%s\n' \
     "$ts" "${cpu:-NA}" "${load:-NA}" "$api_mb" "${apicpu:-NA}" \

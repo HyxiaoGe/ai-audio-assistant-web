@@ -20,7 +20,7 @@ brew install k6 shellcheck
 | `LOADTEST_BASE_URL` | ✅ | — | `http://192.168.1.11` 直连源站,绕 CF |
 | `LOADTEST_HOST` | ✅ | — | nginx 路由 Host 头,pre-flight 第 3 步确认 |
 | `LOADTEST_STAGES` | ✅ | — | `10:45,25:45,50:45,100:45,200:45`(RPS:秒段) |
-| `LOADTEST_HEALTH_PATH` | | `/health` | 场景 A 路径 |
+| `LOADTEST_HEALTH_PATH` | | `/api/v1/health` | 场景 A 路径 |
 | `LOADTEST_PUBLIC_PATH` | ✅ | — | `/api/v1/public/tasks/<真实公开任务id>` |
 | `LOADTEST_P95_MS` | | `1500` | p95 熄火阈值(ms),防线① |
 | `LOADTEST_PREALLOC_VUS` | | `50` | ramping-arrival-rate 预分配 VU 数 |
@@ -42,7 +42,7 @@ brew install k6 shellcheck
 export LOADTEST_BASE_URL=http://192.168.1.11
 export LOADTEST_HOST=<nginx 路由 Host>          # pre-flight 第 3 步确认
 export LOADTEST_STAGES=10:45,25:45,50:45,100:45,200:45
-export LOADTEST_HEALTH_PATH=/health
+export LOADTEST_HEALTH_PATH=/api/v1/health
 export LOADTEST_PUBLIC_PATH=/api/v1/public/tasks/<真实公开任务id>
 # 监控侧(ssh)
 export LOADTEST_SSH=dev
@@ -57,16 +57,23 @@ export LOADTEST_NEIGHBOR_URL=https://<同机生产应用>/health
 ## 2. Pre-flight(正式加压前必做,对应 spec §8)
 1. `k6 version` 可用。
 2. 局域网连通 + 绕 CF 证明:
-   `curl -s -D- -o /dev/null -H "Host: $LOADTEST_HOST" "$LOADTEST_BASE_URL/health"`
-   → 期望 200 且响应头含 `x-app-version`(证明打到源站 api 经 nginx)。
-3. 核实 Host + path 路由:对 `/health` 与 `$LOADTEST_PUBLIC_PATH` 各 curl 一次,
+   `curl -s -D- -o /dev/null -H "Host: $LOADTEST_HOST" "$LOADTEST_BASE_URL/api/v1/health"`
+   → 期望 200 且响应头含 `x-app-version`(证明打到源站 api 经 nginx)。直连源站时实际路由以 nginx 为准,若 nginx 另设裸 /health 健康检查位则按实际改 `LOADTEST_HEALTH_PATH`。
+3. 核实 Host + path 路由:对 `/api/v1/health` 与 `$LOADTEST_PUBLIC_PATH` 各 curl 一次,
    确认命中正确容器、公开路径返回**真实数据(非 404)**。
 4. `docker ps` 落实三个容器名;确认 `ssh $LOADTEST_SSH docker ps` 可用。
-5. 低速 dry-run(见第 4 节)走通两条 k6 + 监控,确认曲线有数、TSV 在写。
+5. 低速 dry-run:以下命令覆盖档位为 5 RPS×10s,务必在放开全量前先跑这个:
+   ```bash
+   # 低速 dry-run(覆盖档位为 5 RPS×10s,务必在放开全量前先跑这个)
+   LOADTEST_STAGES=5:10 k6 run --include-system-env-vars loadtest/k6/baseline-health.js
+   LOADTEST_STAGES=5:10 k6 run --include-system-env-vars loadtest/k6/public-read.js
+   ```
+   确认曲线有数、TSV 在写后,再进行下方全量档位压测。
 6. 故意 trip abort:临时 `LOADTEST_P95_MS=1` 跑一次,确认 k6 因越线**自动中止**(验证防线①)。
 7. 记录空载基线读数后,再正式跑。
 
 ## 3. 启动监控(另开一个终端,先于 k6 启动)
+> 该新终端需重新 `export` 同一批监控侧 `LOADTEST_*` 变量(env 不跨终端;否则 `sample.sh` 的 `:?` 守卫会 fail-closed 报缺变量)。
 ```bash
 bash loadtest/monitor/sample.sh
 # 红字告警出现即考虑 Ctrl-C k6

@@ -3,7 +3,7 @@
 import http from 'k6/http';
 import { scenarioOptions, target, record429 } from './lib/config.js';
 
-const HEALTH_PATH = __ENV.LOADTEST_HEALTH_PATH || '/health';
+const HEALTH_PATH = __ENV.LOADTEST_HEALTH_PATH || '/api/v1/health';
 
 export const options = scenarioOptions(__ENV, 'baseline_health');
 
