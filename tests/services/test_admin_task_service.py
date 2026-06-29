@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -40,14 +41,16 @@ class _Result:
 
 
 class _QueueDB:
-    """按预设序列返回 execute 结果;记录是否发生写操作。"""
+    """按预设序列返回 execute 结果;记录是否发生写操作 + 记录收到的语句(供 SQL 断言)。"""
 
     def __init__(self, results: list[_Result]) -> None:
         self._results = list(results)
         self.committed = False
         self.added: list[Any] = []
+        self.statements: list[Any] = []
 
     async def execute(self, _stmt: Any) -> _Result:
+        self.statements.append(_stmt)
         return self._results.pop(0)
 
     def add(self, obj: Any) -> None:
@@ -121,6 +124,60 @@ async def test_list_user_tasks_for_admin_bad_uuid_returns_empty(monkeypatch: Any
     db = _QueueDB([])  # 不应触达 db
     items, total = await TaskService.list_user_tasks_for_admin(db, "not-a-uuid", 1, 20, "all")  # type: ignore[arg-type]
     assert items == [] and total == 0
+
+
+def _params(stmt: Any) -> list[Any]:
+    """编译语句取绑定值列表。比 SQL 文本子串更稳:核对真正进入 WHERE 的参数(类型 + 值),
+    不受 SQLAlchemy 版本在别名/前缀/空白/占位符上的渲染差异影响。"""
+    from sqlalchemy.dialects import postgresql
+
+    return list(stmt.compile(dialect=postgresql.dialect()).params.values())
+
+
+async def test_list_admin_q_title_only_when_not_uuid(monkeypatch: Any) -> None:
+    """q 非合法 UUID:只走标题 ILIKE,绝不把 q 当 uuid 喂给 id 列(否则真 PG 会 500);
+    且 count 与 items 两条 query 都带过滤(分页总数与列表一致)。"""
+    monkeypatch.setattr(TaskService, "_build_public_youtube_info", staticmethod(lambda _t: None))
+    db = _QueueDB([_Result(count=0), _Result(rows=[])])
+    await TaskService.list_user_tasks_for_admin(db, _UID_B, 1, 20, "all", q="预算")  # type: ignore[arg-type]
+    assert len(db.statements) == 2  # count_query + items_query
+    for st in db.statements:
+        vals = _params(st)
+        assert "%预算%" in vals  # 标题模糊绑定值进了两条 query
+        assert not any(isinstance(v, UUID) for v in vals)  # 非法 UUID → 绝无 id 精确比较的 UUID 绑定
+
+
+async def test_list_admin_q_includes_id_when_uuid(monkeypatch: Any) -> None:
+    """q 是合法 UUID:OR 同时含标题模糊 + id 精确(绑定值为 UUID 实例)。"""
+    monkeypatch.setattr(TaskService, "_build_public_youtube_info", staticmethod(lambda _t: None))
+    db = _QueueDB([_Result(count=0), _Result(rows=[])])
+    await TaskService.list_user_tasks_for_admin(db, _UID_B, 1, 20, "all", q=_TID)  # type: ignore[arg-type]
+    vals = _params(db.statements[-1])
+    assert f"%{_TID}%" in vals  # 标题按整串模糊
+    assert any(isinstance(v, UUID) and str(v) == _TID for v in vals)  # 合法 UUID → id 精确匹配纳入
+
+
+async def test_list_admin_blank_q_no_filter(monkeypatch: Any) -> None:
+    """空/纯空白/None 的 q:不附加任何标题过滤(无 % 开头的模糊绑定值)。"""
+    monkeypatch.setattr(TaskService, "_build_public_youtube_info", staticmethod(lambda _t: None))
+    for blank in ("   ", "", None):
+        db = _QueueDB([_Result(count=0), _Result(rows=[])])
+        await TaskService.list_user_tasks_for_admin(db, _UID_B, 1, 20, "all", q=blank)  # type: ignore[arg-type]
+        for st in db.statements:
+            assert not any(isinstance(v, str) and v.startswith("%") for v in _params(st))
+
+
+async def test_list_admin_q_escapes_like_wildcards(monkeypatch: Any) -> None:
+    """q 含 % / _ 时转义为字面量(直接核对绑定值),不当 LIKE 通配,且带 ESCAPE 子句。"""
+    monkeypatch.setattr(TaskService, "_build_public_youtube_info", staticmethod(lambda _t: None))
+    db = _QueueDB([_Result(count=0), _Result(rows=[])])
+    await TaskService.list_user_tasks_for_admin(db, _UID_B, 1, 20, "all", q="50%_x")  # type: ignore[arg-type]
+    from sqlalchemy.dialects import postgresql
+
+    compiled = db.statements[-1].compile(dialect=postgresql.dialect())
+    # 标题 LIKE 的绑定值:% 与 _ 前置 \ 转义,首尾仅保留真正的 % 通配
+    assert "%50\\%\\_x%" in set(compiled.params.values())
+    assert "escape" in str(compiled).lower()  # ESCAPE 子句存在
 
 
 async def test_get_admin_task_detail_omits_media_keeps_debug(monkeypatch: Any) -> None:
