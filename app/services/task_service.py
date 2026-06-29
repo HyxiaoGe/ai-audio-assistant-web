@@ -24,9 +24,19 @@ from app.core.youtube_thumbnail import public_thumbnail_path
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
+from app.models.transcript import Transcript
 from app.models.user import UserProfile
 from app.schemas.admin_task import AdminUserTaskItem
-from app.schemas.public import PublicOwner, PublicTaskDetailResponse, PublicTaskListItem, PublicYouTubeInfo
+from app.schemas.public import (
+    PublicOwner,
+    PublicSummaryItem,
+    PublicSummaryListResponse,
+    PublicTaskDetailResponse,
+    PublicTaskListItem,
+    PublicTranscriptItem,
+    PublicTranscriptListResponse,
+    PublicYouTubeInfo,
+)
 from app.schemas.task import (
     TaskCreateRequest,
     TaskDetailResponse,
@@ -581,6 +591,61 @@ class TaskService:
             asr_variant=task.asr_variant,
             llm_provider=task.llm_provider,
         )
+
+    @staticmethod
+    async def get_admin_task_transcript(db: AsyncSession, task_id: str) -> PublicTranscriptListResponse:
+        """管理员只读转写:SELECT-only,绝不 DELETE/INSERT/commit(本方法不含任何惰性切分逻辑,
+        从根上避开私有 transcripts.py 端点的首读写副作用)。复用公开裁剪 schema(无
+        original_content/is_edited,天然不暴露用户修订历史)。
+        """
+        task = await TaskService.get_admin_task(db, task_id)
+        rows = (
+            (await db.execute(select(Transcript).where(Transcript.task_id == task.id).order_by(Transcript.sequence)))
+            .scalars()
+            .all()
+        )
+        items = [
+            PublicTranscriptItem(
+                sequence=row.sequence,
+                speaker_id=row.speaker_id,
+                speaker_label=row.speaker_label,
+                content=row.content,
+                start_time=float(row.start_time),
+                end_time=float(row.end_time),
+            )
+            for row in rows
+        ]
+        return PublicTranscriptListResponse(task_id=str(task.id), total=len(items), items=items)
+
+    @staticmethod
+    async def get_admin_task_summary(db: AsyncSession, task_id: str) -> PublicSummaryListResponse:
+        """管理员只读摘要:active 版本,纯文本——image_url/images 恒 None(v1 不做配图,
+        且管理员媒体票对他人 object_key 会 403)。SELECT-only。
+        """
+        task = await TaskService.get_admin_task(db, task_id)
+        rows = (
+            (
+                await db.execute(
+                    select(Summary)
+                    .where(Summary.task_id == task.id, Summary.is_active.is_(True))
+                    .order_by(Summary.summary_type)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        items = [
+            PublicSummaryItem(
+                summary_type=row.summary_type,
+                version=row.version,
+                content=row.content,
+                image_url=None,
+                images=None,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+        return PublicSummaryListResponse(task_id=str(task.id), total=len(items), items=items)
 
     @staticmethod
     async def list_public_tasks(

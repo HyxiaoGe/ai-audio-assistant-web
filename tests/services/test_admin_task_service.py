@@ -161,3 +161,50 @@ async def test_get_admin_task_detail_omits_media_keeps_debug(monkeypatch: Any) -
     assert detail.status == "failed"
     assert detail.error_message == "ASR 超时"  # 失败原因可见(排障)
     assert detail.id == _TID
+
+
+async def test_admin_transcript_is_select_only_no_split_write(monkeypatch: Any) -> None:
+    """关键回归:读「单条带时间戳的未切分行」后,DB 绝无写入(不触发 transcripts.py 的惰性切分)。"""
+
+    async def _fake_get(_db: Any, _tid: str) -> Any:
+        return SimpleNamespace(id=_TID, user_id=_UID_B)
+
+    monkeypatch.setattr(TaskService, "get_admin_task", _fake_get)
+    single_row = SimpleNamespace(
+        sequence=1,
+        speaker_id="0",
+        speaker_label=None,
+        content="[00:00.000,00:30.000,0] 一整段未切分的带时间戳转写",
+        start_time=0.0,
+        end_time=30.0,
+    )
+    db = _QueueDB([_Result(rows=[single_row])])
+
+    resp = await TaskService.get_admin_task_transcript(db, _TID)  # type: ignore[arg-type]
+
+    assert resp.total == 1
+    assert resp.items[0].content == single_row.content  # 原样返回,未被拆分/改写
+    assert db.committed is False and db.added == []  # 结构性证明:零写入
+
+
+async def test_admin_summary_is_text_only(monkeypatch: Any) -> None:
+    async def _fake_get(_db: Any, _tid: str) -> Any:
+        return SimpleNamespace(id=_TID, user_id=_UID_B)
+
+    monkeypatch.setattr(TaskService, "get_admin_task", _fake_get)
+    row = SimpleNamespace(
+        summary_type="overview",
+        version=2,
+        content="# 概览\n正文",
+        is_active=True,
+        image_key="users/B/img.png",
+        images=[{"placeholder": "p", "status": "ready"}],
+        created_at=datetime_fixed(),
+    )
+    db = _QueueDB([_Result(rows=[row])])
+
+    resp = await TaskService.get_admin_task_summary(db, _TID)  # type: ignore[arg-type]
+
+    assert resp.items[0].content == "# 概览\n正文"
+    assert resp.items[0].image_url is None and resp.items[0].images is None  # 纯文本,图字段全 None
+    assert db.committed is False and db.added == []
