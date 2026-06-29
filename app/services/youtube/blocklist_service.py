@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.exceptions import BusinessError
 from app.i18n.codes import ErrorCode
+from app.models.youtube_allowlist import YouTubeAllowlistEntry
 from app.models.youtube_blocklist import YouTubeBlocklistEntry
 from app.services.youtube.search_cache import normalize_query
 from app.services.youtube.search_service import VideoHit
@@ -242,6 +243,20 @@ async def list_entries(db: AsyncSession) -> list[YouTubeBlocklistEntry]:
     return list(rows)
 
 
+async def _allowlist_has_active(db: AsyncSession, match_field: str, normalized_value: str) -> bool:
+    """同身份是否已在放行表活跃存在(跨表互斥用)。独立函数便于测试 monkeypatch。"""
+    row = (
+        await db.execute(
+            select(YouTubeAllowlistEntry.id).where(
+                YouTubeAllowlistEntry.match_field == match_field,
+                YouTubeAllowlistEntry.normalized_value == normalized_value,
+                YouTubeAllowlistEntry.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
 async def add_entry(
     db: AsyncSession,
     *,
@@ -278,6 +293,8 @@ async def add_entry(
                     display_name = resolved_name
         elif display_name is None and match_field == "channel_name":
             display_name = raw  # 裸频道名输入本身就是名字
+        if await _allowlist_has_active(db, match_field, normalized_value):
+            raise BusinessError(ErrorCode.CHANNEL_BLOCKLIST_ALLOWLIST_CONFLICT)
 
     existing = (
         await db.execute(
