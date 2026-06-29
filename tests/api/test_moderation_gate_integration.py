@@ -13,7 +13,7 @@ from app.core.response import error
 from app.i18n.codes import ErrorCode
 from app.services.moderation import gate
 from app.services.moderation.client import ModerationResult
-from app.services.youtube import blocklist_service, search_cache
+from app.services.youtube import allowlist_service, blocklist_service, search_cache
 from app.services.youtube.search_service import VideoHit, YouTubeSearchService
 
 
@@ -50,6 +50,14 @@ def _make_youtube_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
         return _empty_bl()
 
     monkeypatch.setattr(blocklist_service, "get_blocklist", _bl)
+
+    async def _al(_db: Any) -> allowlist_service.Allowlist:
+        # 默认空放行表:搜索 miss 分支的 get_allowlist 不应打到哑 db
+        return allowlist_service.Allowlist(
+            channel_ids=frozenset(), channel_handles=frozenset(), channel_names=frozenset()
+        )
+
+    monkeypatch.setattr(allowlist_service, "get_allowlist", _al)
     return app
 
 
