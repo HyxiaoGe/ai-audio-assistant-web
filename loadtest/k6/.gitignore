@@ -1,0 +1,2 @@
+# loadtest/k6/lib/ 是 k6 脚本库目录,不是 Python lib/,解除根 .gitignore 的 lib/ 规则
+!lib/
