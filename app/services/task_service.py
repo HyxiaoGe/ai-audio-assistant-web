@@ -527,6 +527,58 @@ class TaskService:
         return items, total
 
     @staticmethod
+    async def get_admin_task_detail(db: AsyncSession, task_id: str) -> TaskDetailResponse:
+        """管理员只读任务详情:复用 TaskDetailResponse(含 status/error_message/stages/providers,
+        排障刚需),但 audio_url=None + source_key=None(v1 不做音频、不外泄存储键);
+        YouTube 信息走纯函数 _build_public_youtube_info(目标态,不调 caller-id 范围的查询)。
+        """
+        task = await TaskService.get_admin_task(db, task_id)
+
+        from app.schemas.task import TaskStageResponse
+
+        stages = []
+        if getattr(task, "stages", None):
+            stages = [
+                TaskStageResponse(
+                    stage_type=stage.stage_type,
+                    status=stage.status,
+                    started_at=stage.started_at,
+                    completed_at=stage.completed_at,
+                    error_code=stage.error_code,
+                    error_message=stage.error_message,
+                    attempt=stage.attempt,
+                )
+                for stage in task.stages
+                if stage.is_active
+            ]
+
+        return TaskDetailResponse(
+            id=task.id,
+            title=task.title,
+            source_type=task.source_type,
+            source_key=None,
+            source_url=task.source_url,
+            audio_url=None,
+            status=task.status,
+            progress=task.progress,
+            stage=task.stage,
+            duration_seconds=task.duration_seconds,
+            language=task.detected_language,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+            error_message=task.error_message,
+            stages=stages,
+            youtube_info=None,  # PublicYouTubeInfo 与 YouTubeVideoInfo 不兼容;channel 名已在列表透出
+            detected_summary_style=TaskDetailResponse.detected_summary_style_from_options(task.options),
+            is_public=bool(task.is_public),
+            published_at=task.published_at,
+            asr_provider=task.asr_provider,
+            asr_engine=task.asr_engine,
+            asr_variant=task.asr_variant,
+            llm_provider=task.llm_provider,
+        )
+
+    @staticmethod
     async def list_public_tasks(
         db: AsyncSession, page: int, page_size: int, viewer_id: str | None = None
     ) -> tuple[list[PublicTaskListItem], int]:

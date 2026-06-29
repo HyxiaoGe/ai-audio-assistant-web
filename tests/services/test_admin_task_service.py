@@ -121,3 +121,44 @@ async def test_list_user_tasks_for_admin_bad_uuid_returns_empty(monkeypatch: Any
     db = _QueueDB([])  # 不应触达 db
     items, total = await TaskService.list_user_tasks_for_admin(db, "not-a-uuid", 1, 20, "all")  # type: ignore[arg-type]
     assert items == [] and total == 0
+
+
+async def test_get_admin_task_detail_omits_media_keeps_debug(monkeypatch: Any) -> None:
+    task = SimpleNamespace(
+        id=_TID,
+        user_id=_UID_B,
+        title="标题",
+        source_type="youtube",
+        source_key="users/B/x.mp3",
+        source_url="https://youtu.be/x",
+        status="failed",
+        progress=0,
+        stage="transcribing",
+        duration_seconds=60,
+        detected_language="zh",
+        created_at=datetime_fixed(),
+        updated_at=datetime_fixed(),
+        error_message="ASR 超时",
+        options=None,
+        is_public=False,
+        published_at=None,
+        asr_provider=None,
+        asr_engine=None,
+        asr_variant=None,
+        llm_provider=None,
+        stages=[],
+    )
+
+    async def _fake_get(_db: Any, _tid: str) -> Any:
+        return task
+
+    monkeypatch.setattr(TaskService, "get_admin_task", _fake_get)
+    monkeypatch.setattr(TaskService, "_build_public_youtube_info", staticmethod(lambda _t: None))
+
+    detail = await TaskService.get_admin_task_detail(object(), _TID)  # type: ignore[arg-type]
+
+    assert detail.audio_url is None  # 不外泄可播音频
+    assert detail.source_key is None  # 不外泄存储键
+    assert detail.status == "failed"
+    assert detail.error_message == "ASR 超时"  # 失败原因可见(排障)
+    assert detail.id == _TID
