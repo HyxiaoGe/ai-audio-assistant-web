@@ -30,6 +30,8 @@
   "40905": "Summary is being generated, please try again shortly",
   "40906": "This channel flag has already been reviewed",
   "40907": "This channel is already in the blocklist",
+  "40908": "This channel is already in the allowlist",
+  "40909": "This channel is already in the opposite list; remove it there first",
   "40910": "ASR quota exceeded for {provider}, please contact admin",
   "40911": "All ASR quotas exceeded, please contact admin",
   "40912": "ASR provider {provider} is not available, please choose another",

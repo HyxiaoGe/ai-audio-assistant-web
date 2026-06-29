@@ -1,4 +1,10 @@
+from datetime import UTC, datetime
+
+import pytest
+
 import app.services.youtube.allowlist_service as als
+from app.core.exceptions import BusinessError
+from app.i18n.codes import ErrorCode
 from app.models.youtube_allowlist import YouTubeAllowlistEntry
 from app.services.youtube.allowlist_service import Allowlist
 from app.services.youtube.search_service import VideoHit
@@ -93,3 +99,136 @@ async def test_list_entries_returns_rows() -> None:
     ]
     out = await als.list_entries(_FakeSession(rows))
     assert out == rows
+
+
+# ---------------------------------------------------------------------------
+# Write-path helpers
+# ---------------------------------------------------------------------------
+
+
+class _CrudResult:
+    def __init__(self, row=None):
+        self._row = row
+
+    def scalar_one_or_none(self):
+        return self._row
+
+
+class _CrudSession:
+    def __init__(self, *, found=None):
+        self._found = found
+        self.added: list = []
+        self.committed = False
+
+    async def execute(self, _stmt):
+        return _CrudResult(row=self._found)
+
+    def add(self, obj) -> None:
+        self.added.append(obj)
+
+    async def commit(self) -> None:
+        self.committed = True
+
+
+def _no_conflict(monkeypatch):
+    async def _none(_db, _mf, _nv):
+        return False
+
+    monkeypatch.setattr(als, "_blocklist_has_active", _none)
+
+
+# ---------------------------------------------------------------------------
+# Write-path tests
+# ---------------------------------------------------------------------------
+
+
+async def test_add_entry_classifies_channel_id(monkeypatch) -> None:
+    _no_conflict(monkeypatch)
+    db = _CrudSession(found=None)
+    entry, created = await als.add_entry(db, value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None)
+    assert entry.match_field == "channel_id"
+    assert entry.normalized_value == "UCXuqSBlHAE6Xw-yeJA0Tunw"
+    assert created is True
+    assert db.added == [entry] and db.committed is True
+
+
+async def test_add_entry_resolves_handle_to_channel_id(monkeypatch) -> None:
+    _no_conflict(monkeypatch)
+
+    async def _meta(_raw):
+        return ("UCp2f7tGJGN6R9Muxipem8Nw", "全球新闻")
+
+    monkeypatch.setattr(als.blocklist_service, "resolve_channel_meta", _meta)
+    db = _CrudSession(found=None)
+    entry, _ = await als.add_entry(db, value="https://www.youtube.com/@globalnewstw", note=None, created_by=None)
+    assert entry.match_field == "channel_id"
+    assert entry.normalized_value == "UCp2f7tGJGN6R9Muxipem8Nw"
+    assert entry.display_name == "全球新闻"
+
+
+async def test_add_entry_bare_name_uses_input(monkeypatch) -> None:
+    _no_conflict(monkeypatch)
+    db = _CrudSession(found=None)
+    entry, _ = await als.add_entry(db, value="Lex Fridman", note=None, created_by=None)
+    assert entry.match_field == "channel_name"
+    assert entry.normalized_value == "lex fridman"
+    assert entry.display_name == "Lex Fridman"
+
+
+async def test_add_entry_blank_value_raises(monkeypatch) -> None:
+    _no_conflict(monkeypatch)
+    with pytest.raises(BusinessError) as ei:
+        await als.add_entry(_CrudSession(found=None), value="   ", note=None, created_by=None)
+    assert ei.value.code == ErrorCode.INVALID_PARAMETER
+
+
+async def test_add_entry_idempotent_when_active_exists(monkeypatch) -> None:
+    _no_conflict(monkeypatch)
+    existing = YouTubeAllowlistEntry(
+        match_field="channel_name", raw_value="lex", normalized_value="lex fridman", note=None, created_by="x"
+    )
+    existing.deleted_at = None
+    db = _CrudSession(found=existing)
+    out, created = await als.add_entry(db, value="Lex Fridman", note="new", created_by="a2")
+    assert out is existing and created is False
+    assert db.added == [] and db.committed is False
+
+
+async def test_add_entry_revives_soft_deleted(monkeypatch) -> None:
+    _no_conflict(monkeypatch)
+    existing = YouTubeAllowlistEntry(
+        match_field="channel_name", raw_value="old", normalized_value="lex fridman", note="old", created_by="x"
+    )
+    existing.deleted_at = datetime(2020, 1, 1, tzinfo=UTC)
+    db = _CrudSession(found=existing)
+    out, created = await als.add_entry(db, value="Lex Fridman", note="new", created_by="a9")
+    assert out is existing and created is True
+    assert existing.deleted_at is None and existing.note == "new"
+    assert db.committed is True
+
+
+async def test_add_entry_rejects_when_blocklisted(monkeypatch) -> None:
+    async def _conflict(_db, _mf, _nv):
+        return True
+
+    monkeypatch.setattr(als, "_blocklist_has_active", _conflict)
+    db = _CrudSession(found=None)
+    with pytest.raises(BusinessError) as ei:
+        await als.add_entry(db, value="UCXuqSBlHAE6Xw-yeJA0Tunw", note=None, created_by=None)
+    assert ei.value.code == ErrorCode.CHANNEL_BLOCKLIST_ALLOWLIST_CONFLICT
+    assert db.added == [] and db.committed is False
+
+
+async def test_delete_entry_soft_deletes_found() -> None:
+    existing = YouTubeAllowlistEntry(
+        match_field="channel_name", raw_value="x", normalized_value="x", note=None, created_by=None
+    )
+    existing.deleted_at = None
+    db = _CrudSession(found=existing)
+    ok = await als.delete_entry(db, "some-id")
+    assert ok is True and existing.deleted_at is not None and db.committed is True
+
+
+async def test_delete_entry_returns_false_when_missing() -> None:
+    ok = await als.delete_entry(_CrudSession(found=None), "nope")
+    assert ok is False
