@@ -16,6 +16,9 @@ class Settings(BaseSettings):
 
     APP_ENV: Literal["development", "staging", "production"] = Field(default="development")
     DEBUG: bool = Field(default=True)
+    # 版本指纹:CI 经 --build-arg GIT_SHA 烤进镜像 → Dockerfile ENV GIT_SHA → 这里读取。
+    # 本地/未构建默认 "dev"(前端检测逻辑见此值即短路,永不误报)。
+    GIT_SHA: str = Field(default="dev")
 
     # API 外部访问地址（用于生成媒体文件 URL）
     API_BASE_URL: str | None = Field(default="http://localhost:8000")

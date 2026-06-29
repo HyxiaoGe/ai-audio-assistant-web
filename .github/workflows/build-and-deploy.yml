@@ -65,7 +65,7 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t "%IMAGE_NAME%:%GITHUB_SHA%" .
+          docker build --build-arg GIT_SHA=%GITHUB_SHA% -t "%IMAGE_NAME%:%GITHUB_SHA%" .
 
       - name: Lint in image
         run: |

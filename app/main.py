@@ -19,6 +19,7 @@ from app.core.middleware import (
     PathExcludingGZipMiddleware,
     RequestIDMiddleware,
     UserContextMiddleware,
+    VersionHeaderMiddleware,
 )
 from app.core.monitoring import MonitoringSystem
 from app.core.response import error, get_request_id, reset_request_id, set_request_id
@@ -135,7 +136,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"],
+        expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type", "X-App-Version"],
     )
 
     app.include_router(api_router)
@@ -144,6 +145,7 @@ def create_app() -> FastAPI:
     app.add_middleware(LocaleMiddleware)
     app.add_middleware(UserContextMiddleware)
     app.add_middleware(LoggingMiddleware)
+    app.add_middleware(VersionHeaderMiddleware)
     # GZip 放最外层(add_middleware 后加=外层):origin→CF 边缘段实测裸奔
     # (260KB 转写 raw 无 content-encoding),压缩典型省 ~100ms/次、最大转写 ~300ms。
     # 媒体字节流路径整体排除(Range/206 与 gzip 语义错位,音频/WebP 再压无益);
