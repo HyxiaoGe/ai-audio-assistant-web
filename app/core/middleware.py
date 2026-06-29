@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.config import settings
 from app.core.response import reset_request_id, set_request_id
 from app.core.security import extract_bearer_token, get_jwt_validator
 from app.core.user_context import reset_current_user_id, set_current_user_id
@@ -109,3 +110,15 @@ class UserContextMiddleware(BaseHTTPMiddleware):
         finally:
             if token_handle is not None:
                 reset_current_user_id(token_handle)
+
+
+class VersionHeaderMiddleware(BaseHTTPMiddleware):
+    """给每个响应盖 X-App-Version: <build sha>,供前端检测后端是否已重新部署。
+
+    搭现有 API 流量、零轮询;值取自 settings.GIT_SHA(CI build-arg 注入,默认 dev)。
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        response = await call_next(request)
+        response.headers["X-App-Version"] = settings.GIT_SHA
+        return response

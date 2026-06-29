@@ -54,6 +54,9 @@ PY
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
+ARG GIT_SHA=dev
+ENV GIT_SHA=$GIT_SHA
+
 COPY . .
 
 EXPOSE 8000
