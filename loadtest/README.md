@@ -34,8 +34,8 @@ brew install k6 shellcheck
 | `LOADTEST_SAMPLE_OUT` | | 自动带时间戳 | TSV 输出路径,如 `loadtest/reports/sample-YYYYMMDD-HHMMSS.tsv` |
 | `LOADTEST_CPU_MAX` | | `85` | CPU% 告警阈值(防线②) |
 | `LOADTEST_API_MEM_MAX_MB` | | `350` | API 容器内存告警阈值(MB,对 384m 上限留余量) |
-| `LOADTEST_PG_CONN_MAX_PCT` | | `80` | PG 连接占比告警阈值(%) |
-| `LOADTEST_NEIGHBOR_MAX_MS` | | `1000` | 邻居探针延迟告警阈值(ms,防线③) |
+| `LOADTEST_PG_CONN_MAX_PCT` | | `80` | PG **总连接**占 `max_connections` 告警阈值(%);撞满会拖垮同实例所有库的邻居应用(active 仅作展示) |
+| `LOADTEST_NEIGHBOR_MAX_MS` | | `1000` | 邻居探针延迟告警阈值(ms,防线③)。⚠️ 邻居若经 Cloudflare(如 `auth.seanfield.org`)基线已 ~1.5s,须设 `2500` 看相对基线上升,否则每次采样误报 |
 
 ```bash
 # 压测侧(k6)
