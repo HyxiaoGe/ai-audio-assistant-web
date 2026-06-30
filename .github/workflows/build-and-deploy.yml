@@ -143,10 +143,18 @@ jobs:
             api:
               <<: *common
               container_name: ai-audio-assistant-web-api
-              command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+              # 2 个 uvicorn worker 利用多核(单进程仅吃 1 核;压测基线 /health ~450RPS 即单核饱和、7 核闲置)。
+              # 约束:每 worker 自带一套 DB 连接池(DB_POOL_SIZE+MAX_OVERFLOW),worker 翻倍即把池减半,
+              # 让 api 对共享 Postgres 的连接上限持平 2×(5+10)=30(=原单 worker 10+20),不挤占跨应用连接预算。
+              command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+              environment:
+                TZ: UTC
+                DB_POOL_SIZE: "5"
+                DB_MAX_OVERFLOW: "10"
               ports:
                 - "8088:8000"
-              mem_limit: 384m
+              # 2 worker × ~175MiB + 余量;主机可用 ~6.1GiB 足以吸收(原 384m 仅够单 worker)。
+              mem_limit: 768m
 
             worker:
               <<: *common
