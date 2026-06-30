@@ -83,5 +83,5 @@ def test_rate_limited_returns_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(rate_limit_module, "get_redis_client", lambda: _Saturated())
     r = _client().post("/api/v1/client-errors", json={"message": "x"})
-    assert r.status_code == 200
+    assert r.status_code == 429
     assert r.json()["code"] == int(ErrorCode.RATE_LIMIT_EXCEEDED)

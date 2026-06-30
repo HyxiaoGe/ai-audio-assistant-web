@@ -91,6 +91,12 @@ def _media_http_status(code: ErrorCode) -> int:
 async def business_error_handler(request: Request, exc: BusinessError) -> JSONResponse:
     locale = getattr(request.state, "locale", "zh")
     message = get_message(exc.code, locale, **exc.kwargs)
+    if exc.code == ErrorCode.RATE_LIMIT_EXCEEDED:
+        # 限流:统一返真实 HTTP 429 + Retry-After,让监控/CDN/边缘可见、客户端可退避。
+        # 置于媒体判断之前,故媒体字节流路径上的限流也是 429(而非 _media_http_status 的 400)。
+        retry_after = exc.kwargs.get("retry_after")
+        headers = {"Retry-After": retry_after} if retry_after else None
+        return error(exc.code.value, message, status_code=429, headers=headers)
     if _is_media_stream_request(request):
         return error(exc.code.value, message, status_code=_media_http_status(exc.code))
     return error(exc.code.value, message)
@@ -136,7 +142,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type", "X-App-Version"],
+        expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type", "X-App-Version", "Retry-After"],
     )
 
     app.include_router(api_router)

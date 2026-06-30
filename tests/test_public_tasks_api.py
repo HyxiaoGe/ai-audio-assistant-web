@@ -176,6 +176,10 @@ def _make_app(session: _FakeSession, viewer: Any = _NO_VIEWER_OVERRIDE) -> FastA
 
     @app.exception_handler(BusinessError)
     async def _handle(_req: Request, exc: BusinessError) -> Any:
+        if exc.code == ErrorCode.RATE_LIMIT_EXCEEDED:
+            retry_after = exc.kwargs.get("retry_after")
+            headers = {"Retry-After": retry_after} if retry_after else None
+            return error(int(exc.code), exc.code.name, status_code=429, headers=headers)
         return error(int(exc.code), exc.code.name)
 
     async def _db() -> AsyncIterator[_FakeSession]:
@@ -889,7 +893,7 @@ async def test_public_not_found_envelope_has_no_cache_control() -> None:
 
 
 async def test_public_rate_limited_envelope_has_no_cache_control(monkeypatch: pytest.MonkeyPatch) -> None:
-    """限流错误信封(同样 HTTP 200)不得带缓存头,否则一个 PoP 被打满后所有人吃缓存限流页。"""
+    """限流错误信封(HTTP 429)不得带缓存头,否则一个 PoP 被打满后所有人吃缓存限流页。"""
     import app.core.rate_limit as rate_limit_module
 
     class _SaturatedRedis:
@@ -903,7 +907,7 @@ async def test_public_rate_limited_envelope_has_no_cache_control(monkeypatch: py
     session = _FakeSession(tasks=[_make_task()])
     async with _client(_make_app(session)) as client:
         resp = await client.get("/public/tasks")
-    assert resp.status_code == 200
+    assert resp.status_code == 429
     assert resp.json()["code"] == int(ErrorCode.RATE_LIMIT_EXCEEDED)
     assert "cache-control" not in resp.headers
 

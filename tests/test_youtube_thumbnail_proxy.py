@@ -184,6 +184,6 @@ class TestThumbnailRoute:
 
         mock_redis.return_value = _Saturated()
         r = self._client().get("/api/v1/public/youtube-thumbnail/dQw4w9WgXcQ")
-        assert r.status_code == 200  # 统一错误信封是 HTTP 200
+        assert r.status_code == 429  # 限流改真 429(信封 code 仍 40920)
         assert r.json()["code"] == int(ErrorCode.RATE_LIMIT_EXCEEDED)
         mock_get.assert_not_called()  # 限流在抓取前短路,绝不出网
