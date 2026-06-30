@@ -32,7 +32,7 @@ pct() {
 # ---- 采样(需要注入的 env;不被单测覆盖,靠 dry-run 验证真实解析)----
 
 sample_once() {
-  local ts line cpu load apimem apicpu pgact pgmax rcli
+  local ts line cpu load apimem apicpu pgtot pgact pgmax rcli
   ts="$(date +%H:%M:%S)"
 
   # 一次 ssh 取机器 + 容器 + PG + Redis,减少往返。远程失败则字段留空。
@@ -44,13 +44,14 @@ cpu=\$(top -bn1 2>/dev/null | awk -F',' '/%Cpu|Cpu\(s\)/{for(i=1;i<=NF;i++) if(\
 load=\$(awk '{print \$1}' /proc/loadavg)
 apimem=\$(docker stats --no-stream --format '{{.MemUsage}}' "$LOADTEST_API_CONTAINER" 2>/dev/null | awk '{print \$1}')
 apicpu=\$(docker stats --no-stream --format '{{.CPUPerc}}' "$LOADTEST_API_CONTAINER" 2>/dev/null | tr -d '%')
+pgtot=\$(docker exec "$LOADTEST_PG_CONTAINER" psql -U admin -d audio_assistant -tA -c "select count(*) from pg_stat_activity" 2>/dev/null)
 pgact=\$(docker exec "$LOADTEST_PG_CONTAINER" psql -U admin -d audio_assistant -tA -c "select count(*) from pg_stat_activity where state='active'" 2>/dev/null)
 pgmax=\$(docker exec "$LOADTEST_PG_CONTAINER" psql -U admin -d audio_assistant -tA -c "show max_connections" 2>/dev/null)
 rcli=\$(docker exec "$LOADTEST_REDIS_CONTAINER" redis-cli INFO clients 2>/dev/null | awk -F: '/connected_clients/{gsub(/\r/,"",\$2); print \$2}')
-echo "\$cpu|\$load|\$apimem|\$apicpu|\$pgact|\$pgmax|\$rcli"
+echo "\$cpu|\$load|\$apimem|\$apicpu|\$pgtot|\$pgact|\$pgmax|\$rcli"
 REMOTE
 )"
-  IFS='|' read -r cpu load apimem apicpu pgact pgmax rcli <<<"$line"
+  IFS='|' read -r cpu load apimem apicpu pgtot pgact pgmax rcli <<<"$line"
 
   # 生产邻居探针(从本机经其公网 URL,反映真实用户视角)——防线③核心信号。
   local neigh_code neigh_ms neigh_ms_int
@@ -60,7 +61,8 @@ REMOTE
 
   local api_mb pg_pct flags=""
   api_mb="$(mem_mb "${apimem:-0MiB}")"
-  pg_pct="$(pct "${pgact:-0}" "${pgmax:-1}")"
+  # 用实例级总连接(非仅 active)占 max_connections:撞 100 会让同实例所有库(auth/fusion/chrono…)一起连不上 = 跨应用连带爆炸点。
+  pg_pct="$(pct "${pgtot:-0}" "${pgmax:-1}")"
 
   breach "${cpu:-0}" "$CPU_MAX"             && flags+="CPU "
   breach "$api_mb" "$API_MEM_MAX_MB"        && flags+="API_MEM "
@@ -69,9 +71,9 @@ REMOTE
   [[ "$neigh_code" != "200" ]]              && flags+="NEIGHBOR_DOWN! "
   [[ -z "$line" ]]                          && flags+="MONITOR_BLIND! "
 
-  printf '%s\t%s\t%s\t%sMB\t%s\t%s/%s(%s%%)\t%s\t%sms(%s)\t%s\n' \
+  printf '%s\t%s\t%s\t%sMB\t%s\t%s/%s(%s%%)act%s\t%s\t%sms(%s)\t%s\n' \
     "$ts" "${cpu:-NA}" "${load:-NA}" "$api_mb" "${apicpu:-NA}" \
-    "${pgact:-NA}" "${pgmax:-NA}" "$pg_pct" "${rcli:-NA}" \
+    "${pgtot:-NA}" "${pgmax:-NA}" "$pg_pct" "${pgact:-NA}" "${rcli:-NA}" \
     "$neigh_ms_int" "$neigh_code" "${flags:-OK}" | tee -a "$OUT" >&2
 
   if [[ -n "$flags" ]]; then
@@ -95,7 +97,7 @@ main() {
 
   printf '# 采样开始 %s  阈值 CPU>%s API_MEM>%sMB PG>%s%% 邻居>%sms\n' \
     "$(date)" "$CPU_MAX" "$API_MEM_MAX_MB" "$PG_CONN_MAX_PCT" "$NEIGHBOR_MAX_MS" | tee -a "$OUT" >&2
-  printf '# ts\tcpu%%\tload\tapi_mem\tapi_cpu%%\tpg_active/max(%%)\tredis_clients\tneighbor\tflags\n' | tee -a "$OUT" >&2
+  printf '# ts\tcpu%%\tload\tapi_mem\tapi_cpu%%\tpg_total/max(%%)act\tredis_clients\tneighbor\tflags\n' | tee -a "$OUT" >&2
 
   while true; do
     sample_once
