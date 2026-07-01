@@ -93,6 +93,12 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.run_moderation_hygiene",
         "schedule": crontab(minute=5),
     },
+    # 热门推荐 harvest - 每 6h :20(错峰,避开整点/半点同步)。
+    # 不设 options.queue(worker 无 -Q,只消费默认 celery 队列;历史死信教训)。
+    "harvest-discover-recommendations": {
+        "task": "worker.tasks.harvest_recommendations.run_harvest",
+        "schedule": crontab(minute=20, hour="*/6"),
+    },
 }
 
 ConfigManager.configure_db(worker_async_session_factory, cache_ttl_seconds=settings.CONFIG_CENTER_CACHE_TTL)
@@ -125,6 +131,7 @@ from worker.tasks import (
     cleanup_task,  # noqa: F401, E402
     dead_task_sweeper,  # noqa: F401, E402
     download_youtube,  # noqa: F401, E402
+    harvest_recommendations,  # noqa: F401, E402
     moderation_hygiene,  # noqa: F401, E402
     process_audio,  # noqa: F401, E402
     process_youtube,  # noqa: F401, E402
