@@ -18,6 +18,9 @@ from app.schemas.config_center import ConfigRollbackRequest, ConfigUpdateRequest
 
 router = APIRouter(prefix="/configs", tags=["config-center"])
 
+# 仅真实 provider 类型有健康探测语义;feature 开关等伪类型跳过(否则 ServiceRegistry.get 抛 ValueError)。
+_HEALTH_CHECKABLE = frozenset({"llm", "asr", "storage"})
+
 
 def _serialize_config(record: ServiceConfig) -> dict[str, Any]:
     return {
@@ -149,7 +152,8 @@ async def upsert_config(
     await db.commit()
     await db.refresh(record)
     await ConfigManager.refresh_from_db(service_type, provider)
-    await HealthChecker.check_service(service_type, provider, force=True)
+    if service_type in _HEALTH_CHECKABLE:
+        await HealthChecker.check_service(service_type, provider, force=True)
     return success(data=_serialize_config(record))
 
 
@@ -202,7 +206,8 @@ async def rollback_config(
     await db.commit()
     await db.refresh(record)
     await ConfigManager.refresh_from_db(service_type, provider)
-    await HealthChecker.check_service(service_type, provider, force=True)
+    if service_type in _HEALTH_CHECKABLE:
+        await HealthChecker.check_service(service_type, provider, force=True)
     return success(data=_serialize_config(record))
 
 
