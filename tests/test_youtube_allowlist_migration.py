@@ -37,4 +37,4 @@ def test_single_alembic_head_is_allowlist_revision() -> None:
     assert out.returncode == 0, out.stderr
     heads = [ln for ln in out.stdout.splitlines() if ln.strip()]
     assert len(heads) == 1, f"alembic 出现多 head:{out.stdout}"
-    assert "c9d8e7f6a5b4" in heads[0]
+    assert "d1e2f3a4b5c6" in heads[0]
