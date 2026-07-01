@@ -18,7 +18,10 @@ _SEARCH_YDL_OPTS: dict[str, Any] = {
     "skip_download": True,
     "quiet": True,
     "no_warnings": True,
-    "socket_timeout": settings.YOUTUBE_SOCKET_TIMEOUT,
+    # 交互式搜索用独立紧超时 + 有限重试(与 worker 下载路径的 YOUTUBE_SOCKET_TIMEOUT 解耦):
+    # 卡死快速失败换新连接重试,让常见情况不至于单连接挂住数十秒;真正的封顶由 search() 的 wait_for 负责。
+    "socket_timeout": settings.YOUTUBE_SEARCH_SOCKET_TIMEOUT,
+    "retries": settings.YOUTUBE_SEARCH_RETRIES,
 }
 
 
@@ -61,7 +64,24 @@ class YouTubeSearchService:
     """唯一的「搜索抓取」单元:yt-dlp ytsearchN(网页搜索,零 Data API 配额)。"""
 
     async def search(self, query: str, limit: int) -> list[VideoHit]:
-        return await asyncio.to_thread(self._search_sync, query, limit)
+        # 整体超时钳制(真正的硬封顶):CN→YouTube 抖动大,单次 ytsearch 偶尔卡到数十秒。用 wait_for 在
+        # 前端 fetch 超时(30s)之前先返回本地化 51907「搜索暂时不可用」,而非让前端等到自己 abort 报
+        # 「请检查网络后重试」。注:wait_for 取消不强杀底层线程,超时后线程仍会跑到 yt-dlp 自己放弃
+        # (受 socket_timeout+retries 约束,秒级~数十秒)才结束;搜索有限流,泄漏窗口可接受。
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._search_sync, query, limit),
+                timeout=settings.YOUTUBE_SEARCH_TOTAL_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            logger.warning(
+                "youtube ytsearch overall timeout query=%r after %ss",
+                query,
+                settings.YOUTUBE_SEARCH_TOTAL_TIMEOUT_SECONDS,
+            )
+            raise BusinessError(
+                ErrorCode.YOUTUBE_SEARCH_UNAVAILABLE, reason="ytsearch overall timeout"
+            ) from exc
 
     def _search_sync(self, query: str, limit: int) -> list[VideoHit]:
         search_url = f"ytsearch{limit}:{query}"

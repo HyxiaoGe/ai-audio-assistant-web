@@ -237,6 +237,14 @@ class Settings(BaseSettings):
 
     # YouTube 关键词搜索 / 发现页(/discover)
     YOUTUBE_SEARCH_CACHE_TTL_SECONDS: int = Field(default=21600)  # 查询→结果缓存 6h
+    # 搜索是交互式请求:CN→YouTube 网络抖动大,单次 ytsearch 偶尔卡到数十秒。给搜索独立的紧超时,
+    # 与 worker 下载/解析路径的 YOUTUBE_SOCKET_TIMEOUT(需为大文件下载留耐心)解耦,只钳交互式搜索。
+    YOUTUBE_SEARCH_SOCKET_TIMEOUT: int = Field(default=12)  # 单 socket 操作超时(秒);卡死即快速失败,让 yt-dlp 换新连接重试
+    YOUTUBE_SEARCH_RETRIES: int = Field(default=1)  # yt-dlp 库内请求重试次数(默认 10 太多;配紧 socket 超时会累加放大)
+    # 整体硬上限(秒):这才是真正的封顶闸(socket_timeout/retries 只让常见情况快速失败;单次 ytsearch 的
+    # extractor_retries + 多轮 HTTP 往返使底层实际用时可能超过 socket×(retries+1))。须 < 前端
+    # REQUEST_TIMEOUT_MS(30s) 且留足隧道回程余量,超时前返回本地化 51907,而非让前端 abort 报「请检查网络后重试」。
+    YOUTUBE_SEARCH_TOTAL_TIMEOUT_SECONDS: int = Field(default=20)
     YOUTUBE_SEARCH_RESULT_LIMIT: int = Field(default=20)  # ytsearchN 默认条数
     YOUTUBE_SEARCH_RATE_PER_USER_MIN: int = Field(default=20)  # 登录用户每分钟搜索次数
     YOUTUBE_SEARCH_RATE_PER_IP_MIN: int = Field(default=10)  # 匿名按可信 IP 每分钟
