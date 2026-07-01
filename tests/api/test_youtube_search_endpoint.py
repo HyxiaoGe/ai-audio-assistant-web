@@ -425,6 +425,47 @@ async def test_cache_hit_does_not_record_flags(monkeypatch: pytest.MonkeyPatch) 
     assert [i["video_id"] for i in body["data"]["items"]] == ["a"]
 
 
+async def test_search_disabled_returns_discover_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    monkeypatch.setattr(youtube_search, "is_discover_enabled", lambda: False)
+
+    def _boom_normalize(_q: str) -> str:
+        raise AssertionError("gate 未短路:normalize_query 不该被调用")
+
+    monkeypatch.setattr(youtube_search.search_cache, "normalize_query", _boom_normalize)
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search?q=cats")).json()
+    assert body["code"] == int(ErrorCode.DISCOVER_DISABLED)
+
+
+async def test_trending_disabled_returns_discover_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    app.dependency_overrides[youtube_search._trending_rate_limit] = lambda: None
+    monkeypatch.setattr(youtube_search, "is_discover_enabled", lambda: False)
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search/trending")).json()
+    assert body["code"] == int(ErrorCode.DISCOVER_DISABLED)
+
+
+async def test_search_enabled_passes_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    monkeypatch.setattr(youtube_search, "is_discover_enabled", lambda: True)
+
+    async def _cached(_db: Any, _n: str) -> list[VideoHit]:
+        return [_hit("v1")]
+
+    monkeypatch.setattr(search_cache, "get_cached_results", _cached)
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search?q=cats")).json()
+    assert body["code"] == 0
+
+
 async def test_allowlisted_channel_skips_moderation_and_preserves_order(monkeypatch: pytest.MonkeyPatch) -> None:
     # miss 路径:放行频道在送审前被分流 → filter_display/record_flags 都收不到它,但仍在结果里且保持原序
     from app.api.v1 import youtube_search

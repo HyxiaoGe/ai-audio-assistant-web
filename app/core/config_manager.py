@@ -96,6 +96,7 @@ class ConfigManager:
         "llm": {},
         "asr": {},
         "storage": {},
+        "feature": {},
     }
 
     # 类变量：缓存已验证的配置实例
@@ -104,24 +105,28 @@ class ConfigManager:
         "llm": {},
         "asr": {},
         "storage": {},
+        "feature": {},
     }
 
     _config_timestamps: dict[str, dict[str, float]] = {
         "llm": {},
         "asr": {},
         "storage": {},
+        "feature": {},
     }
 
     _user_configs: dict[str, dict[str, dict[str, ServiceConfig]]] = {
         "llm": {},
         "asr": {},
         "storage": {},
+        "feature": {},
     }
 
     _user_timestamps: dict[str, dict[str, dict[str, float]]] = {
         "llm": {},
         "asr": {},
         "storage": {},
+        "feature": {},
     }
 
     _db_session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -205,6 +210,8 @@ class ConfigManager:
                 "secret_key": "TOS_SECRET_KEY",
             },
         },
+        # feature 开关无 settings 字段映射，空表使查表命中不打 WARNING
+        "feature": {},
     }
 
     @classmethod

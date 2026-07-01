@@ -32,6 +32,7 @@ from app.services.asr import (
     volcengine,  # noqa: F401
 )
 from app.services.asr import configs as asr_configs  # noqa: F401
+from app.services.feature import configs as feature_configs  # noqa: F401
 
 # 导入所有服务模块以触发 @register_service 装饰器
 # 必须在模块顶层导入，而不是在函数内部，这样装饰器才会正确执行
@@ -142,7 +143,14 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type", "X-App-Version", "Retry-After"],
+        expose_headers=[
+            "Content-Range",
+            "Accept-Ranges",
+            "Content-Length",
+            "Content-Type",
+            "X-App-Version",
+            "Retry-After",
+        ],
     )
 
     app.include_router(api_router)

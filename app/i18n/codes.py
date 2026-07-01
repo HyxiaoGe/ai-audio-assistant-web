@@ -17,6 +17,7 @@ class ErrorCode(IntEnum):
     YOUTUBE_SEARCH_QUERY_BLOCKED = 40016  # 搜索词命中 denylist
     PUBLISH_CONTENT_BLOCKED = 40017  # 发布内容含违禁,无法公开
     CHANNEL_BLOCKED = 40018  # 频道已被管理员屏蔽,无法转写
+    DISCOVER_DISABLED = 40019  # 发现功能已被管理员下线
 
     AUTH_TOKEN_NOT_PROVIDED = 40100
     AUTH_TOKEN_INVALID = 40101
