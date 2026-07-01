@@ -32,3 +32,39 @@ async def is_discover_enabled(db: AsyncSession) -> bool:
     except Exception as exc:
         logger.warning("is_discover_enabled 读开关异常,fail-open 兜底为开: {}", exc)
         return True
+
+
+async def get_curated_trending_queries(db: AsyncSession) -> list[str] | None:
+    """读 /discover「大家在搜」精选覆盖(service_configs 全局行 feature/discover_trending 的 config jsonb)。
+
+    直读 config 列而非走 ConfigManager——理由同 is_discover_enabled:异步上下文里 ConfigManager
+    的同步 DB 加载会返 None 回落默认、跨 worker 有 TTL 滞后,读不到即时/一致的精选。
+
+    返回:
+    - 已配置且 ``mode=="replace"`` 且 items 有非空 query → 精选 query 列表(保持配置顺序,用于展示)。
+    - 未配置行 / mode 非 replace / items 空或全无效 / 读错 → None(调用方回落组织化 get_trending)。
+
+    读错兜 None(而非抛):精选只是"锦上添花"的展示覆盖,失败就回落组织化,不阻断 trending。
+    """
+    try:
+        stmt = select(ServiceConfig.config).where(
+            ServiceConfig.service_type == "feature",
+            ServiceConfig.provider == "discover_trending",
+            ServiceConfig.owner_user_id.is_(None),
+        )
+        cfg = (await db.execute(stmt)).scalar_one_or_none()
+        if not isinstance(cfg, dict) or cfg.get("mode") != "replace":
+            return None
+        items = cfg.get("items")
+        if not isinstance(items, list):  # 非 list(如直写脏数据成字符串)→ 别逐字符迭代出垃圾词,直接回落
+            return None
+        queries: list[str] = []
+        for item in items:
+            raw = item.get("query") if isinstance(item, dict) else item
+            query = raw.strip() if isinstance(raw, str) else ""  # 非 str 的 query 跳过,不 str() 强转
+            if query:
+                queries.append(query)
+        return queries or None
+    except Exception as exc:
+        logger.warning("get_curated_trending_queries 读精选异常,回落组织化: {}", exc)
+        return None
