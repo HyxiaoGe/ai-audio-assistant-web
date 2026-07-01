@@ -10,7 +10,13 @@ from app.core.exceptions import BusinessError
 from app.core.response import error
 from app.i18n.codes import ErrorCode
 from app.services.moderation import gate as moderation_gate
-from app.services.youtube import allowlist_service, blocklist_service, channel_flag_service, search_cache
+from app.services.youtube import (
+    allowlist_service,
+    blocklist_service,
+    channel_flag_service,
+    moderation_pipeline,
+    search_cache,
+)
 from app.services.youtube.search_service import VideoHit, YouTubeSearchService
 
 
@@ -73,7 +79,7 @@ def _make_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     async def _empty_allowlist(_db: Any) -> allowlist_service.Allowlist:
         return allowlist_service.Allowlist(frozenset(), frozenset(), frozenset())
 
-    monkeypatch.setattr(youtube_search.allowlist_service, "get_allowlist", _empty_allowlist)
+    monkeypatch.setattr(moderation_pipeline.allowlist_service, "get_allowlist", _empty_allowlist)
     return app
 
 
@@ -549,7 +555,7 @@ async def test_allowlisted_channel_skips_moderation_and_preserves_order(monkeypa
     monkeypatch.setattr(search_cache, "upsert_results", _upsert)
     monkeypatch.setattr(youtube_search.moderation_gate, "filter_display", _filter_real)
     monkeypatch.setattr(channel_flag_service, "record_flags", _record)
-    monkeypatch.setattr(youtube_search.allowlist_service, "get_allowlist", _allowlist)
+    monkeypatch.setattr(moderation_pipeline.allowlist_service, "get_allowlist", _allowlist)
 
     async with _client(app) as client:
         body = (await client.get("/api/v1/youtube/search?q=政经")).json()
