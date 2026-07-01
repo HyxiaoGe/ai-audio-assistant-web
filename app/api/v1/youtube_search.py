@@ -15,6 +15,7 @@ from app.schemas.youtube_search import RecommendationData, SearchData, TrendingD
 from app.services.feature.flags import get_curated_trending_queries, is_discover_enabled
 from app.services.moderation import gate as moderation_gate
 from app.services.youtube import blocklist_service, recommendation_service, search_cache
+from app.services.youtube.existing_task_lookup import annotate_existing_tasks
 from app.services.youtube.moderation_pipeline import moderate_hits
 from app.services.youtube.search_service import YouTubeSearchService
 
@@ -69,6 +70,10 @@ async def search_youtube(
 
     # 响应前剔除被拉黑频道:覆盖 cache-hit 路径(缓存存原始结果,拉黑读时即时);miss 路径上方已剔,此处幂等。
     hits = blocklist_service.filter_hits(hits, bl)
+
+    # 「已有转写」感知:serve 时按 viewer 现算叠加(绝不进缓存);查询失败 fail-safe 原样返回。
+    viewer_id = viewer.id if viewer is not None else None
+    hits = await annotate_existing_tasks(db, hits, viewer_id)
 
     searcher_key = viewer.id if viewer is not None else _client_ip(request)
     await search_cache.register_query_heat(db, normalized, searcher_key)
