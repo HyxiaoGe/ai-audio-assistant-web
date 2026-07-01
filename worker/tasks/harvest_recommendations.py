@@ -74,5 +74,5 @@ def run_harvest() -> dict[str, int]:
     try:
         return asyncio.run(_run_harvest())
     except Exception:
-        logger.warning("harvest_recommendations 整轮失败", exc_info=True)
+        logger.error("harvest_recommendations 整轮失败", exc_info=True)
         return {"stored": 0}

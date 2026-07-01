@@ -107,6 +107,35 @@ async def test_harvest_empty_does_not_clear_table(monkeypatch: pytest.MonkeyPatc
     assert replaced["called"] is False  # 抓空绝不清表,保留上一轮
 
 
+async def test_harvest_all_moderated_does_not_clear_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _seed(_db: object) -> list[str]:
+        return ["t1"]
+
+    async def _search(self: object, term: str, limit: int) -> list[VideoHit]:
+        return [_hit("a", 100), _hit("b", 50)]  # 抓到数据
+
+    async def _get_bl(_db: object) -> str:
+        return "BL"
+
+    async def _moderate(_db: object, hits: list[VideoHit], bl: object, request_id: str | None = None):
+        return [], False  # 全被过审掉
+
+    replaced = {"called": False}
+
+    async def _replace(_db: object, hits: list[VideoHit]) -> None:
+        replaced["called"] = True
+
+    monkeypatch.setattr(hr, "_seed_terms", _seed)
+    monkeypatch.setattr(hr.YouTubeSearchService, "search", _search)
+    monkeypatch.setattr(hr.blocklist_service, "get_blocklist", _get_bl)
+    monkeypatch.setattr(hr, "moderate_hits", _moderate)
+    monkeypatch.setattr(hr.recommendation_service, "replace_recommendations", _replace)
+
+    result = await hr._harvest(object())
+    assert result["stored"] == 0
+    assert replaced["called"] is False  # 过审后空绝不清表,保留上一轮
+
+
 async def test_seed_terms_falls_back_to_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _none(_db: object) -> None:
         return None
