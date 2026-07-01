@@ -35,6 +35,9 @@ class VideoHit(BaseModel):
     url: str
     view_count: int | None = None  # flat ytsearch 免费携带;供推荐排序 + 展示
     duration: int | None = None  # 秒
+    # 「已有转写」感知(serve 时按 viewer 现算叠加,绝不进搜索缓存):
+    existing_task_id: str | None = None  # 命中的既有任务 id(自己的 或 别人公开的);None=无
+    existing_is_owner: bool = False  # viewer 是否为该任务 owner(匿名恒 False)
 
 
 def _entry_to_hit(entry: dict[str, Any]) -> VideoHit | None:
