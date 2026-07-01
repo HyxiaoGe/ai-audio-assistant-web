@@ -210,6 +210,8 @@ class ConfigManager:
                 "secret_key": "TOS_SECRET_KEY",
             },
         },
+        # feature 开关无 settings 字段映射，空表使查表命中不打 WARNING
+        "feature": {},
     }
 
     @classmethod

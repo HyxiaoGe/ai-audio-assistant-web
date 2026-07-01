@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from loguru import logger
+
 from app.core.config_manager import ConfigManager
 
 
@@ -12,5 +14,6 @@ def is_discover_enabled() -> bool:
     """
     try:
         return bool(ConfigManager.get_config("feature", "discover").enabled)
-    except Exception:
+    except Exception as exc:
+        logger.warning("is_discover_enabled 读开关异常,fail-open 兜底为开: {}", exc)
         return True

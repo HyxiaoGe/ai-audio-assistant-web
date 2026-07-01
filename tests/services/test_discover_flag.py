@@ -8,13 +8,18 @@ from app.services.feature.configs import DiscoverFeatureConfig
 from app.services.feature.flags import is_discover_enabled
 
 
-def test_default_enabled_when_no_config() -> None:
+@pytest.fixture(autouse=True)
+def _clean_feature_cache() -> None:
     ConfigManager.clear("feature")
+    yield
+    ConfigManager.clear("feature")
+
+
+def test_default_enabled_when_no_config() -> None:
     assert is_discover_enabled() is True
 
 
 def test_disabled_when_cached_false() -> None:
-    ConfigManager.clear("feature")
     ConfigManager._cache_config("feature", "discover", DiscoverFeatureConfig(enabled=False), None)
     assert is_discover_enabled() is False
 
