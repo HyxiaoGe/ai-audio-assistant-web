@@ -14,7 +14,6 @@ from app.services.task_service import TaskService
 from app.services.youtube.existing_task_lookup import annotate_existing_tasks
 from app.services.youtube.search_service import VideoHit
 
-
 # ---------------------------------------------------------------------------
 # 夹具
 # ---------------------------------------------------------------------------
@@ -22,7 +21,13 @@ from app.services.youtube.search_service import VideoHit
 
 @pytest.fixture
 async def db() -> AsyncSession:  # type: ignore[misc]
-    """内存 SQLite DB,只建 tasks 表(raw DDL 绕开 PG 专属类型)。"""
+    """内存 SQLite DB,只建 tasks 表(raw DDL 绕开 PG 专属类型)。
+
+    注意:此处故意用 raw DDL 而非 Base.metadata.create_all。
+    Task 模型含 PostgreSQL 专属的 JSONB 列(source_metadata、options 等),
+    SQLiteTypeCompiler 无法编译 JSONB,调用 create_all 会直接抛出编译错误。
+    raw DDL 把这些列降级为 TEXT,是在 SQLite 上跑真实 SQLAlchemy SELECT 语句的务实做法。
+    """
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -72,7 +77,7 @@ async def db() -> AsyncSession:  # type: ignore[misc]
 
 @pytest.fixture
 def make_task():
-    """返回一个 async 工厂:向已知 session 插入一行 task。"""
+    """返回一个 async 工厂:向已知 session 插入一行 task。返回生成的 task_id。"""
 
     async def _make(
         session: AsyncSession,
@@ -86,7 +91,11 @@ def make_task():
         from uuid import uuid4
 
         tid = str(uuid4())
-        # UUID(as_uuid=False) 的 bind processor 会剥掉横杠,raw SQL 存储须保持一致
+        # SQLite 上 UUID(as_uuid=False) 的 bind_processor 会剥掉横杠(用于 WHERE 比较),
+        # 而 result_processor 在读取时又把横杠加回来。
+        # 因此此处必须存储去横杠形式,才能让 SQLAlchemy WHERE user_id == viewer_id 在
+        # SQLite 上命中;读取后 row.user_id 经 result_processor 恢复带横杠,
+        # str(row.user_id) == viewer_id(带横杠) 仍成立,无需额外规范化。
         uid_stored = user_id.replace("-", "").lower()
         await session.execute(
             text(
@@ -134,18 +143,18 @@ def _ch(video_id: str) -> str:
 
 async def test_owner_completed_task_is_annotated_as_owner(db: AsyncSession, make_task) -> None:
     """viewer 自己的任务(任意状态)→ existing_task_id 命中 + is_owner=True。"""
-    await make_task(db, user_id=_U1, content_hash=_ch("vid_own"), status="completed", is_public=False)
+    task_id = await make_task(db, user_id=_U1, content_hash=_ch("vid_own"), status="completed", is_public=False)
     hits = [_hit("vid_own")]
     out = await annotate_existing_tasks(db, hits, viewer_id=_U1)
-    assert out[0].existing_task_id is not None
+    assert out[0].existing_task_id == task_id
     assert out[0].existing_is_owner is True
 
 
 async def test_others_public_completed_is_annotated_not_owner(db: AsyncSession, make_task) -> None:
     """别人公开 completed → 命中但 is_owner=False。"""
-    await make_task(db, user_id=_U2, content_hash=_ch("vid_pub"), status="completed", is_public=True)
+    task_id = await make_task(db, user_id=_U2, content_hash=_ch("vid_pub"), status="completed", is_public=True)
     out = await annotate_existing_tasks(db, [_hit("vid_pub")], viewer_id=_U1)
-    assert out[0].existing_task_id is not None
+    assert out[0].existing_task_id == task_id
     assert out[0].existing_is_owner is False
 
 

@@ -49,11 +49,9 @@ async def annotate_existing_tasks(
         return hits
 
     # 按 content_hash 归并;优先级 viewer 自己 > 别人公开(desc 排序内同类取最新)
-    # 用 UUID 规范化比较(去横杠+小写),避免存储格式差异(PostgreSQL 带横杠 / SQLite 测试无横杠)。
-    viewer_norm = viewer_id.replace("-", "").lower() if viewer_id is not None else None
     best: dict[str, tuple[str, bool]] = {}  # content_hash -> (task_id, is_owner)
     for row in rows:
-        is_owner = viewer_norm is not None and str(row.user_id).replace("-", "").lower() == viewer_norm
+        is_owner = viewer_id is not None and str(row.user_id) == viewer_id
         existing = best.get(row.content_hash)
         if existing is None or (is_owner and not existing[1]):
             best[row.content_hash] = (str(row.id), is_owner)
