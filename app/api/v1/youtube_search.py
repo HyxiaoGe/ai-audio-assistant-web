@@ -38,7 +38,7 @@ async def search_youtube(
     _rl: None = Depends(_search_rate_limit),
 ) -> JSONResponse:
     """公开:按关键词搜索 YouTube。缓存优先(≤6h),miss 走 ytsearch flat 抓取并 upsert。"""
-    if not is_discover_enabled():
+    if not await is_discover_enabled(db):
         raise BusinessError(ErrorCode.DISCOVER_DISABLED)
     normalized = search_cache.normalize_query(q)
     if not normalized or len(normalized) > 128:
@@ -96,7 +96,7 @@ async def youtube_trending(
     _rl: None = Depends(_trending_rate_limit),
 ) -> JSONResponse:
     """公开:返回近 7d top-N 热门词;不同查询数不足阈值时 get_trending 已返空。"""
-    if not is_discover_enabled():
+    if not await is_discover_enabled(db):
         raise BusinessError(ErrorCode.DISCOVER_DISABLED)
     items = await search_cache.get_trending(db)
     data = TrendingData(items=[TrendingItemOut(query=i.query, count=i.count) for i in items[:limit]])

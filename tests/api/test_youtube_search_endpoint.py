@@ -25,6 +25,19 @@ def _hit(vid: str, channel_id: str | None = None) -> VideoHit:
     )
 
 
+class _GateResult:
+    def scalar_one_or_none(self) -> object:
+        return None  # 无 feature/discover 配置行 → gate 默认开
+
+
+class _GateOpenSession:
+    """kill-switch gate 直读 service_configs 列;测试给个最小会话让其走 default-on 路径
+    (无配置行 → 启用),不触发 fail-open 告警。其它服务调用已在 service 层被 monkeypatch,不碰 db。"""
+
+    async def execute(self, _stmt: object) -> _GateResult:
+        return _GateResult()
+
+
 def _make_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     from app.api.v1 import youtube_search
 
@@ -32,7 +45,7 @@ def _make_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     app.include_router(youtube_search.router, prefix="/api/v1")
 
     async def _no_db() -> Any:
-        return object()
+        return _GateOpenSession()
 
     async def _anon_viewer() -> Any:
         return None
@@ -429,7 +442,11 @@ async def test_search_disabled_returns_discover_disabled(monkeypatch: pytest.Mon
     from app.api.v1 import youtube_search
 
     app = _make_app(monkeypatch)
-    monkeypatch.setattr(youtube_search, "is_discover_enabled", lambda: False)
+
+    async def _disabled(_db: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(youtube_search, "is_discover_enabled", _disabled)
 
     def _boom_normalize(_q: str) -> str:
         raise AssertionError("gate 未短路:normalize_query 不该被调用")
@@ -445,7 +462,11 @@ async def test_trending_disabled_returns_discover_disabled(monkeypatch: pytest.M
 
     app = _make_app(monkeypatch)
     app.dependency_overrides[youtube_search._trending_rate_limit] = lambda: None
-    monkeypatch.setattr(youtube_search, "is_discover_enabled", lambda: False)
+
+    async def _disabled(_db: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(youtube_search, "is_discover_enabled", _disabled)
     async with _client(app) as client:
         body = (await client.get("/api/v1/youtube/search/trending")).json()
     assert body["code"] == int(ErrorCode.DISCOVER_DISABLED)
@@ -455,7 +476,11 @@ async def test_search_enabled_passes_gate(monkeypatch: pytest.MonkeyPatch) -> No
     from app.api.v1 import youtube_search
 
     app = _make_app(monkeypatch)
-    monkeypatch.setattr(youtube_search, "is_discover_enabled", lambda: True)
+
+    async def _enabled(_db: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(youtube_search, "is_discover_enabled", _enabled)
 
     async def _cached(_db: Any, _n: str) -> list[VideoHit]:
         return [_hit("v1")]
