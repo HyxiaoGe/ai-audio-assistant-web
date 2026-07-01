@@ -621,3 +621,48 @@ async def test_trending_falls_back_to_organic_when_no_curated(monkeypatch: pytes
         body = (await client.get("/api/v1/youtube/search/trending")).json()
     assert body["code"] == 0
     assert [i["query"] for i in body["data"]["items"]] == ["有机热词"]
+
+
+async def test_recommendations_gate_off_returns_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    app.dependency_overrides[youtube_search._trending_rate_limit] = lambda: None
+
+    async def _disabled(_db: object) -> bool:
+        return False
+
+    monkeypatch.setattr(youtube_search, "is_discover_enabled", _disabled)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as client:
+        r = await client.get("/api/v1/youtube/recommendations")
+    assert r.json()["code"] == ErrorCode.DISCOVER_DISABLED.value
+
+
+async def test_recommendations_returns_items_filtered_by_blocklist(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    app.dependency_overrides[youtube_search._trending_rate_limit] = lambda: None
+
+    async def _enabled(_db: object) -> bool:
+        return True
+
+    async def _get_recs(_db: object, _limit: int) -> list[VideoHit]:
+        return [_hit("a"), _hit("b")]
+
+    async def _get_bl(_db: object) -> str:
+        return "BL"
+
+    monkeypatch.setattr(youtube_search, "is_discover_enabled", _enabled)
+    monkeypatch.setattr(youtube_search.recommendation_service, "get_recommendations", _get_recs)
+    monkeypatch.setattr(youtube_search.blocklist_service, "get_blocklist", _get_bl)
+    monkeypatch.setattr(youtube_search.blocklist_service, "filter_hits", lambda hits, bl: hits[:1])
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as client:
+        r = await client.get("/api/v1/youtube/recommendations")
+    body = r.json()
+    assert body["code"] == 0
+    assert [i["video_id"] for i in body["data"]["items"]] == ["a"]  # serve 时黑名单剔除生效

@@ -11,10 +11,10 @@ from app.core.exceptions import BusinessError
 from app.core.rate_limit import _client_ip, rate_limit_by_ip, rate_limit_user_or_ip
 from app.core.response import success
 from app.i18n.codes import ErrorCode
-from app.schemas.youtube_search import SearchData, TrendingData, TrendingItemOut
+from app.schemas.youtube_search import RecommendationData, SearchData, TrendingData, TrendingItemOut
 from app.services.feature.flags import get_curated_trending_queries, is_discover_enabled
 from app.services.moderation import gate as moderation_gate
-from app.services.youtube import blocklist_service, search_cache
+from app.services.youtube import blocklist_service, recommendation_service, search_cache
 from app.services.youtube.moderation_pipeline import moderate_hits
 from app.services.youtube.search_service import YouTubeSearchService
 
@@ -94,4 +94,24 @@ async def youtube_trending(
         return success(data=jsonable_encoder(data))
     items = await search_cache.get_trending(db)
     data = TrendingData(items=[TrendingItemOut(query=i.query, count=i.count) for i in items[:limit]])
+    return success(data=jsonable_encoder(data))
+
+
+@router.get("/recommendations")
+async def youtube_recommendations(
+    limit: int = Query(default=recommendation_service.RECOMMENDATIONS_TOP_N, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    _rl: None = Depends(_trending_rate_limit),
+) -> JSONResponse:
+    """公开:/discover 搜索前的「热门推荐」(harvest 定时按 view_count 排的快照)。
+
+    受 discover kill-switch 门;读表 top-N 后 serve 时再套一次缓存黑名单(黑名单变更即时生效)。
+    读空/读错 → items:[](前端回落轻量提示)。
+    """
+    if not await is_discover_enabled(db):
+        raise BusinessError(ErrorCode.DISCOVER_DISABLED)
+    hits = await recommendation_service.get_recommendations(db, limit)
+    bl = await blocklist_service.get_blocklist(db)
+    hits = blocklist_service.filter_hits(hits, bl)
+    data = RecommendationData(items=hits)
     return success(data=jsonable_encoder(data))
