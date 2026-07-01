@@ -12,7 +12,7 @@ from app.core.rate_limit import _client_ip, rate_limit_by_ip, rate_limit_user_or
 from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.schemas.youtube_search import SearchData, TrendingData, TrendingItemOut
-from app.services.feature.flags import is_discover_enabled
+from app.services.feature.flags import get_curated_trending_queries, is_discover_enabled
 from app.services.moderation import gate as moderation_gate
 from app.services.youtube import allowlist_service, blocklist_service, channel_flag_service, search_cache
 from app.services.youtube.search_service import YouTubeSearchService
@@ -95,9 +95,15 @@ async def youtube_trending(
     db: AsyncSession = Depends(get_db),
     _rl: None = Depends(_trending_rate_limit),
 ) -> JSONResponse:
-    """公开:返回近 7d top-N 热门词;不同查询数不足阈值时 get_trending 已返空。"""
+    """公开:返回热门词。精选覆盖(admin 配置)已设时只返精选;否则回落近 7d top-N 组织化热度。"""
     if not await is_discover_enabled(db):
         raise BusinessError(ErrorCode.DISCOVER_DISABLED)
+    # 精选覆盖:admin 配了干净列表就只返它(count 合成降序仅保序,前端 chips 只显示 query 文本)。
+    curated = await get_curated_trending_queries(db)
+    if curated is not None:
+        picked = curated[:limit]
+        data = TrendingData(items=[TrendingItemOut(query=q, count=len(picked) - idx) for idx, q in enumerate(picked)])
+        return success(data=jsonable_encoder(data))
     items = await search_cache.get_trending(db)
     data = TrendingData(items=[TrendingItemOut(query=i.query, count=i.count) for i in items[:limit]])
     return success(data=jsonable_encoder(data))

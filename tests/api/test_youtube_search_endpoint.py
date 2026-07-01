@@ -557,3 +557,61 @@ async def test_allowlisted_channel_skips_moderation_and_preserves_order(monkeypa
     assert moderated == [["n1"]]  # 放行频道未送审
     assert recorded == [[]]  # 放行频道未进 record_flags
     assert [i["video_id"] for i in body["data"]["items"]] == ["a1", "n1"]  # 原序保持,放行项在前
+
+
+async def test_trending_curated_override_replaces_organic(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 精选覆盖已配置 → 只返精选(保持配置顺序、遵守 limit),且**绝不**触碰组织化 get_trending
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    app.dependency_overrides[youtube_search._trending_rate_limit] = lambda: None
+
+    async def _enabled(_db: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(youtube_search, "is_discover_enabled", _enabled)
+
+    async def _curated(_db: Any) -> list[str]:
+        return ["大模型", "Claude Code", "OpenAI"]
+
+    monkeypatch.setattr(youtube_search, "get_curated_trending_queries", _curated)
+
+    async def _boom_organic(_db: Any) -> list[Any]:
+        raise AssertionError("精选覆盖生效时不应调用组织化 get_trending")
+
+    monkeypatch.setattr(search_cache, "get_trending", _boom_organic)
+
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search/trending?limit=2")).json()
+    assert body["code"] == 0
+    assert [i["query"] for i in body["data"]["items"]] == ["大模型", "Claude Code"]  # limit 生效、原序保持
+    counts = [i["count"] for i in body["data"]["items"]]
+    assert counts == sorted(counts, reverse=True)  # 合成 count 降序,保序不塌
+
+
+async def test_trending_falls_back_to_organic_when_no_curated(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 未配精选(reader 返 None)→ 回落组织化 get_trending,行为与改动前一致
+    from app.api.v1 import youtube_search
+
+    app = _make_app(monkeypatch)
+    app.dependency_overrides[youtube_search._trending_rate_limit] = lambda: None
+
+    async def _enabled(_db: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(youtube_search, "is_discover_enabled", _enabled)
+
+    async def _no_curated(_db: Any) -> None:
+        return None
+
+    monkeypatch.setattr(youtube_search, "get_curated_trending_queries", _no_curated)
+
+    async def _organic(_db: Any) -> list[Any]:
+        return [search_cache.TrendingItem(query="有机热词", count=5)]
+
+    monkeypatch.setattr(search_cache, "get_trending", _organic)
+
+    async with _client(app) as client:
+        body = (await client.get("/api/v1/youtube/search/trending")).json()
+    assert body["code"] == 0
+    assert [i["query"] for i in body["data"]["items"]] == ["有机热词"]
