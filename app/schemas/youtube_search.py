@@ -18,3 +18,7 @@ class TrendingItemOut(BaseModel):
 
 class TrendingData(BaseModel):
     items: list[TrendingItemOut]
+
+
+class RecommendationData(BaseModel):
+    items: list[VideoHit]

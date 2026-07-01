@@ -11,10 +11,11 @@ from app.core.exceptions import BusinessError
 from app.core.rate_limit import _client_ip, rate_limit_by_ip, rate_limit_user_or_ip
 from app.core.response import success
 from app.i18n.codes import ErrorCode
-from app.schemas.youtube_search import SearchData, TrendingData, TrendingItemOut
+from app.schemas.youtube_search import RecommendationData, SearchData, TrendingData, TrendingItemOut
 from app.services.feature.flags import get_curated_trending_queries, is_discover_enabled
 from app.services.moderation import gate as moderation_gate
-from app.services.youtube import allowlist_service, blocklist_service, channel_flag_service, search_cache
+from app.services.youtube import blocklist_service, recommendation_service, search_cache
+from app.services.youtube.moderation_pipeline import moderate_hits
 from app.services.youtube.search_service import YouTubeSearchService
 
 router = APIRouter(prefix="/youtube", tags=["youtube-search"])
@@ -59,23 +60,10 @@ async def search_youtube(
     else:
         # 失败抛 YOUTUBE_SEARCH_UNAVAILABLE,经全局 handler 转 200,不写负缓存
         hits = await YouTubeSearchService().search(display, limit)
-        # 先剔除已拉黑频道,再送审:被拉黑的频道彻底不进 CMS/TMS(也不再被重复标记)。
-        # 代价:缓存存的是「已剔黑名单」子集 → 解禁需待该 query 缓存过期(≤6h)才复现;拉黑仍读时瞬时。
-        hits = blocklist_service.filter_hits(hits, bl)
-        # 展示态审核:剔除 block 项后再 upsert → 缓存只存干净子集;
-        # enforce+degraded 在此抛 51400 → 不到 upsert、不缓存(fail-closed)。off 态即时短路。
+        # 展示态过审管道:剔黑名单 → 放行表分流 → CMS filter_display → 复核队列 → 保序重建。
+        # 缓存只存干净子集;enforce+degraded 抛 51400 不到 upsert(fail-closed)。off 态即时短路。
         request_id = getattr(request.state, "trace_id", None)
-        # 放行表:命中频道在送审前分流,跳过 CMS 直接保留 → 不进 record_flags(不再被标记),省 TMS 配额。
-        al = await allowlist_service.get_allowlist(db)
-        to_moderate = [h for h in hits if not allowlist_service.is_channel_allowed(h, al)]
-        outcome = await moderation_gate.filter_display(to_moderate, request_id=request_id)
-        # 旁路:把被 block 的频道累积进复核队列(best-effort,record_flags 内部吞异常,不影响搜索)
-        await channel_flag_service.record_flags(outcome.blocked)
-        kept_ids = {id(h) for h in outcome.kept}
-        # 原相关性顺序重建:放行项原样保留,送审项按 outcome.kept 取舍。
-        hits = [h for h in hits if allowlist_service.is_channel_allowed(h, al) or id(h) in kept_ids]
-        # 结果含被 CMS block 项 → 该查询多半政治/赌博主题 → sticky 标 is_blocked 排除出 trending
-        sensitive = len(outcome.blocked) > 0
+        hits, sensitive = await moderate_hits(db, hits, bl, request_id=request_id)
         await search_cache.upsert_results(db, normalized, display, hits, sensitive=sensitive)
         was_cached = False
 
@@ -106,4 +94,24 @@ async def youtube_trending(
         return success(data=jsonable_encoder(data))
     items = await search_cache.get_trending(db)
     data = TrendingData(items=[TrendingItemOut(query=i.query, count=i.count) for i in items[:limit]])
+    return success(data=jsonable_encoder(data))
+
+
+@router.get("/recommendations")
+async def youtube_recommendations(
+    limit: int = Query(default=recommendation_service.RECOMMENDATIONS_TOP_N, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    _rl: None = Depends(_trending_rate_limit),
+) -> JSONResponse:
+    """公开:/discover 搜索前的「热门推荐」(harvest 定时按 view_count 排的快照)。
+
+    受 discover kill-switch 门;读表 top-N 后 serve 时再套一次缓存黑名单(黑名单变更即时生效)。
+    读空/读错 → items:[](前端回落轻量提示)。
+    """
+    if not await is_discover_enabled(db):
+        raise BusinessError(ErrorCode.DISCOVER_DISABLED)
+    hits = await recommendation_service.get_recommendations(db, limit)
+    bl = await blocklist_service.get_blocklist(db)
+    hits = blocklist_service.filter_hits(hits, bl)
+    data = RecommendationData(items=hits)
     return success(data=jsonable_encoder(data))
