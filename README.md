@@ -8,7 +8,7 @@
 
 把长音视频内容转化为**可核验、可复用、可发现**的知识卡片 —— 转写、结构化摘要、关键点、待办与配图。
 
-这是产品的**后端**(FastAPI + Celery);前端为独立的 Next.js 应用 `ai-audio-assistant-ui`,鉴权、提示词等经共享服务打通。
+这是产品的**后端**(FastAPI + Celery);前端为独立的 Next.js 应用 [`ai-audio-assistant-ui`](https://github.com/HyxiaoGe/ai-audio-assistant-ui),鉴权、提示词等经共享服务打通。
 
 ## 功能特性
 
