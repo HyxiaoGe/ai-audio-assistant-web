@@ -8,6 +8,7 @@ import re
 import subprocess  # nosec B404
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -651,8 +652,15 @@ def _get_audio_duration(file_path: str) -> int | None:
     return None
 
 
-def _transcode_to_wav_16k(input_path: str) -> str:
-    output_path = str(Path(input_path).with_suffix(".wav"))
+def _transcode_to_mp3_16k(input_path: str) -> str:
+    """抽音轨转 16k 单声道 mp3（48kbps≈21MB/小时）再上传 OSS 供 ASR 拉取 / 前端播放。
+
+    与 process_audio._transcode_to_mp3_16k 同口径（16k mono libmp3lame 48k）。原先输出无损
+    WAV（16k mono pcm_s16le≈32KB/s），1h 视频转出 ~145MB，撞阿里云 FlashRecognizer 单文件
+    100MB 上限（上游 400 `File too large!`）而整任务失败；mp3 48k 把可用时长从 ~55 分钟拉到
+    ~4.7 小时。ffmpeg 失败抛 BusinessError(FILE_PROCESSING_ERROR)，调用方对失败做回退。
+    """
+    output_path = str(Path(input_path).with_suffix(".mp3"))
     result = subprocess.run(  # nosec
         [
             "ffmpeg",
@@ -665,7 +673,9 @@ def _transcode_to_wav_16k(input_path: str) -> str:
             "-ar",
             "16000",
             "-acodec",
-            "pcm_s16le",
+            "libmp3lame",
+            "-b:a",
+            "48k",
             output_path,
         ],
         capture_output=True,
@@ -673,6 +683,9 @@ def _transcode_to_wav_16k(input_path: str) -> str:
         check=False,
     )
     if result.returncode != 0:
+        # ffmpeg 打开输出后才失败（磁盘满 / 被 OOM-kill）会留半截 mp3，兜底清掉
+        with suppress(Exception):
+            Path(output_path).unlink(missing_ok=True)
         detail = result.stderr.strip() or result.stdout.strip()
         raise BusinessError(ErrorCode.FILE_PROCESSING_ERROR, reason=detail)
     return output_path
@@ -921,7 +934,9 @@ def _process_youtube(
             stage_manager.start_stage(session, StageType.RESOLVE_YOUTUBE)
 
         try:
-            direct_url, title, resolved_duration, channel_id, handle, channel_name = _extract_youtube_info(task.source_url)
+            direct_url, title, resolved_duration, channel_id, handle, channel_name = _extract_youtube_info(
+                task.source_url
+            )
             if _duration_over_cap(resolved_duration):
                 # 下载前即拦截：省掉下载 + ASR 成本。BusinessError 经下方 except → 终态 failed、不重试。
                 raise BusinessError(
@@ -1023,7 +1038,7 @@ def _process_youtube(
                         return
                     _update_task(session, task, "transcoding", 27, "transcoding", request_id)
                     stage_manager.start_stage(session, StageType.TRANSCODE)
-                filename = _transcode_to_wav_16k(original_filename)
+                filename = _transcode_to_mp3_16k(original_filename)
                 with get_sync_db_session() as session:
                     stage_manager.complete_stage(session, StageType.TRANSCODE)
             else:
@@ -1217,6 +1232,9 @@ def _process_youtube(
                     audio_url = storage.generate_presigned_url(task.source_key, expires_in=7200)
                     audio_candidates.append(audio_url)
                 if direct_url:
+                    # 兜底候选：yt-dlp 解析出的 googlevideo 直链，仅在 OSS 候选缺失/失败时才轮到。
+                    # 注意国内云 ASR（阿里云上海）拉不到境外 googlevideo（FILE_DOWNLOAD_FAILED），
+                    # 正常路径必须靠上面的 OSS 候选成功，此项基本只是最后尝试。
                     audio_candidates.append(direct_url)
                 if not audio_candidates:
                     if not task.source_url:
