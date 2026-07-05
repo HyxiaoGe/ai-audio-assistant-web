@@ -132,10 +132,10 @@ class Settings(BaseSettings):
     IMAGE_COST_CNY_BY_MODEL: dict[str, float] = Field(default_factory=dict)
 
     # 转写润色的并发 LLM 调用上限。润色把长转写按时间窗/段数切成多组、各组独立调一次
-    # deepseek-chat。有界并发压缩总耗时；上限必须 < proxy_llm 熔断阈值（failure_threshold=5），
-    # 使「一整波同时失败」也不足以把熔断打 OPEN、连累随后同走 proxy_llm 的摘要生成。
-    # 实测 647 段/14 组(每组 50 段)在并发 3 下 ~16min：故默认提到 4（仍 <5 保熔断不变式），
-    # 配合下方更小的分组（每组调用稳定落在 120s httpx 超时内、免去静默超时重试）显著提速。
+    # deepseek-chat。有界并发压缩总耗时；上限保持 < 熔断阈值（failure_threshold=5），使「一整波
+    # 同时失败」也不足以把 polish 自己的熔断线打 OPEN。polish 现走独立熔断器 polish_llm（见
+    # transcript_polish.POLISH_CIRCUIT_BREAKER_NAME），与摘要的 proxy_llm 状态隔离——即便 polish
+    # 熔断打开也不再连累随后的摘要生成。实测 647 段/14 组在并发 3 下 ~16min，故默认提到 4。
     POLISH_CONCURRENCY: int = Field(default=4)
 
     # 单个润色分组的最大片段数。每组拼成一次非流式 chat 调用，httpx 客户端读超时 120s——

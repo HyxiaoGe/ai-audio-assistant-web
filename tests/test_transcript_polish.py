@@ -420,3 +420,20 @@ async def test_polish_max_tokens_scales_and_caps_for_large_group():
     llm = _CaptureLLM()
     await polish_transcripts(llm, segs)
     assert llm.kwargs["max_tokens"] == 12000
+
+
+@pytest.mark.asyncio
+async def test_polish_transcripts_binds_dedicated_breaker_on_proxy_service():
+    from unittest.mock import AsyncMock
+
+    from app.services.llm.proxy import ProxyLLMService
+    from app.services.transcript_polish import POLISH_CIRCUIT_BREAKER_NAME
+
+    svc = ProxyLLMService(config={"base_url": "http://litellm.test", "api_key": "k", "model": "m", "max_tokens": 16})
+    assert svc._breaker.name == "proxy_llm"  # 默认
+    svc.chat = AsyncMock(return_value="[1] 论文")  # 打桩,不真发 HTTP
+
+    segs = [{"sequence": 1, "content": "论文", "start_time": 0.0, "end_time": 1.0}]
+    await polish_transcripts(svc, segs)
+
+    assert svc._breaker.name == POLISH_CIRCUIT_BREAKER_NAME  # 入口已切到 polish_llm

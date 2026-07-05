@@ -51,6 +51,15 @@ def _normalize_usage(raw: object) -> dict[str, int | None] | None:
     }
 
 
+# proxy 与 polish 两条熔断线共用同一套阈值配置(仅 name 不同 → 状态互相隔离)。
+_PROXY_CB_CONFIG = CircuitBreakerConfig(
+    failure_threshold=5,
+    success_threshold=2,
+    timeout=60.0,
+    expected_exception=(BusinessError, httpx.HTTPError),
+)
+
+
 @register_service(
     "llm",
     "proxy",
@@ -71,15 +80,8 @@ class ProxyLLMService(LLMService):
     由 Proxy 负责选择后端模型、管理 API Key、计费等。
     """
 
-    _circuit_breaker = CircuitBreaker.get_or_create(
-        "proxy_llm",
-        CircuitBreakerConfig(
-            failure_threshold=5,
-            success_threshold=2,
-            timeout=60.0,
-            expected_exception=(BusinessError, httpx.HTTPError),
-        ),
-    )
+    # 默认熔断线(summarize 等走它);polish 在入口切到独立的 polish_llm(见 use_dedicated_circuit_breaker)。
+    _circuit_breaker = CircuitBreaker.get_or_create("proxy_llm", _PROXY_CB_CONFIG)
 
     def __init__(
         self,
@@ -104,6 +106,18 @@ class ProxyLLMService(LLMService):
         # 成本归因:LiteLLM 按请求体 user 字段累计 end-user spend(GET /customer/info 据此)。
         # 带 user_id 的实例在 SmartFactory force_new=True、不进缓存、不跨用户复用,存实例状态安全。
         self._end_user_id = user_id
+        # 熔断线默认走类级共享的 proxy_llm;polish 入口会把自己那个 force_new 独占实例
+        # 切到独立的 polish_llm(见 use_dedicated_circuit_breaker),两者状态互不影响。
+        self._breaker = type(self)._circuit_breaker
+
+    def use_dedicated_circuit_breaker(self, name: str) -> None:
+        """把本实例切到独立命名的熔断器(与默认 proxy_llm 同配置、状态隔离)。
+
+        polish 用它:polish 每组失败可回退原文(可容错),不该在同一窗口扎堆时把共享的
+        proxy_llm 打 OPEN、连累紧随其后同走 proxy_llm 的 summarize。仅对 polish 的
+        force_new 独占实例调用,不影响 summarize 实例。
+        """
+        self._breaker = CircuitBreaker.get_or_create(name, _PROXY_CB_CONFIG)
 
     def _apply_attribution(
         self,
@@ -176,50 +190,50 @@ class ProxyLLMService(LLMService):
                 )
             return content, _normalize_usage(result.get("usage"))
 
-    @_circuit_breaker.protected
     async def _guarded_call(self, payload: dict) -> tuple[str, dict[str, int | None] | None]:
         """在熔断器保护下完成调用，并把底层 httpx 异常映射为对外的 BusinessError。
 
-        重试由 _request_chat_completion 内部完成；重试耗尽后上抛的原始 httpx 异常
-        在此映射为 BusinessError，并由熔断器按 expected_exception 计入失败计数。
-        透传 (content, usage)。
+        熔断线由 self._breaker 决定(默认 proxy_llm,polish 为 polish_llm)。重试由
+        _request_chat_completion 内部完成；重试耗尽后上抛的原始 httpx 异常在此映射为
+        BusinessError，并由熔断器按 expected_exception 计入失败计数。透传 (content, usage)。
         """
-        try:
-            return await self._request_chat_completion(payload)
-        except httpx.TimeoutException as exc:
-            raise BusinessError(
-                ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                reason=f"LiteLLM Proxy request timeout: {exc}",
-            ) from exc
-        except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code
-            if status_code == 429:
+        async with self._breaker.guard():
+            try:
+                return await self._request_chat_completion(payload)
+            except httpx.TimeoutException as exc:
                 raise BusinessError(
                     ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                    reason=f"LiteLLM Proxy rate limit exceeded (HTTP {status_code})",
+                    reason=f"LiteLLM Proxy request timeout: {exc}",
                 ) from exc
-            elif 500 <= status_code < 600:
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                if status_code == 429:
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                        reason=f"LiteLLM Proxy rate limit exceeded (HTTP {status_code})",
+                    ) from exc
+                elif 500 <= status_code < 600:
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
+                        reason=f"LiteLLM Proxy server error (HTTP {status_code})",
+                    ) from exc
+                else:
+                    # 上游响应体可能含敏感信息（密钥片段、内部地址等），仅记入服务端日志，
+                    # 不回传给客户端；与上面 429/5xx 分支保持一致，对外只暴露状态码。
+                    logger.warning(
+                        "LiteLLM Proxy request failed (HTTP %s): %s",
+                        status_code,
+                        exc.response.text,
+                    )
+                    raise BusinessError(
+                        ErrorCode.AI_SUMMARY_GENERATION_FAILED,
+                        reason=f"LiteLLM Proxy request failed (HTTP {status_code})",
+                    ) from exc
+            except httpx.HTTPError as exc:
                 raise BusinessError(
                     ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                    reason=f"LiteLLM Proxy server error (HTTP {status_code})",
+                    reason=f"LiteLLM Proxy network error: {exc}",
                 ) from exc
-            else:
-                # 上游响应体可能含敏感信息（密钥片段、内部地址等），仅记入服务端日志，
-                # 不回传给客户端；与上面 429/5xx 分支保持一致，对外只暴露状态码。
-                logger.warning(
-                    "LiteLLM Proxy request failed (HTTP %s): %s",
-                    status_code,
-                    exc.response.text,
-                )
-                raise BusinessError(
-                    ErrorCode.AI_SUMMARY_GENERATION_FAILED,
-                    reason=f"LiteLLM Proxy request failed (HTTP {status_code})",
-                ) from exc
-        except httpx.HTTPError as exc:
-            raise BusinessError(
-                ErrorCode.AI_SUMMARY_SERVICE_UNAVAILABLE,
-                reason=f"LiteLLM Proxy network error: {exc}",
-            ) from exc
 
     async def _call_api(self, payload: dict) -> tuple[str, dict[str, int | None] | None]:
         """非流式调用入口：熔断器打开时快速失败，并把熔断异常映射为 BusinessError。返回 (content, usage)。"""
@@ -239,7 +253,7 @@ class ProxyLLMService(LLMService):
         ``@protected`` 会把异步生成器变成「返回协程」破坏 async for，故改用 guard() 上下文管理器。
         """
         try:
-            async with self._circuit_breaker.guard():
+            async with self._breaker.guard():
                 async for chunk in self._stream_api_inner(payload):
                     yield chunk
         except CircuitBreakerOpenError as exc:
