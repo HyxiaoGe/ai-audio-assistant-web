@@ -175,15 +175,10 @@ ai-audio-assistant-web/
 
 | 文档 | 位置 | 说明 |
 |------|------|------|
-| 工程约定 | `CLAUDE.md` | 目录/服务约定、SmartFactory、编码规范 |
 | API 规范 | `docs/API.md` | 端点、请求/响应、错误码 |
-| 架构详解 | `docs/ARCH.md` | 服务分层、请求流、SmartFactory |
-| 架构决策 | `docs/ADR.md` | 关键技术选型 ADR |
-| 产品需求 | `docs/PRD.md` | 产品目标与范围 |
-| 常见问题 | `docs/FAQ.md` | 排障与常见问题 |
-| RAG 规划 | `docs/RAG_PLAN.md` | 语义检索规划(当前刻意停用,非目标) |
-| 分特性设计/计划 | `docs/superpowers/specs/`、`docs/superpowers/plans/` | 按特性归档的 spec 与实现计划 |
 | 环境变量样例 | `.env.example` | 全量环境变量(以此为准) |
+
+> 其余为**本地开发文档,未随仓公开**:`CLAUDE.md`(工程约定 / SmartFactory / 编码规范)、`docs/ARCH.md`(架构详解)、`docs/ADR.md`(架构决策)、`docs/PRD.md`(产品需求)、`docs/FAQ.md`(常见问题)、`docs/RAG_PLAN.md`(RAG 规划,当前刻意停用)、`docs/superpowers/{specs,plans}/`(按特性归档的 spec 与实现计划)。
 
 ---
 

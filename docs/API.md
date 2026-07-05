@@ -731,6 +731,8 @@ DELETE /api/v1/tasks/:id
 
 ### 6.7 ASR 额度查询与刷新
 
+> **设计原则(为何只暴露用户配额)**:平台定价与免费额度属运营敏感信息,只在后端内部使用(`asr_pricing_configs` / `asr_usage_periods` 表,无对外 API);对外只保留 `/api/v1/asr/quotas`(用户配额查询,刷新接口需管理员)。历史上的 `/api/v1/asr/pricing`、`/api/v1/asr/free-quota` 已移除,不再对外暴露。
+
 #### 6.7.1 查询额度
 
 **说明**：
