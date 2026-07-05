@@ -229,3 +229,5 @@ coverage.xml
 # (与前端 #30「取消跟踪误并入的本地文档」约定统一;防 git add -A 再次误并入)
 CLAUDE.md
 AGENTS.md
+.superpowers/
+task-*-report.md
