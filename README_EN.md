@@ -8,7 +8,7 @@
 
 Turn long audio/video content into **verifiable, reusable, discoverable** knowledge cards — transcripts, structured summaries, key points, action items, and illustrations.
 
-This is the **backend** (FastAPI + Celery). The frontend is a separate Next.js app, `ai-audio-assistant-ui`; auth, prompts, and other shared concerns go through shared services.
+This is the **backend** (FastAPI + Celery). The frontend is a separate Next.js app, [`ai-audio-assistant-ui`](https://github.com/HyxiaoGe/ai-audio-assistant-ui); auth, prompts, and other shared concerns go through shared services.
 
 ## Features
 
