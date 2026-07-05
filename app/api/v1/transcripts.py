@@ -15,7 +15,11 @@ from app.core.response import success
 from app.i18n.codes import ErrorCode
 from app.models.task import Task
 from app.models.transcript import Transcript
-from app.schemas.transcript import TranscriptItem, TranscriptListResponse
+from app.schemas.transcript import (
+    TranscriptItem,
+    TranscriptListResponse,
+    TranscriptSegmentUpdateRequest,
+)
 
 router = APIRouter(prefix="/transcripts")
 
@@ -89,24 +93,60 @@ async def get_transcripts(
             transcript_result = await db.execute(transcript_stmt)
             transcripts = transcript_result.scalars().all()
 
-    items = [
-        TranscriptItem(
-            id=str(t.id),
-            speaker_id=t.speaker_id,
-            speaker_label=t.speaker_label,
-            content=t.content,
-            start_time=float(t.start_time),
-            end_time=float(t.end_time),
-            confidence=float(t.confidence) if t.confidence else None,
-            words=t.words,
-            sequence=t.sequence,
-            is_edited=t.is_edited,
-            original_content=t.original_content,
-            created_at=t.created_at,
-            updated_at=t.updated_at,
-        )
-        for t in transcripts
-    ]
+    items = [_to_item(t) for t in transcripts]
 
     response = TranscriptListResponse(task_id=task_id, total=len(items), items=items)
     return success(data=jsonable_encoder(response))
+
+
+def _to_item(t: Transcript) -> TranscriptItem:
+    return TranscriptItem(
+        id=str(t.id),
+        speaker_id=t.speaker_id,
+        speaker_label=t.speaker_label,
+        content=t.content,
+        start_time=float(t.start_time),
+        end_time=float(t.end_time),
+        confidence=float(t.confidence) if t.confidence else None,
+        words=t.words,
+        sequence=t.sequence,
+        is_edited=t.is_edited,
+        original_content=t.original_content,
+        created_at=t.created_at,
+        updated_at=t.updated_at,
+    )
+
+
+@router.patch("/{task_id}/segments/{segment_id}")
+async def update_transcript_segment(
+    task_id: str,
+    segment_id: str,
+    data: TranscriptSegmentUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> JSONResponse:
+    """手动编辑单个转写段落内容。
+
+    - 归属校验:任务须属于当前用户且未软删;段落须属于该任务(防跨任务改)。
+    - 首次编辑把旧值存进 original_content;二次编辑保留最早原文。
+    - 置 is_edited=True(读回/展示据此标记「已编辑」)。列已存在,零迁移。
+    """
+    task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
+    if not task:
+        raise BusinessError(ErrorCode.TASK_NOT_FOUND)
+
+    segment_stmt = select(Transcript).where(Transcript.id == segment_id, Transcript.task_id == task_id)
+    segment = (await db.execute(segment_stmt)).scalar_one_or_none()
+    if segment is None:
+        raise BusinessError(ErrorCode.TRANSCRIPT_NOT_FOUND)
+
+    if not segment.is_edited:
+        segment.original_content = segment.content
+    segment.content = data.content
+    segment.is_edited = True
+
+    # 在 commit 前用内存态构建响应,规避 async expire_on_commit 的惰性加载陷阱
+    item = _to_item(segment)
+    await db.commit()
+    return success(data=jsonable_encoder(item))
