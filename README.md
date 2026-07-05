@@ -178,7 +178,7 @@ ai-audio-assistant-web/
 | API 规范 | `docs/API.md` | 端点、请求/响应、错误码 |
 | 环境变量样例 | `.env.example` | 全量环境变量(以此为准) |
 
-> 其余为**本地开发文档,未随仓公开**:`CLAUDE.md`(工程约定 / SmartFactory / 编码规范)、`docs/ARCH.md`(架构详解)、`docs/ADR.md`(架构决策)、`docs/PRD.md`(产品需求)、`docs/FAQ.md`(常见问题)、`docs/RAG_PLAN.md`(RAG 规划,当前刻意停用)、`docs/superpowers/{specs,plans}/`(按特性归档的 spec 与实现计划)。
+> 其余为**本地开发文档,未随仓公开**:`CLAUDE.md`(工程约定 / SmartFactory / 编码规范)、`docs/ARCH.md`(架构详解)、`docs/ADR.md`(架构决策,含「LLM 收敛 LiteLLM Proxy」「RAG 刻意停用」等)、`docs/PRD.md`(产品需求)、`docs/superpowers/{specs,plans}/`(按特性归档的 spec 与实现计划)。
 
 ---
 
