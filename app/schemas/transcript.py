@@ -24,6 +24,8 @@ class TranscriptItem(BaseModel):
     sequence: int
     is_edited: bool = False
     original_content: str | None = None
+    # True=用户手动编辑,False=AI 校对或原始;前端据此显示「已编辑」而非「AI 已校对」
+    manually_edited: bool = False
     created_at: datetime
     updated_at: datetime
 

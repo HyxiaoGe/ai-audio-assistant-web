@@ -112,6 +112,7 @@ def _to_item(t: Transcript) -> TranscriptItem:
         sequence=t.sequence,
         is_edited=t.is_edited,
         original_content=t.original_content,
+        manually_edited=t.manually_edited,
         created_at=t.created_at,
         updated_at=t.updated_at,
     )
@@ -129,7 +130,8 @@ async def update_transcript_segment(
 
     - 归属校验:任务须属于当前用户且未软删;段落须属于该任务(防跨任务改)。
     - 首次编辑把旧值存进 original_content;二次编辑保留最早原文。
-    - 置 is_edited=True(读回/展示据此标记「已编辑」)。列已存在,零迁移。
+    - 置 is_edited=True(内容已不同于 ASR 原文)且 manually_edited=True(来源=人工),
+      前端据此显示「已编辑」而非「AI 已校对」,不与 AI 校对混淆。
     """
     task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task = (await db.execute(task_stmt)).scalar_one_or_none()
@@ -145,6 +147,7 @@ async def update_transcript_segment(
         segment.original_content = segment.content
     segment.content = data.content
     segment.is_edited = True
+    segment.manually_edited = True
 
     # 在 commit 前用内存态构建响应,规避 async expire_on_commit 的惰性加载陷阱
     item = _to_item(segment)

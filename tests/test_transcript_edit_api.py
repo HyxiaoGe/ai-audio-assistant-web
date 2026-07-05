@@ -71,6 +71,7 @@ def _seg(**over: Any) -> SimpleNamespace:
         sequence=1,
         is_edited=False,
         original_content=None,
+        manually_edited=False,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -109,10 +110,12 @@ async def test_first_edit_sets_original_and_flips_is_edited() -> None:
     assert item["content"] == "new text"
     assert item["is_edited"] is True
     assert item["original_content"] == "old text"
+    assert item["manually_edited"] is True  # 来源=人工,前端据此显「已编辑」而非「AI 已校对」
     # 落到对象上并 commit
     assert seg.content == "new text"
     assert seg.is_edited is True
     assert seg.original_content == "old text"
+    assert seg.manually_edited is True
     assert session.commits == 1
     # 归属作用域:task 按 user_id + 软删;segment 按 id + task_id
     assert "tasks.user_id =" in session.sqls[0]
@@ -122,7 +125,14 @@ async def test_first_edit_sets_original_and_flips_is_edited() -> None:
 
 
 async def test_second_edit_preserves_earliest_original() -> None:
-    seg = _seg(content="first edit", is_edited=True, original_content="the real original")
+    # 起始为「AI 校对过但未人工编辑」(is_edited=True, manually_edited=False):
+    # 手动编辑后应保留最早原文,并把来源翻成人工(manually_edited=True)。
+    seg = _seg(
+        content="first edit",
+        is_edited=True,
+        manually_edited=False,
+        original_content="the real original",
+    )
     session = _FakeSession(results=[SimpleNamespace(id=_TASK_ID), seg])
     async with _client(_make_app(session)) as client:
         body = (await client.patch(_URL, json={"content": "second edit"})).json()
@@ -131,6 +141,7 @@ async def test_second_edit_preserves_earliest_original() -> None:
     assert seg.content == "second edit"
     assert seg.original_content == "the real original"  # 不被覆盖
     assert seg.is_edited is True
+    assert seg.manually_edited is True  # AI 校对段被手动改后,来源翻成人工
     assert session.commits == 1
 
 
