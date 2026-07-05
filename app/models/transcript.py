@@ -41,3 +41,7 @@ class Transcript(BaseRecord):
 
     is_edited: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
     original_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 编辑来源区分:True=用户手动编辑,False(默认)=AI 校对或原始。
+    # is_edited 仅表示「内容已不同于 ASR 原文」(AI 校对与人工编辑都会置 True);此列进一步区分是谁改的,
+    # 前端据此显示「已编辑」而非「AI 已校对」,避免手动编辑被误标为 AI 校对。
+    manually_edited: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
