@@ -151,7 +151,8 @@ class Settings(BaseSettings):
     # （代理推理吃满 max_tokens 回空最常见，这类「200 但无效」HTTP 层不会重试、过去被 parse
     # 当成"整组无改动"静默回退原文丢润色）。默认 2 = 首次 + 1 次重试：足以救回观测到的瞬时
     # 空返回，又刻意保守——重试经同一 Semaphore 限流，瞬时在途数仍 ≤ POLISH_CONCURRENCY，
-    # 不破坏「一波失败不足以打 OPEN 熔断、连累随后摘要」的不变式；代理真宕时重试快速失败再
+    # 不破坏「一波失败不足以打 OPEN polish_llm 熔断」的不变式；且 polish 现走独立 polish_llm
+    # 熔断器（与 proxy_llm 隔离），即便打 OPEN 也不再连累随后摘要；代理真宕时重试快速失败再
     # 回退，graceful。设为 1 即关闭重试（恢复旧行为）。
     POLISH_MAX_ATTEMPTS_PER_GROUP: int = Field(default=2)
 
