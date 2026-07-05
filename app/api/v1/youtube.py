@@ -291,12 +291,14 @@ async def get_subscriptions(
     page_size: int = Query(50, ge=1, le=100, description="Items per page"),
     show_hidden: bool = Query(False, description="Include hidden channels"),
     starred_only: bool = Query(False, description="Only show starred channels"),
+    search: str | None = Query(None, max_length=100, description="Keyword: match channel title/description"),
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> JSONResponse:
     """Get user's YouTube subscriptions (cached).
 
-    Returns cached subscriptions from the database.
+    Returns cached subscriptions from the database. ``search`` filters globally
+    across all pages by channel title/description (not just the loaded page).
     Use POST /subscriptions/sync to refresh from YouTube.
     """
     subscription_service = YouTubeSubscriptionService()
@@ -313,6 +315,7 @@ async def get_subscriptions(
         page_size=page_size,
         show_hidden=show_hidden,
         starred_only=starred_only,
+        search=search,
     )
 
     # Get video counts for each channel

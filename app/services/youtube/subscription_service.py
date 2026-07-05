@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -254,6 +254,7 @@ class YouTubeSubscriptionService:
         page_size: int = 50,
         show_hidden: bool = False,
         starred_only: bool = False,
+        search: str | None = None,
     ) -> tuple[list[YouTubeSubscription], int]:
         """Get cached subscriptions from database.
 
@@ -264,6 +265,8 @@ class YouTubeSubscriptionService:
             page_size: Items per page
             show_hidden: Include hidden channels
             starred_only: Only return starred channels
+            search: Optional keyword; case-insensitive match on channel title/description
+                (global search across all pages, not just the loaded ones)
 
         Returns:
             Tuple of (subscriptions list, total count)
@@ -276,6 +279,18 @@ class YouTubeSubscriptionService:
 
         if starred_only:
             conditions.append(YouTubeSubscription.is_starred == True)  # noqa: E712
+
+        term = (search or "").strip()
+        if term:
+            # 转义 LIKE 通配(镜像 task_service 既有写法),用户输入的 %/_ 不当通配
+            escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            conditions.append(
+                or_(
+                    YouTubeSubscription.channel_title.ilike(pattern, escape="\\"),
+                    YouTubeSubscription.channel_description.ilike(pattern, escape="\\"),
+                )
+            )
 
         # Get total count
         count_result = await db.execute(select(func.count(YouTubeSubscription.id)).where(*conditions))
