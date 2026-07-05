@@ -159,6 +159,13 @@ class Settings(BaseSettings):
     # 留恢复窗口。退避在 Semaphore 之外 sleep，期间槽位让给其它组。
     POLISH_RETRY_BACKOFF_SECONDS: float = Field(default=1.0)
 
+    # 单组润色 max_tokens 下限。deepseek-chat 经代理产出的 reasoning_content 与正文共享同一
+    # max_tokens 预算，实测推理峰值 ~3300 token；下限过小（旧的 2048+2000=4048）会让小分组被推理
+    # 吃满 → 返回空 → 整组回退原文丢润色。补测 group 采样在 8000 下 0/7 空返回、reasoning 峰值
+    # 3282 « 8000，故下限钉 8000（仍 ≤ 12000 上限，锁在代理实测放行区间）。大分组按内容预算继续
+    # 上探至 12000 封顶。
+    POLISH_MAX_TOKENS_FLOOR: int = Field(default=8000)
+
     # 转写润色（polish）固定使用的内部模型，刻意不跟随用户为「摘要」选择的模型。
     # polish 是机械式 ASR 纠错（错别字/同音字/中英术语/纯语气词置空），不需要重思考模型：
     # 实测重思考模型 doubao-seed-2-0-pro 每次烧 1400+ 思考 token、慢 4 倍却无质量增益（上个真实

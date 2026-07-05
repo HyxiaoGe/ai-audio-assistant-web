@@ -224,13 +224,13 @@ async def _polish_one_group(
         {"role": "user", "content": user_prompt},
     ]
 
-    # 润色输出长度≈输入，按 user_prompt 长度估内容预算，再叠加 ~2000 token 给
-    # deepseek-chat 经代理产出的 reasoning_content（推理链与正文共享同一 max_tokens
-    # 预算）。原先仅 len*2、小分组会贴边给值 → 推理把额度吃满 → 返回空 → 整组回退
-    # 原文丢润色。下限 2048 保底，上限 12000 锁在代理实测放行区间内。
-    # 逐组按本组 prompt 长度独立计算，并发不改变单组预算。
+    # 润色输出长度≈输入，按 user_prompt 长度估内容预算，再叠加 ~2000 token 给 deepseek-chat 经
+    # 代理产出的 reasoning_content(推理链与正文共享同一 max_tokens 预算)。小分组用「内容预算
+    # +2000」会贴边(旧值 4048)→ 推理吃满额度 → 返回空 → 整组回退原文丢润色。故再套一层
+    # POLISH_MAX_TOKENS_FLOOR(默认 8000,覆盖实测推理峰值 3282+正文)保底,上限 12000 封顶,锁在
+    # 代理实测放行区间。逐组按本组 prompt 长度独立计算,并发不改变单组预算。
     content_budget = max(len(user_prompt) * 2, 2048)
-    max_tokens = min(content_budget + 2000, 12000)
+    max_tokens = min(max(content_budget + 2000, settings.POLISH_MAX_TOKENS_FLOOR), 12000)
 
     attempts = max(1, settings.POLISH_MAX_ATTEMPTS_PER_GROUP)
     backoff_base = max(0.0, settings.POLISH_RETRY_BACKOFF_SECONDS)
