@@ -132,10 +132,10 @@ class Settings(BaseSettings):
     IMAGE_COST_CNY_BY_MODEL: dict[str, float] = Field(default_factory=dict)
 
     # 转写润色的并发 LLM 调用上限。润色把长转写按时间窗/段数切成多组、各组独立调一次
-    # deepseek-chat。有界并发压缩总耗时；上限必须 < proxy_llm 熔断阈值（failure_threshold=5），
-    # 使「一整波同时失败」也不足以把熔断打 OPEN、连累随后同走 proxy_llm 的摘要生成。
-    # 实测 647 段/14 组(每组 50 段)在并发 3 下 ~16min：故默认提到 4（仍 <5 保熔断不变式），
-    # 配合下方更小的分组（每组调用稳定落在 120s httpx 超时内、免去静默超时重试）显著提速。
+    # deepseek-chat。有界并发压缩总耗时；上限保持 < 熔断阈值（failure_threshold=5），使「一整波
+    # 同时失败」也不足以把 polish 自己的熔断线打 OPEN。polish 现走独立熔断器 polish_llm（见
+    # transcript_polish.POLISH_CIRCUIT_BREAKER_NAME），与摘要的 proxy_llm 状态隔离——即便 polish
+    # 熔断打开也不再连累随后的摘要生成。实测 647 段/14 组在并发 3 下 ~16min，故默认提到 4。
     POLISH_CONCURRENCY: int = Field(default=4)
 
     # 单个润色分组的最大片段数。每组拼成一次非流式 chat 调用，httpx 客户端读超时 120s——
@@ -151,13 +151,21 @@ class Settings(BaseSettings):
     # （代理推理吃满 max_tokens 回空最常见，这类「200 但无效」HTTP 层不会重试、过去被 parse
     # 当成"整组无改动"静默回退原文丢润色）。默认 2 = 首次 + 1 次重试：足以救回观测到的瞬时
     # 空返回，又刻意保守——重试经同一 Semaphore 限流，瞬时在途数仍 ≤ POLISH_CONCURRENCY，
-    # 不破坏「一波失败不足以打 OPEN 熔断、连累随后摘要」的不变式；代理真宕时重试快速失败再
+    # 不破坏「一波失败不足以打 OPEN polish_llm 熔断」的不变式；且 polish 现走独立 polish_llm
+    # 熔断器（与 proxy_llm 隔离），即便打 OPEN 也不再连累随后摘要；代理真宕时重试快速失败再
     # 回退，graceful。设为 1 即关闭重试（恢复旧行为）。
     POLISH_MAX_ATTEMPTS_PER_GROUP: int = Field(default=2)
 
     # 润色单组重试的线性退避基数（秒）：第 n 次重试前 sleep n×本值，给瞬时空返回/半开熔断
     # 留恢复窗口。退避在 Semaphore 之外 sleep，期间槽位让给其它组。
     POLISH_RETRY_BACKOFF_SECONDS: float = Field(default=1.0)
+
+    # 单组润色 max_tokens 下限。deepseek-chat 经代理产出的 reasoning_content 与正文共享同一
+    # max_tokens 预算，实测推理峰值 ~3300 token；下限过小（旧的 2048+2000=4048）会让小分组被推理
+    # 吃满 → 返回空 → 整组回退原文丢润色。补测 group 采样在 8000 下 0/7 空返回、reasoning 峰值
+    # 3282 « 8000，故下限钉 8000（仍 ≤ 12000 上限，锁在代理实测放行区间）。大分组按内容预算继续
+    # 上探至 12000 封顶。
+    POLISH_MAX_TOKENS_FLOOR: int = Field(default=8000)
 
     # 转写润色（polish）固定使用的内部模型，刻意不跟随用户为「摘要」选择的模型。
     # polish 是机械式 ASR 纠错（错别字/同音字/中英术语/纯语气词置空），不需要重思考模型：

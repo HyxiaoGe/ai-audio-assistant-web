@@ -38,6 +38,9 @@ class PolishResult:
 # System Prompt（硬编码，内容稳定不需要 PromptHub）
 # ============================================================
 
+# polish 独占的熔断器名(与 summarize 走的 proxy_llm 隔离，见 polish_transcripts 内绑定)。
+POLISH_CIRCUIT_BREAKER_NAME = "polish_llm"
+
 POLISH_SYSTEM_PROMPT = """你是一个专业的语音转写校对助手。你的任务是修正 ASR（语音识别）转写文本中的错误。
 
 修正范围：
@@ -224,13 +227,13 @@ async def _polish_one_group(
         {"role": "user", "content": user_prompt},
     ]
 
-    # 润色输出长度≈输入，按 user_prompt 长度估内容预算，再叠加 ~2000 token 给
-    # deepseek-chat 经代理产出的 reasoning_content（推理链与正文共享同一 max_tokens
-    # 预算）。原先仅 len*2、小分组会贴边给值 → 推理把额度吃满 → 返回空 → 整组回退
-    # 原文丢润色。下限 2048 保底，上限 12000 锁在代理实测放行区间内。
-    # 逐组按本组 prompt 长度独立计算，并发不改变单组预算。
+    # 润色输出长度≈输入，按 user_prompt 长度估内容预算，再叠加 ~2000 token 给 deepseek-chat 经
+    # 代理产出的 reasoning_content(推理链与正文共享同一 max_tokens 预算)。小分组用「内容预算
+    # +2000」会贴边(旧值 4048)→ 推理吃满额度 → 返回空 → 整组回退原文丢润色。故再套一层
+    # POLISH_MAX_TOKENS_FLOOR(默认 8000,覆盖实测推理峰值 3282+正文)保底,上限 12000 封顶,锁在
+    # 代理实测放行区间。逐组按本组 prompt 长度独立计算,并发不改变单组预算。
     content_budget = max(len(user_prompt) * 2, 2048)
-    max_tokens = min(content_budget + 2000, 12000)
+    max_tokens = min(max(content_budget + 2000, settings.POLISH_MAX_TOKENS_FLOOR), 12000)
 
     attempts = max(1, settings.POLISH_MAX_ATTEMPTS_PER_GROUP)
     backoff_base = max(0.0, settings.POLISH_RETRY_BACKOFF_SECONDS)
@@ -302,8 +305,8 @@ async def polish_transcripts(
 
     各分组互相独立（独立 prompt、独立 max_tokens、独立失败回退），用 asyncio.Semaphore
     限制并发的 LLM 调用数，再用 gather 收集。相比原串行实现，长任务（如 23 组）耗时从
-    ~8min 压到 ~1-2min；并发上限有意低于 proxy_llm 熔断阈值（failure_threshold=5），
-    避免偶发空返回在同一窗口扎堆把熔断打 OPEN、连累紧随其后同走 proxy_llm 的摘要生成。
+    ~8min 压到 ~1-2min；并发上限有意低于熔断阈值（failure_threshold=5），避免偶发空返回
+    在同一窗口扎堆把熔断打 OPEN。polish 走独立熔断器 polish_llm，与摘要的 proxy_llm 隔离。
 
     Args:
         llm_service: LLM 服务实例（需实现 chat 方法）
@@ -321,6 +324,13 @@ async def polish_transcripts(
     """
     if not segments:
         return []
+
+    # polish 走独立熔断线:每组失败可回退原文(可容错),不该把共享的 proxy_llm 打 OPEN 连累
+    # 紧随其后同走 proxy_llm 的 summarize。仅对 proxy 服务(polish 的 force_new 独占实例)切换。
+    from app.services.llm.proxy import ProxyLLMService
+
+    if isinstance(llm_service, ProxyLLMService):
+        llm_service.use_dedicated_circuit_breaker(POLISH_CIRCUIT_BREAKER_NAME)
 
     # 每组上限取自配置：下调段数让单组调用稳定落在 proxy 的 120s 读超时内，免去静默超时重试。
     max_per_group = max(1, settings.POLISH_MAX_SEGMENTS_PER_GROUP)

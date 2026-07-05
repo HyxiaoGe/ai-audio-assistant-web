@@ -57,3 +57,26 @@ async def test_stream_fast_fails_when_circuit_open(monkeypatch: pytest.MonkeyPat
         assert http_called["value"] is False  # 快速失败，未发起任何 HTTP
     finally:
         breaker.reset()
+
+
+from app.services.llm.proxy import ProxyLLMService as _Svc
+
+
+def _svc() -> _Svc:
+    return _Svc(config={"base_url": "http://litellm.test", "api_key": "k", "model": "m", "max_tokens": 16})
+
+
+def test_default_service_uses_shared_proxy_breaker():
+    svc = _svc()
+    assert svc._breaker is _Svc._circuit_breaker
+    assert svc._breaker.name == "proxy_llm"
+
+
+def test_use_dedicated_circuit_breaker_isolates_from_shared():
+    svc = _svc()
+    svc.use_dedicated_circuit_breaker("polish_llm")
+    assert svc._breaker.name == "polish_llm"
+    # 与共享的 proxy_llm 是不同对象:polish 打开不牵连 summarize
+    assert svc._breaker is not _Svc._circuit_breaker
+    # 同配置(失败阈值一致)
+    assert svc._breaker.config.failure_threshold == _Svc._circuit_breaker.config.failure_threshold

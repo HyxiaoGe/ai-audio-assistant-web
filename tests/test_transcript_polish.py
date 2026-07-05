@@ -117,10 +117,9 @@ async def test_polish_transcripts_success():
 async def test_polish_transcripts_max_tokens_reserves_reasoning_headroom():
     """max_tokens 必须给 reasoning_content 留足余量。
 
-    deepseek-chat 经代理会先产出 reasoning_content（推理链），与正文共享同一
-    max_tokens 预算。原先用 len(user_prompt)*2，小分组会贴边给值 → 推理吃满 →
-    返回空 → 整组回退原文丢润色。现固定为「内容预算(下限 2048) + 2000 推理余量，
-    上限 12000」：小分组应得 2048 + 2000 = 4048。
+    deepseek-chat 经代理会产出 reasoning_content，与正文共享同一 max_tokens 预算。
+    实测推理峰值 ~3300 token；下限抬到 8000 后，小分组也拿 8000（而非旧的 2048+2000=4048），
+    推理+正文不再榨空。断言小分组落在下限 8000。
     """
 
     class _CaptureLLM:
@@ -129,13 +128,12 @@ async def test_polish_transcripts_max_tokens_reserves_reasoning_headroom():
 
         async def chat(self, messages: list[dict], **kwargs) -> str:
             self.kwargs = kwargs
-            return "[1] 短\n[2] 文\n[3] 本"
+            return "[1] 论文"
 
     llm = _CaptureLLM()
-    segs = [_seg(1, "短", 0, 5), _seg(2, "文", 5, 10), _seg(3, "本", 10, 15)]
+    segs = [{"sequence": 1, "content": "论文", "start_time": 0.0, "end_time": 1.0}]
     await polish_transcripts(llm, segs)
-
-    assert llm.kwargs["max_tokens"] == 4048
+    assert llm.kwargs["max_tokens"] == 8000
     assert llm.kwargs["temperature"] == 0.3
 
 
@@ -400,3 +398,42 @@ async def test_polish_attempts_one_disables_retry(monkeypatch):
 
     assert calls["n"] == 1  # 不重试
     assert results[0].changed is False
+
+
+@pytest.mark.asyncio
+async def test_polish_max_tokens_scales_and_caps_for_large_group():
+    """大分组:内容预算 +2000 高于下限时按内容预算走,并在 12000 封顶。"""
+
+    class _CaptureLLM:
+        def __init__(self) -> None:
+            self.kwargs: dict = {}
+
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            self.kwargs = kwargs
+            # 回一段与输入等序号的响应,避免退化重试
+            return "\n".join(f"[{i}] x" for i in range(1, 26))
+
+    # 25 段、每段内容较长 → content_budget = len(prompt)*2 远超 8000 → 命中 12000 上限
+    # （*4 时 content_budget+2000=7328 仍落在 8000 地板内，实测须 *8 才能把预算顶穿 12000 上限）
+    long = "这是一段足够长的转写文本用于把内容预算顶到上限之上" * 8
+    segs = [{"sequence": i, "content": long, "start_time": float(i), "end_time": float(i) + 1.0} for i in range(1, 26)]
+    llm = _CaptureLLM()
+    await polish_transcripts(llm, segs)
+    assert llm.kwargs["max_tokens"] == 12000
+
+
+@pytest.mark.asyncio
+async def test_polish_transcripts_binds_dedicated_breaker_on_proxy_service():
+    from unittest.mock import AsyncMock
+
+    from app.services.llm.proxy import ProxyLLMService
+    from app.services.transcript_polish import POLISH_CIRCUIT_BREAKER_NAME
+
+    svc = ProxyLLMService(config={"base_url": "http://litellm.test", "api_key": "k", "model": "m", "max_tokens": 16})
+    assert svc._breaker.name == "proxy_llm"  # 默认
+    svc.chat = AsyncMock(return_value="[1] 论文")  # 打桩,不真发 HTTP
+
+    segs = [{"sequence": 1, "content": "论文", "start_time": 0.0, "end_time": 1.0}]
+    await polish_transcripts(svc, segs)
+
+    assert svc._breaker.name == POLISH_CIRCUIT_BREAKER_NAME  # 入口已切到 polish_llm
