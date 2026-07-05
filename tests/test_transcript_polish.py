@@ -134,6 +134,7 @@ async def test_polish_transcripts_max_tokens_reserves_reasoning_headroom():
     segs = [{"sequence": 1, "content": "论文", "start_time": 0.0, "end_time": 1.0}]
     await polish_transcripts(llm, segs)
     assert llm.kwargs["max_tokens"] == 8000
+    assert llm.kwargs["temperature"] == 0.3
 
 
 @pytest.mark.asyncio
