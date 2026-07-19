@@ -101,9 +101,24 @@ def verify_scoped_token(token: str) -> dict[str, Any]:
 def get_jwt_validator() -> JWTValidator:
     global _validator
     if _validator is None:
+        client_id = settings.AUTH_SERVICE_CLIENT_ID
+        if not client_id or not client_id.strip():
+            # auth-client 在 audience=None 时会关闭 aud 校验。这里必须 fail closed，避免任意由同一
+            # auth-service 签发、但属于 Fusion 等其它应用的访问令牌被 audio-web 接受。
+            raise RuntimeError("AUTH_SERVICE_CLIENT_ID 未配置，拒绝关闭 JWT audience 校验")
+        issuer = settings.auth_service_issuer
+        if not issuer:
+            # SDK 在 issuer 为 falsy 时同样会关闭 iss 校验；任何环境都不允许以降级方式创建校验器。
+            raise RuntimeError("AUTH_SERVICE_URL 未配置有效 issuer，拒绝关闭 JWT issuer 校验")
         # JWKS 取用优先走 LAN 内部基址（见 settings.resolved_auth_jwks_url 的说明）：经公网拉
         # JWKS ~1.5s/次，缓存 300s 一过期、并发认证请求各拉一遍即造成「开页齐卡」；LAN 仅 ~13ms。
-        _validator = JWTValidator(jwks_url=settings.resolved_auth_jwks_url, cache_ttl=300)
+        _validator = JWTValidator(
+            jwks_url=settings.resolved_auth_jwks_url,
+            issuer=issuer,
+            audience=client_id.strip(),
+            cache_ttl=300,
+            require_token_type="access",
+        )
     return _validator
 
 

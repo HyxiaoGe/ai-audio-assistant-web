@@ -19,6 +19,7 @@ services:
       PROMPTHUB_BASE_URL: http://prompthub-backend:8000
       CORS_ORIGINS: http://192.168.1.10:3002
       AUTH_SERVICE_URL: http://192.168.1.10:8100
+      AUTH_SERVICE_CLIENT_ID: ${AUTH_SERVICE_CLIENT_ID:?AUTH_SERVICE_CLIENT_ID must be set}
     volumes:
       - .:/app
       - ./data:/app/data

@@ -23,6 +23,7 @@ def test_prod_with_key_ok() -> None:
         APP_ENV="production",
         FIELD_ENCRYPTION_KEY=Fernet.generate_key().decode(),
         JWT_SECRET="prod-jwt-secret",
+        AUTH_SERVICE_CLIENT_ID="audio-client",
         DATABASE_URL="x",
         REDIS_URL="x",
     )
@@ -51,3 +52,33 @@ def test_prod_requires_jwt_secret() -> None:
 def test_dev_allows_missing_jwt_secret() -> None:
     s = Settings(_env_file=None, APP_ENV="development", JWT_SECRET=None, DATABASE_URL="x", REDIS_URL="x")
     assert s.JWT_SECRET is None
+
+
+def test_prod_requires_auth_service_client_id() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(
+            _env_file=None,
+            APP_ENV="production",
+            FIELD_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+            JWT_SECRET="prod-jwt-secret",
+            AUTH_SERVICE_CLIENT_ID=" ",
+            DATABASE_URL="x",
+            REDIS_URL="x",
+        )
+    assert "AUTH_SERVICE_CLIENT_ID" in str(exc.value)
+
+
+@pytest.mark.parametrize("auth_service_url", ["", "   ", "/"])
+def test_prod_requires_non_empty_auth_service_issuer(auth_service_url: str) -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(
+            _env_file=None,
+            APP_ENV="production",
+            FIELD_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+            JWT_SECRET="prod-jwt-secret",
+            AUTH_SERVICE_URL=auth_service_url,
+            AUTH_SERVICE_CLIENT_ID="audio-client",
+            DATABASE_URL="x",
+            REDIS_URL="x",
+        )
+    assert "AUTH_SERVICE_URL" in str(exc.value)

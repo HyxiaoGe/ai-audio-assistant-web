@@ -117,13 +117,15 @@ All settings have defaults; but when `APP_ENV=production`, a validator **require
 |---|---|
 | `FIELD_ENCRYPTION_KEY` | Fernet key for at-rest sensitive fields (e.g. OAuth tokens); comma-separated for rotation (first encrypts, all decrypt). Required in prod |
 | `JWT_SECRET` | HS256 self-signing key for short-lived media / SSE tickets. Required in prod |
+| `AUTH_SERVICE_URL` | The public auth-service issuer; startup fails if blank or empty after normalization. Required in prod |
+| `AUTH_SERVICE_CLIENT_ID` | The client id registered for this app in auth-service; also used to validate the access-token `aud`. Required in prod |
 
 Other key groups (full list in `.env.example`):
 
 | Group | Representative vars | Notes |
 |-------|---------------------|-------|
 | DB / Redis | `DATABASE_URL`, `REDIS_URL`, `DB_POOL_SIZE`, `DB_MAX_OVERFLOW` | required to run; when scaling workers, shrink the pool to protect the shared PG |
-| Auth | `AUTH_SERVICE_URL`, `AUTH_SERVICE_INTERNAL_URL`, `AUTH_SERVICE_JWKS_URL` | JWKS prefers the internal LAN base to avoid public-tunnel tail latency |
+| Auth | `AUTH_SERVICE_URL`, `AUTH_SERVICE_CLIENT_ID`, `AUTH_SERVICE_INTERNAL_URL`, `AUTH_SERVICE_JWKS_URL` | Enforces issuer, audience, and `type=access`; JWKS prefers the internal LAN base to avoid public-tunnel tail latency |
 | Object storage (pick one) | `MINIO_*` / `COS_*` / `OSS_*` / `TOS_*` | configure the group for the vendor you use |
 | ASR (3 vendors) | `TENCENT_*` / `ALIYUN_*` / `VOLC_ASR_*` | auto-discovered by credentials; plus engine/diarization tuning |
 | Text LLM | `LITELLM_BASE_URL`, `LITELLM_API_KEY`, `LITELLM_MODEL` | all chat/completion goes through LiteLLM Proxy |

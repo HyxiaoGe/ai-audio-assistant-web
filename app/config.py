@@ -41,6 +41,8 @@ class Settings(BaseSettings):
 
     # Auth Service (统一认证)
     AUTH_SERVICE_URL: str = Field(default="http://localhost:8100")
+    # 本应用在 auth-service 注册的 client_id，同时也是访问令牌 aud。后端必须用它隔离其它应用令牌。
+    AUTH_SERVICE_CLIENT_ID: str | None = Field(default=None)
     AUTH_SERVICE_JWKS_URL: str | None = Field(default=None)
     # 服务间内部调用（/auth/userinfo、/auth/profile、JWKS）的 auth-service 基址。生产/dev 应指向
     # LAN（如 http://192.168.1.11:8100），避免绕公网 cloudflared 隧道——userinfo 经隧道
@@ -312,6 +314,11 @@ class Settings(BaseSettings):
         return (self.AUTH_SERVICE_INTERNAL_URL or self.AUTH_SERVICE_URL).rstrip("/")
 
     @property
+    def auth_service_issuer(self) -> str:
+        """访问令牌必须匹配的 auth-service issuer（去首尾空白和尾斜杠）。"""
+        return self.AUTH_SERVICE_URL.strip().rstrip("/")
+
+    @property
     def resolved_auth_jwks_url(self) -> str:
         """JWKS 公钥集的获取 URL（已含 /.well-known/jwks.json 路径）。
 
@@ -343,6 +350,12 @@ class Settings(BaseSettings):
             # 媒体/SSE 短票用 JWT_SECRET 自签（HS256）；生产缺失则无法签发安全的媒体 URL。
             if not self.JWT_SECRET:
                 missing.append("JWT_SECRET")
+            # client_id 决定 JWT audience；生产缺失时绝不能静默关闭 aud 校验。
+            if not self.AUTH_SERVICE_CLIENT_ID or not self.AUTH_SERVICE_CLIENT_ID.strip():
+                missing.append("AUTH_SERVICE_CLIENT_ID")
+            # auth-client 在 issuer 为空时会关闭 iss 校验；去空白/尾斜杠后必须仍有值。
+            if not self.auth_service_issuer:
+                missing.append("AUTH_SERVICE_URL")
             if missing:
                 raise ValueError(
                     "生产环境缺少必需密钥（必须由 secrets manager/orchestrator 注入，不得写入镜像）: "

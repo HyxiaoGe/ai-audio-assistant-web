@@ -143,6 +143,9 @@ jobs:
             env_file: .env
             environment:
               TZ: UTC
+              # 与前端 NEXT_PUBLIC_AUTH_CLIENT_ID 对应；缺失时 Compose 在替换阶段直接失败，
+              # 不能让 auth-client 退化为不校验 audience。
+              AUTH_SERVICE_CLIENT_ID: ${AUTH_SERVICE_CLIENT_ID:?AUTH_SERVICE_CLIENT_ID must be set}
             restart: unless-stopped
             volumes:
               - ./data:/app/data
@@ -182,6 +185,8 @@ jobs:
             ai-audio-network:
               external: true
           EOF
+          # 先完成变量替换与 Compose 语法校验，再移除旧容器；缺 client_id 时保留当前服务在线。
+          docker compose -f docker-compose.ai-audio-web-ghcr.yml config --quiet
           # 兜底：清掉旧 compose project 持有的容器，避免首次切换 GHCR 时容器名冲突
           docker rm -f ai-audio-assistant-web-api-1 ai-audio-assistant-web-worker-1 ai-audio-assistant-web-beat-1 2>/dev/null || true
           docker rm -f ai-audio-assistant-web-api ai-audio-assistant-web-worker ai-audio-assistant-web-beat 2>/dev/null || true

@@ -117,13 +117,15 @@ pydantic 层所有项都有默认值;但当 `APP_ENV=production` 时,校验器�
 |---|---|
 | `FIELD_ENCRYPTION_KEY` | 落库 OAuth token 等敏感字段的 Fernet 加密密钥;逗号分隔多把可轮换(首把加密、全部解密)。生产必填 |
 | `JWT_SECRET` | 媒体 / SSE 短期票据的 HS256 自签密钥。生产必填 |
+| `AUTH_SERVICE_URL` | auth-service 对外 issuer；空白或规范化后为空会启动失败。生产必填 |
+| `AUTH_SERVICE_CLIENT_ID` | 本应用在 auth-service 注册的 client_id，同时用于校验访问令牌 `aud`。生产必填 |
 
 其余关键分组(完整见 `.env.example`):
 
 | 分组 | 代表变量 | 备注 |
 |------|----------|------|
 | 数据库 / Redis | `DATABASE_URL`、`REDIS_URL`、`DB_POOL_SIZE`、`DB_MAX_OVERFLOW` | 应用/Worker 运行必需;worker 翻倍须同步减池以护共享 PG |
-| 鉴权 | `AUTH_SERVICE_URL`、`AUTH_SERVICE_INTERNAL_URL`、`AUTH_SERVICE_JWKS_URL` | JWKS 优先走内网基址避公网隧道尾延 |
+| 鉴权 | `AUTH_SERVICE_URL`、`AUTH_SERVICE_CLIENT_ID`、`AUTH_SERVICE_INTERNAL_URL`、`AUTH_SERVICE_JWKS_URL` | 强制校验 issuer、audience 和 `type=access`；JWKS 优先走内网基址避公网隧道尾延 |
 | 对象存储(四选一) | `MINIO_*` / `COS_*` / `OSS_*` / `TOS_*` | 选用哪家配哪组 |
 | ASR(三厂商) | `TENCENT_*` / `ALIYUN_*` / `VOLC_ASR_*` | 按凭证自动发现;另有引擎/说话人分离调参 |
 | 文本 LLM | `LITELLM_BASE_URL`、`LITELLM_API_KEY`、`LITELLM_MODEL` | 所有 chat/completion 统一经 LiteLLM Proxy |
