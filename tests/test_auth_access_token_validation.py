@@ -29,18 +29,28 @@ def jwks(keypair):
     return {"keys": [jwk]}
 
 
-def _mint(keypair, *, issuer: str = ISSUER, audience: str = AUDIENCE, token_type: str = "access") -> str:
+def _mint(
+    keypair,
+    *,
+    issuer: str = ISSUER,
+    audience: str = AUDIENCE,
+    token_type: str = "access",
+    sid: str | None = None,
+) -> str:
     now = int(time.time())
+    payload = {
+        "sub": "user-1",
+        "email": "user@example.com",
+        "iss": issuer,
+        "aud": audience,
+        "type": token_type,
+        "iat": now,
+        "exp": now + 3600,
+    }
+    if sid is not None:
+        payload["sid"] = sid
     return jwt.encode(
-        {
-            "sub": "user-1",
-            "email": "user@example.com",
-            "iss": issuer,
-            "aud": audience,
-            "type": token_type,
-            "iat": now,
-            "exp": now + 3600,
-        },
+        payload,
         keypair,
         algorithm="RS256",
         headers={"kid": KID},
@@ -68,6 +78,13 @@ async def test_correct_access_token_is_accepted(validator, keypair) -> None:
     assert validator.issuer == ISSUER
     assert validator.audience == AUDIENCE
     assert validator.require_token_type == "access"
+
+
+@pytest.mark.asyncio
+async def test_optional_sid_claim_is_preserved_in_raw_payload(validator, keypair) -> None:
+    user = await validator.verify_async(_mint(keypair, sid="sid-1"))
+    assert user.sub == "user-1"
+    assert user.raw_payload["sid"] == "sid-1"
 
 
 @pytest.mark.asyncio
@@ -99,9 +116,7 @@ def test_missing_client_id_does_not_disable_audience_validation(monkeypatch: pyt
 
 
 @pytest.mark.parametrize("issuer", ["", "   ", "/"])
-def test_invalid_issuer_does_not_disable_issuer_validation(
-    monkeypatch: pytest.MonkeyPatch, issuer: str
-) -> None:
+def test_invalid_issuer_does_not_disable_issuer_validation(monkeypatch: pytest.MonkeyPatch, issuer: str) -> None:
     monkeypatch.setattr(security.settings, "AUTH_SERVICE_URL", issuer)
     monkeypatch.setattr(security.settings, "AUTH_SERVICE_CLIENT_ID", AUDIENCE)
     monkeypatch.setattr(security, "_validator", None)

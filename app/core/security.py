@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from auth import AuthenticatedUser, JWTValidator
@@ -22,6 +24,10 @@ _validator: JWTValidator | None = None
 # Redis (the same instance audio-web already uses). We reject any access token whose ``iat``
 # predates that marker -- see auth-service docs/AUTH_CONTRACT.md for the cross-app contract.
 USER_REVOKED_PREFIX = "revoked_user:"
+# 新 token 的 sid 是认证会话标识，不是用户标识。auth-service 注销单会话时写入
+# revoked_sid:{sid}=1，TTL 为刷新令牌寿命加 60 秒；旧 token 无 sid 时继续兼容。
+SESSION_REVOKED_PREFIX = "revoked_sid:"
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # --- Self-signed scoped tickets (media/SSE URLs) ----------------------------
 # These short-lived tickets are handed to the browser so that <img>/<audio>/
@@ -44,7 +50,24 @@ SCOPE_MEDIA = "media"
 SCOPE_STREAM = "stream"
 
 
-def issue_scoped_token(*, sub: str, scope: str, ttl: int, resource: dict[str, Any] | None = None) -> str:
+def extract_session_id(payload: Mapping[str, object] | None) -> str | None:
+    """读取并校验可选 sid；sid 只标识认证会话，绝不替代业务用户 sub。"""
+    if not payload or "sid" not in payload:
+        return None
+    sid = payload["sid"]
+    if not isinstance(sid, str) or not sid or not _SESSION_ID_RE.fullmatch(sid):
+        raise ValueError("JWT sid claim must be a non-empty URL-safe string")
+    return sid
+
+
+def issue_scoped_token(
+    *,
+    sub: str,
+    scope: str,
+    ttl: int,
+    resource: dict[str, Any] | None = None,
+    sid: str | None = None,
+) -> str:
     """Mint a short-lived HS256 ticket bound to ``sub`` and ``scope``.
 
     ``resource`` (e.g. ``{"task_id": ..., "summary_type": ...}``) further pins
@@ -63,6 +86,8 @@ def issue_scoped_token(*, sub: str, scope: str, ttl: int, resource: dict[str, An
     }
     if resource:
         claims["resource"] = resource
+    if sid is not None:
+        claims["sid"] = extract_session_id({"sid": sid})
     return jwt.encode(claims, settings.JWT_SECRET, algorithm=_SCOPED_ALG)
 
 
@@ -95,6 +120,10 @@ def verify_scoped_token(token: str) -> dict[str, Any]:
         or not claims.get("scope")
     ):
         raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
+    try:
+        extract_session_id(claims)
+    except ValueError as exc:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID) from exc
     return claims
 
 
@@ -131,7 +160,7 @@ def extract_bearer_token(authorization: str | None) -> str:
     return token
 
 
-async def _is_user_access_revoked(sub: str, token_iat: float | int | None) -> bool:
+async def is_user_access_revoked(sub: str, token_iat: float | int | None) -> bool:
     """True iff the user's Single-Logout marker post-dates this token's ``iat``.
 
     Mirrors auth-service's check (AUTH_CONTRACT.md): the marker is a float wall-clock instant
@@ -155,6 +184,28 @@ async def _is_user_access_revoked(sub: str, token_iat: float | int | None) -> bo
     return float(token_iat) < float(raw)
 
 
+async def is_session_access_revoked(sid: str | None) -> bool:
+    """会话 sid 是否已被 auth-service 即时吊销；Redis 故障沿用 SLO 失败开放。"""
+    if sid is None:
+        return False
+    try:
+        raw = await get_redis_client().get(f"{SESSION_REVOKED_PREFIX}{sid}")
+    except Exception:
+        logger.warning("SLO session revocation check unavailable (Redis); failing open", exc_info=True)
+        return False
+    return raw is not None
+
+
+async def is_auth_context_revoked(
+    *,
+    sub: str,
+    token_iat: float | int | None,
+    session_id: str | None,
+) -> bool:
+    """同时复核单会话与全设备登出标记，供短票和长连接复用。"""
+    return await is_session_access_revoked(session_id) or await is_user_access_revoked(sub, token_iat)
+
+
 async def verify_access_token(token: str) -> AuthenticatedUser:
     if not token:
         raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
@@ -166,8 +217,17 @@ async def verify_access_token(token: str) -> AuthenticatedUser:
         if "expired" in error_msg:
             raise BusinessError(ErrorCode.AUTH_TOKEN_EXPIRED) from exc
         raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID) from exc
+    try:
+        session_id = extract_session_id(user.raw_payload)
+    except ValueError as exc:
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID) from exc
+
     # Single Logout: the signature above is still valid after a foreign logout, so consult the
-    # shared-Redis marker and reject an access token issued before this user's last logout.
-    if await _is_user_access_revoked(user.sub, user.raw_payload.get("iat")):
+    # shared-Redis markers before exposing the authenticated user to application code.
+    if await is_auth_context_revoked(
+        sub=user.sub,
+        token_iat=user.raw_payload.get("iat"),
+        session_id=session_id,
+    ):
         raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
     return user

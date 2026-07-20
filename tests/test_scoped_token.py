@@ -46,6 +46,13 @@ def test_resource_binding_is_preserved():
     assert claims["resource"] == {"task_id": "t-1", "summary_type": "overview"}
 
 
+def test_session_id_is_preserved_without_becoming_subject():
+    token = issue_scoped_token(sub="user-1", scope="stream", ttl=300, sid="sid-1")
+    claims = verify_scoped_token(token)
+    assert claims["sub"] == "user-1"
+    assert claims["sid"] == "sid-1"
+
+
 def test_expired_ticket_is_rejected():
     token = issue_scoped_token(sub="user-1", scope="media", ttl=-1)
     with pytest.raises(BusinessError) as exc_info:

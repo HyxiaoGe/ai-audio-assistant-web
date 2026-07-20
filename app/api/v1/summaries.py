@@ -25,7 +25,7 @@ from app.core.exceptions import BusinessError
 from app.core.rate_limit import rate_limit, rate_limit_query
 from app.core.redis import get_redis_client
 from app.core.response import success
-from app.core.security import SCOPE_STREAM, issue_scoped_token
+from app.core.security import SCOPE_STREAM, is_auth_context_revoked, issue_scoped_token
 from app.i18n.codes import ErrorCode
 from app.models.summary import Summary
 from app.models.task import Task
@@ -41,6 +41,16 @@ from app.schemas.summary import (
 from app.services.media_url import build_media_download_url
 
 router = APIRouter(prefix="/summaries")
+_STREAM_SESSION_RECHECK_SECONDS = 25
+
+
+async def _is_stream_session_revoked(user: CurrentUser) -> bool:
+    """流已建连后周期复核单会话与全设备登出标记。"""
+    return await is_auth_context_revoked(
+        sub=user.id,
+        token_iat=user.issued_at,
+        session_id=user.session_id,
+    )
 
 
 def _text_capable_llm_providers() -> set[str]:
@@ -250,6 +260,7 @@ async def mint_stream_ticket(
         scope=SCOPE_STREAM,
         ttl=settings.MEDIA_TOKEN_TTL,
         resource={"task_id": task_id, "summary_type": summary_type},
+        sid=user.session_id,
     )
     return success(data={"token": token, "expires_in": settings.MEDIA_TOKEN_TTL})
 
@@ -261,7 +272,6 @@ async def stream_summary_regeneration(
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_stream_user),
 ) -> StreamingResponse:
-
     # Verify task belongs to user
     task_stmt = select(Task).where(Task.id == task_id, Task.user_id == user.id, Task.deleted_at.is_(None))
     task_result = await db.execute(task_stmt)
@@ -318,9 +328,15 @@ async def stream_summary_regeneration(
             import time
 
             start_time = time.time()
+            last_session_check = time.monotonic()
             timeout_seconds = 120
 
             while (time.time() - start_time) < timeout_seconds:
+                now = time.monotonic()
+                if now - last_session_check >= _STREAM_SESSION_RECHECK_SECONDS:
+                    last_session_check = now
+                    if await _is_stream_session_revoked(user):
+                        return
                 messages_processed = 0
                 while not msg_queue.empty() and messages_processed < 50:
                     try:
@@ -693,10 +709,16 @@ async def stream_comparison(
             import time
 
             start_time = time.time()
+            last_session_check = time.monotonic()
             timeout_seconds = 300  # 5分钟超时（多个模型需要更长时间）
             completed_summaries = set()  # 跟踪已完成的摘要ID
 
             while (time.time() - start_time) < timeout_seconds:
+                now = time.monotonic()
+                if now - last_session_check >= _STREAM_SESSION_RECHECK_SECONDS:
+                    last_session_check = now
+                    if await _is_stream_session_revoked(user):
+                        return
                 messages_processed = 0
                 while not msg_queue.empty() and messages_processed < 50:
                     try:

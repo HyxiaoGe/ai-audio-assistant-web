@@ -68,9 +68,7 @@ def assert_owns_media_key(object_key: str, user_id: str) -> None:
         raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
 
-async def assert_public_media_access(
-    db: AsyncSession, public_task_id: str, sub: str, object_key: str
-) -> None:
+async def assert_public_media_access(db: AsyncSession, public_task_id: str, sub: str, object_key: str) -> None:
     """公开媒体票(resource pin)的允许集复核。
 
     每次请求 DB 复核「任务仍公开」——管理员取消公开后已签发的票立即失效
@@ -93,9 +91,7 @@ async def assert_public_media_access(
     ).scalar_one_or_none()
     if task is None:
         raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
-    allowed = object_key == task.source_key or object_key.startswith(
-        f"summary_images/{task.user_id}/{task.id}/"
-    )
+    allowed = object_key == task.source_key or object_key.startswith(f"summary_images/{task.user_id}/{task.id}/")
     if not allowed:
         raise BusinessError(ErrorCode.RESOURCE_NOT_FOUND)
 
@@ -108,7 +104,12 @@ async def mint_media_ticket(
 
     必须用 Authorization header 鉴权（不接受 ?token= 自举），票据仅绑定调用方用户。
     """
-    token = issue_scoped_token(sub=user.id, scope=SCOPE_MEDIA, ttl=settings.MEDIA_TOKEN_TTL)
+    token = issue_scoped_token(
+        sub=user.id,
+        scope=SCOPE_MEDIA,
+        ttl=settings.MEDIA_TOKEN_TTL,
+        sid=user.session_id,
+    )
     return success(data={"token": token, "expires_in": settings.MEDIA_TOKEN_TTL})
 
 

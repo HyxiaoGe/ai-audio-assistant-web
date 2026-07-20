@@ -62,9 +62,13 @@ class _FakeWebSocket:
 
     def __init__(self) -> None:
         self.sent: list[str] = []
+        self.closed: list[int] = []
 
     async def send_text(self, data: str) -> None:
         self.sent.append(data)
+
+    async def close(self, code: int) -> None:
+        self.closed.append(code)
 
 
 async def test_forward_pubsub_subscribes_via_bus_and_forwards(monkeypatch) -> None:
@@ -82,6 +86,26 @@ async def test_forward_pubsub_subscribes_via_bus_and_forwards(monkeypatch) -> No
 
     assert bus.subscribed_user == "u1"
     assert '{"kind":"notification","data":{"id":"n1"}}' in ws.sent
+    assert pubsub.unsubscribed is True
+    assert pubsub.closed is True
+
+
+async def test_forward_pubsub_periodically_closes_revoked_session(monkeypatch) -> None:
+    pubsub = _FakeSyncPubSub([])
+    monkeypatch.setattr(ws_module, "get_event_bus", lambda: _FakeBus(pubsub))
+    monkeypatch.setattr(ws_module, "SESSION_REVOCATION_RECHECK_SECONDS", 0)
+
+    checked = {}
+
+    async def _revoked(*, sub: str, token_iat: float | int | None, session_id: str | None) -> bool:
+        checked.update(sub=sub, token_iat=token_iat, session_id=session_id)
+        return True
+
+    monkeypatch.setattr(ws_module, "is_auth_context_revoked", _revoked)
+    ws = _FakeWebSocket()
+    await ws_module._forward_pubsub(ws, "u1", "sid-1", 123)
+    assert ws.closed == [ws_module.CLOSE_CODE_AUTH_FAILED]
+    assert checked == {"sub": "u1", "token_iat": 123, "session_id": "sid-1"}
     assert pubsub.unsubscribed is True
     assert pubsub.closed is True
 
