@@ -46,6 +46,11 @@ class TestCurrentUser:
         user = CurrentUser(id="f6d3827e-3827-4c4c-8e5e-6880a1c05f22", email="x@y.com")
         assert isinstance(user.id, str)
 
+    def test_session_id_is_separate_from_business_user_id(self):
+        user = CurrentUser(id="user-1", email="x@y.com", session_id="sid-1")
+        assert user.id == "user-1"
+        assert user.session_id == "sid-1"
+
 
 # ── Admin check ──
 

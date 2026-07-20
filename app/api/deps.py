@@ -12,6 +12,8 @@ from app.core.security import (
     SCOPE_MEDIA,
     SCOPE_STREAM,
     extract_bearer_token,
+    extract_session_id,
+    is_auth_context_revoked,
     verify_access_token,
     verify_scoped_token,
 )
@@ -27,6 +29,8 @@ class CurrentUser:
     id: str  # auth-service user_id (from JWT sub)
     email: str  # from JWT claims
     scopes: list[str] = field(default_factory=list)
+    session_id: str | None = field(default=None, repr=False, compare=False)
+    issued_at: float | int | None = field(default=None, repr=False, compare=False)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -48,7 +52,13 @@ async def _resolve_user(db: AsyncSession, token: str) -> CurrentUser:
         db.add(profile)
         await db.flush()
 
-    return CurrentUser(id=user_id, email=auth_user.email, scopes=auth_user.scopes)
+    return CurrentUser(
+        id=user_id,
+        email=auth_user.email,
+        scopes=auth_user.scopes,
+        session_id=extract_session_id(auth_user.raw_payload),
+        issued_at=auth_user.raw_payload.get("iat"),
+    )
 
 
 async def get_current_user(
@@ -111,7 +121,12 @@ async def get_current_user_from_query(
     return await _resolve_user(db, token)
 
 
-def _scoped_user(token: str, *, expected_scope: str, resource: dict[str, str] | None = None) -> CurrentUser:
+async def _scoped_user(
+    token: str,
+    *,
+    expected_scope: str,
+    resource: dict[str, str] | None = None,
+) -> CurrentUser:
     """Authenticate a short-lived scoped ticket carried in ``?token=``.
 
     Raises ``AUTH_TOKEN_EXPIRED`` / ``AUTH_TOKEN_INVALID`` directly. The legacy
@@ -126,9 +141,21 @@ def _scoped_user(token: str, *, expected_scope: str, resource: dict[str, str] | 
         raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
     if resource is not None and claims.get("resource") != resource:
         raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
+    session_id = extract_session_id(claims)
+    if await is_auth_context_revoked(
+        sub=str(claims["sub"]),
+        token_iat=claims.get("iat"),
+        session_id=session_id,
+    ):
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
     # Ticket-authenticated requests only ever need the owner id (ownership gates
     # downstream); the ticket intentionally carries no email/scopes.
-    return CurrentUser(id=str(claims["sub"]), email="")
+    return CurrentUser(
+        id=str(claims["sub"]),
+        email="",
+        session_id=session_id,
+        issued_at=claims.get("iat"),
+    )
 
 
 async def get_media_user(
@@ -146,7 +173,7 @@ async def get_media_user(
         return await get_current_user(db, authorization)
     if not token:
         raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
-    return _scoped_user(token, expected_scope=SCOPE_MEDIA)
+    return await _scoped_user(token, expected_scope=SCOPE_MEDIA)
 
 
 @dataclass
@@ -175,13 +202,28 @@ async def get_media_principal(
     claims = verify_scoped_token(token)
     if claims.get("scope") != SCOPE_MEDIA:
         raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
+    session_id = extract_session_id(claims)
+    if await is_auth_context_revoked(
+        sub=str(claims["sub"]),
+        token_iat=claims.get("iat"),
+        session_id=session_id,
+    ):
+        raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
     resource = claims.get("resource")
     public_task_id: str | None = None
     if resource is not None:
         if not isinstance(resource, dict) or not isinstance(resource.get("public_task"), str):
             raise BusinessError(ErrorCode.AUTH_TOKEN_INVALID)
         public_task_id = resource["public_task"]
-    return MediaPrincipal(user=CurrentUser(id=str(claims["sub"]), email=""), public_task_id=public_task_id)
+    return MediaPrincipal(
+        user=CurrentUser(
+            id=str(claims["sub"]),
+            email="",
+            session_id=session_id,
+            issued_at=claims.get("iat"),
+        ),
+        public_task_id=public_task_id,
+    )
 
 
 async def get_stream_user(
@@ -201,7 +243,7 @@ async def get_stream_user(
         return await get_current_user(db, authorization)
     if not token:
         raise BusinessError(ErrorCode.AUTH_TOKEN_NOT_PROVIDED)
-    return _scoped_user(
+    return await _scoped_user(
         token,
         expected_scope=SCOPE_STREAM,
         resource={"task_id": task_id, "summary_type": summary_type},

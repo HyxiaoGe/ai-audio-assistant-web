@@ -42,8 +42,11 @@ class _FakeValidator:
         return self._user
 
 
-def _user(sub: str = "u1", iat: int = 1000) -> AuthenticatedUser:
-    return AuthenticatedUser(sub=sub, email="a@b.c", raw_payload={"sub": sub, "iat": iat, "type": "access"})
+def _user(sub: str = "u1", iat: int = 1000, sid: object | None = None) -> AuthenticatedUser:
+    payload: dict[str, object] = {"sub": sub, "iat": iat, "type": "access"}
+    if sid is not None:
+        payload["sid"] = sid
+    return AuthenticatedUser(sub=sub, email="a@b.c", raw_payload=payload)
 
 
 def _wire(monkeypatch: pytest.MonkeyPatch, user: AuthenticatedUser, fake_redis: _FakeRedis) -> None:
@@ -75,6 +78,40 @@ async def test_no_marker_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire(monkeypatch, user, _FakeRedis({}))
     result = await security.verify_access_token("tok")
     assert result.sub == "u2"
+
+
+@pytest.mark.asyncio
+async def test_revoked_sid_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = _user(sub="u1", iat=3000, sid="sid-1")
+    _wire(monkeypatch, user, _FakeRedis({"revoked_sid:sid-1": "1"}))
+    with pytest.raises(BusinessError) as exc_info:
+        await security.verify_access_token("tok")
+    assert exc_info.value.code == ErrorCode.AUTH_TOKEN_INVALID
+
+
+@pytest.mark.asyncio
+async def test_malformed_sid_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = _user(sub="u1", iat=3000, sid=123)
+    _wire(monkeypatch, user, _FakeRedis({}))
+    with pytest.raises(BusinessError) as exc_info:
+        await security.verify_access_token("tok")
+    assert exc_info.value.code == ErrorCode.AUTH_TOKEN_INVALID
+
+
+@pytest.mark.asyncio
+async def test_missing_sid_keeps_legacy_token_compatible(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = _user(sub="u1", iat=3000)
+    _wire(monkeypatch, user, _FakeRedis({}))
+    assert (await security.verify_access_token("tok")).sub == "u1"
+
+
+@pytest.mark.asyncio
+async def test_sid_revocation_redis_outage_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = _user(sub="u1", iat=3000, sid="sid-1")
+    fake = _FakeRedis({}, raise_exc=ConnectionError("redis down"))
+    _wire(monkeypatch, user, fake)
+    assert (await security.verify_access_token("tok")).sub == "u1"
+    assert fake.calls > 0
 
 
 @pytest.mark.asyncio

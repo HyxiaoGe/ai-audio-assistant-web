@@ -28,6 +28,7 @@ from app.api.deps import (
 from app.api.v1 import media as media_module
 from app.api.v1 import summaries as summaries_module
 from app.config import settings
+from app.core import security
 from app.core.exceptions import BusinessError
 from app.core.security import issue_scoped_token, verify_scoped_token
 from app.i18n.codes import ErrorCode
@@ -44,6 +45,16 @@ def _force_secret(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _fake_db() -> AsyncIterator[None]:
     yield None
+
+
+class _AsyncRedis:
+    def __init__(self, store: dict[str, str]) -> None:
+        self._store = store
+        self.keys: list[str] = []
+
+    async def get(self, key: str) -> str | None:
+        self.keys.append(key)
+        return self._store.get(key)
 
 
 def _register_error_handler(app: FastAPI) -> None:
@@ -91,6 +102,17 @@ async def test_media_ticket_resolves_user() -> None:
         resp = await client.get("/probe-media", params={"token": token})
     assert resp.status_code == 200
     assert resp.json()["id"] == "u1"
+
+
+@pytest.mark.asyncio
+async def test_media_ticket_with_revoked_sid_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = issue_scoped_token(sub="u1", scope="media", ttl=300, sid="sid-1")
+    fake = _AsyncRedis({"revoked_sid:sid-1": "1"})
+    monkeypatch.setattr(security, "get_redis_client", lambda: fake)
+    async with _client(_media_probe_app()) as client:
+        resp = await client.get("/probe-media", params={"token": token})
+    assert resp.status_code == 401
+    assert fake.keys == ["revoked_sid:sid-1"]
 
 
 @pytest.mark.asyncio
@@ -153,12 +175,13 @@ def _stream_probe_app() -> FastAPI:
     return app
 
 
-def _stream_ticket(sub: str, task_id: str, summary_type: str) -> str:
+def _stream_ticket(sub: str, task_id: str, summary_type: str, *, sid: str | None = None) -> str:
     return issue_scoped_token(
         sub=sub,
         scope="stream",
         ttl=300,
         resource={"task_id": task_id, "summary_type": summary_type},
+        sid=sid,
     )
 
 
@@ -169,6 +192,39 @@ async def test_stream_ticket_matching_resource_ok() -> None:
         resp = await client.get("/probe-stream/t1/stream", params={"token": token, "summary_type": "overview"})
     assert resp.status_code == 200
     assert resp.json()["id"] == "u1"
+
+
+@pytest.mark.asyncio
+async def test_stream_ticket_with_revoked_sid_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = _stream_ticket("u1", "t1", "overview", sid="sid-1")
+    fake = _AsyncRedis({"revoked_sid:sid-1": "1"})
+    monkeypatch.setattr(security, "get_redis_client", lambda: fake)
+    async with _client(_stream_probe_app()) as client:
+        resp = await client.get("/probe-stream/t1/stream", params={"token": token, "summary_type": "overview"})
+    assert resp.status_code == 401
+    assert fake.keys == ["revoked_sid:sid-1"]
+
+
+@pytest.mark.asyncio
+async def test_stream_periodic_gate_detects_revoked_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _revoked(*, sub: str, token_iat: float | int | None, session_id: str | None) -> bool:
+        assert (sub, token_iat, session_id) == ("u1", 123, "sid-1")
+        return True
+
+    monkeypatch.setattr(summaries_module, "is_auth_context_revoked", _revoked)
+    user = CurrentUser(id="u1", email="", session_id="sid-1", issued_at=123)
+    assert await summaries_module._is_stream_session_revoked(user) is True
+
+
+@pytest.mark.asyncio
+async def test_stream_ticket_with_account_wide_logout_marker_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = _stream_ticket("u1", "t1", "overview")
+    fake = _AsyncRedis({"revoked_user:u1": "9999999999.0"})
+    monkeypatch.setattr(security, "get_redis_client", lambda: fake)
+    async with _client(_stream_probe_app()) as client:
+        resp = await client.get("/probe-stream/t1/stream", params={"token": token, "summary_type": "overview"})
+    assert resp.status_code == 401
+    assert fake.keys == ["revoked_user:u1"]
 
 
 @pytest.mark.asyncio
@@ -254,11 +310,15 @@ class _FakeDB:
         return _FakeResult(self._task)
 
 
-def _media_mint_app(user_id: str) -> FastAPI:
+def _media_mint_app(user_id: str, *, session_id: str | None = None) -> FastAPI:
     app = FastAPI()
     app.include_router(media_module.router, prefix="/media")
     app.dependency_overrides[get_db] = _fake_db
-    app.dependency_overrides[get_current_user] = lambda: CurrentUser(id=user_id, email=f"{user_id}@ex.com")
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        id=user_id,
+        email=f"{user_id}@ex.com",
+        session_id=session_id,
+    )
     _register_error_handler(app)
     return app
 
@@ -275,7 +335,17 @@ async def test_media_mint_returns_usable_ticket() -> None:
     assert claims["scope"] == "media"
 
 
-def _stream_mint_app(user_id: str, task: Any) -> FastAPI:
+@pytest.mark.asyncio
+async def test_media_mint_propagates_session_id() -> None:
+    async with _client(_media_mint_app("u1", session_id="sid-1")) as client:
+        resp = await client.post("/media/ticket")
+    assert resp.status_code == 200
+    claims = verify_scoped_token(resp.json()["data"]["token"])
+    assert claims["sub"] == "u1"
+    assert claims["sid"] == "sid-1"
+
+
+def _stream_mint_app(user_id: str, task: Any, *, session_id: str | None = None) -> FastAPI:
     app = FastAPI()
     app.include_router(summaries_module.router, prefix="/api/v1")
 
@@ -283,7 +353,11 @@ def _stream_mint_app(user_id: str, task: Any) -> FastAPI:
         yield _FakeDB(task)
 
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[get_current_user] = lambda: CurrentUser(id=user_id, email=f"{user_id}@ex.com")
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        id=user_id,
+        email=f"{user_id}@ex.com",
+        session_id=session_id,
+    )
     _register_error_handler(app)
     return app
 
@@ -299,6 +373,17 @@ async def test_stream_mint_returns_ticket_bound_to_resource() -> None:
     assert claims["scope"] == "stream"
     assert claims["sub"] == "u1"
     assert claims["resource"] == {"task_id": "t1", "summary_type": "overview"}
+
+
+@pytest.mark.asyncio
+async def test_stream_mint_propagates_session_id() -> None:
+    app = _stream_mint_app("u1", task=object(), session_id="sid-1")
+    async with _client(app) as client:
+        resp = await client.post("/api/v1/summaries/t1/stream-ticket", params={"summary_type": "overview"})
+    assert resp.status_code == 200
+    claims = verify_scoped_token(resp.json()["data"]["token"])
+    assert claims["sub"] == "u1"
+    assert claims["sid"] == "sid-1"
 
 
 @pytest.mark.asyncio

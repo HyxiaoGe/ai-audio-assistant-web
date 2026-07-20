@@ -10,7 +10,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.i18n import get_message
-from app.core.security import extract_bearer_token, verify_access_token
+from app.core.security import (
+    extract_bearer_token,
+    extract_session_id,
+    is_auth_context_revoked,
+    verify_access_token,
+)
 from app.db import async_session_factory
 from app.i18n.codes import ErrorCode
 from app.services.notifications.bus import get_event_bus
@@ -22,12 +27,15 @@ CLOSE_CODE_AUTH_TIMEOUT = 4001
 CLOSE_CODE_AUTH_FAILED = 4003
 CLOSE_CODE_TOKEN_EXPIRED = 4004
 HEARTBEAT_INTERVAL_SECONDS = 25
+SESSION_REVOCATION_RECHECK_SECONDS = HEARTBEAT_INTERVAL_SECONDS
 
 
 @dataclass
 class WsUser:
     id: str
     email: str
+    session_id: str | None = None
+    issued_at: float | int | None = None
 
 
 def _get_locale(websocket: WebSocket) -> str:
@@ -69,7 +77,12 @@ async def _authenticate_token(
     if not user_id:
         return None, ErrorCode.AUTH_TOKEN_INVALID
 
-    return WsUser(id=user_id, email=auth_user.email), None
+    return WsUser(
+        id=user_id,
+        email=auth_user.email,
+        session_id=extract_session_id(auth_user.raw_payload),
+        issued_at=auth_user.raw_payload.get("iat"),
+    ), None
 
 
 async def _authenticate_header(
@@ -112,7 +125,12 @@ async def _authenticate_in_band(
     return await _authenticate_token(token, session, locale, trace_id)
 
 
-async def _forward_pubsub(websocket: WebSocket, user_id: str) -> None:
+async def _forward_pubsub(
+    websocket: WebSocket,
+    user_id: str,
+    session_id: str | None = None,
+    issued_at: float | int | None = None,
+) -> None:
     """订阅用户全局频道（EventBus），把信封原样转发给 WS；同时周期发心跳 ping。
 
     EventBus.subscribe 返回同步 redis pubsub（worker 侧 publish 也用同步 redis），
@@ -121,8 +139,19 @@ async def _forward_pubsub(websocket: WebSocket, user_id: str) -> None:
     pubsub = get_event_bus().subscribe(user_id)
     # 从当前时刻起算，首个心跳在 +HEARTBEAT_INTERVAL_SECONDS 后发，避免连上即多发一次 ping。
     last_ping = asyncio.get_running_loop().time()
+    last_revocation_check = last_ping
     try:
         while True:
+            now = asyncio.get_running_loop().time()
+            if now - last_revocation_check >= SESSION_REVOCATION_RECHECK_SECONDS:
+                last_revocation_check = now
+                if await is_auth_context_revoked(
+                    sub=user_id,
+                    token_iat=issued_at,
+                    session_id=session_id,
+                ):
+                    await websocket.close(code=CLOSE_CODE_AUTH_FAILED)
+                    return
             message = await asyncio.to_thread(pubsub.get_message, ignore_subscribe_messages=True, timeout=1.0)
             if message and message.get("type") == "message":
                 data = message.get("data")
@@ -171,7 +200,9 @@ async def user_updates(websocket: WebSocket) -> None:
         )
 
     # Forward both kinds (notification + task_progress) via the EventBus seam.
-    forward_task = asyncio.create_task(_forward_pubsub(websocket, user.id))
+    forward_task = asyncio.create_task(
+        _forward_pubsub(websocket, user.id, user.session_id, user.issued_at)
+    )
     try:
         while True:
             await websocket.receive_text()
