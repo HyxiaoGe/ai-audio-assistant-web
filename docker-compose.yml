@@ -2,7 +2,6 @@ x-build: &default-build
   context: .
   additional_contexts:
     prompthub-sdk: ../prompthub/sdk
-    auth-client: ../auth-service/auth-client
 
 services:
   api:

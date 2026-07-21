@@ -28,9 +28,9 @@ RUN apt-get update \
     && deno --version \
     && rm -rf /var/lib/apt/lists/* /root/.deno
 
-# 把 pyproject 里两个本地依赖（prompthub-sdk / auth-client）替换成 git+https 安装，
-# 让 docker build 不依赖 BuildKit additional_contexts（即不依赖本地 sibling 目录）。
-# 这跟 ci.yml lint 步骤里的 GIT_DEPS map 逻辑保持一致。
+# 把本地开发态的 prompthub-sdk 替换成 git+https 安装，让 docker build 不依赖
+# BuildKit additional_contexts（即不依赖本地 sibling 目录）。auth-client 已发布到
+# PyPI，直接使用 pyproject.toml 中固定的版本，避免构建期克隆 auth-service 仓库。
 COPY pyproject.toml ./
 RUN python - <<'PY'
 import pathlib
@@ -41,7 +41,6 @@ with open("pyproject.toml", "rb") as f:
 
 GIT_DEPS = {
     "prompthub-sdk": "prompthub-sdk @ git+https://github.com/HyxiaoGe/prompthub.git@master#subdirectory=sdk",
-    "auth-client": "auth-client[fastapi] @ git+https://github.com/HyxiaoGe/auth-service.git@auth-client-v0.2.0#subdirectory=auth-client",
 }
 
 requirements = data["project"]["dependencies"]

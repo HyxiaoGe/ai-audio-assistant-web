@@ -38,7 +38,8 @@ All of the following are implemented in the codebase:
 | Text LLM | **Unified via LiteLLM Proxy**; the model catalog proxies LiteLLM directly, add/remove models only on the LiteLLM side |
 | Image gen | Remote image-service (Gemini-family models) |
 | Auth | RS256 JWT issued by auth-service, verified via **JWKS** (SSO) |
-| Local editable deps | `prompthub-sdk`, `auth-client` (via `[tool.uv.sources]` pointing to workspace-parent dirs `../../prompthub`, `../../auth-service`) |
+| Local editable deps | `prompthub-sdk` (via `[tool.uv.sources]` pointing to the workspace-parent directory `../../prompthub`) |
+| Auth SDK | `seanfield-auth-client[fastapi]==0.3.0` (installed from PyPI with an exact version pin) |
 
 **Service selection (SmartFactory)**: external services register via `@register_service`; `SmartFactory` supports `health_first` (default) / `cost_first` / `performance_first` / `balanced`. Registered: ASR = `tencent` / `aliyun` / `volcengine`, storage = `minio` / `cos` / `oss` / `tos`, LLM = `proxy` (LiteLLM entry) + `image_service`. In prod text LLM always goes through `proxy`; real ASR routing is handled by the quota-aware `ASRScheduler`.
 
