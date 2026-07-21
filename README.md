@@ -38,7 +38,8 @@
 | 文本 LLM | **统一经 LiteLLM Proxy**;模型目录直接代理 LiteLLM,增删模型只在 LiteLLM 侧操作 |
 | 生图 | 远端 image-service(Gemini 系模型) |
 | 鉴权 | auth-service 签发 RS256 JWT,后端经 **JWKS** 校验(SSO) |
-| 本地可编辑依赖 | `prompthub-sdk`、`auth-client`(经 `[tool.uv.sources]` 指向工作区上层目录 `../../prompthub`、`../../auth-service`) |
+| 本地可编辑依赖 | `prompthub-sdk`（经 `[tool.uv.sources]` 指向工作区上层目录 `../../prompthub`） |
+| 认证 SDK | `seanfield-auth-client[fastapi]==0.3.0`（从 PyPI 安装并固定版本） |
 
 **服务选型(SmartFactory)**:外部服务经 `@register_service` 注册,`SmartFactory` 支持 `health_first`(默认)/ `cost_first` / `performance_first` / `balanced` 策略。已注册:ASR = `tencent` / `aliyun` / `volcengine`,存储 = `minio` / `cos` / `oss` / `tos`,LLM = `proxy`(LiteLLM 统一入口)+ `image_service`。生产中文本 LLM 恒走 `proxy`,ASR 真实调度由配额感知的 `ASRScheduler` 负责。
 

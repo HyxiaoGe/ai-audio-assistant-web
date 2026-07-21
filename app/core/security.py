@@ -6,7 +6,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
-from auth import AuthenticatedUser, JWTValidator
+from auth_service_client import AuthenticatedUser, JWTValidator
 from jose import jwt
 from jose.exceptions import ExpiredSignatureError, JWTError
 

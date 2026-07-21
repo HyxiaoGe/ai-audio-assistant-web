@@ -12,7 +12,7 @@ audio-web 在 ``validator.verify_async`` 成功之后增加一次检查：``iat 
 from __future__ import annotations
 
 import pytest
-from auth.validator import AuthenticatedUser
+from auth_service_client.validator import AuthenticatedUser
 
 from app.core import security
 from app.core.exceptions import BusinessError
