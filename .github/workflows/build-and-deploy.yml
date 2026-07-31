@@ -164,8 +164,6 @@ jobs:
                 TZ: UTC
                 DB_POOL_SIZE: "5"
                 DB_MAX_OVERFLOW: "10"
-              ports:
-                - "8088:8000"
               # 2 worker × ~175MiB + 余量;主机可用 ~6.1GiB 足以吸收(原 384m 仅够单 worker)。
               mem_limit: 768m
 
