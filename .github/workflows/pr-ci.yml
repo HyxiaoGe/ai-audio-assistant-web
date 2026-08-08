@@ -1,0 +1,45 @@
+name: PR Container Validation
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-audio-web-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: PR container validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PR_IMAGE: ai-audio-assistant-web-pr:${{ github.sha }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Build temporary Docker image
+        run: docker build --build-arg GIT_SHA="${GITHUB_SHA}" -t "${PR_IMAGE}" .
+
+      - name: Ruff check
+        run: >-
+          docker run --rm "${PR_IMAGE}" sh -lc
+          "pip install --no-cache-dir ruff && ruff check app/ worker/ tests/"
+
+      - name: Run complete pytest suite
+        timeout-minutes: 8
+        run: >-
+          docker run --rm "${PR_IMAGE}" sh -lc
+          "pip install --no-cache-dir pytest pytest-asyncio pytest-mock pytest-cov aiosqlite
+          && pytest tests/ -v"
+
+      - name: Cleanup temporary Docker image
+        if: always()
+        run: docker image rm "${PR_IMAGE}" || true
