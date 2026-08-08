@@ -28,9 +28,7 @@ USES_LINE = re.compile(
 USES_CANDIDATE = re.compile(r"^\s*(?:-\s*)?uses\b")
 USES_KEY_TOKEN = re.compile(r"(?<![A-Za-z0-9_-])(?:uses|\"uses\"|'uses')\s*:")
 PURE_COMMENT = re.compile(r"^\s*#")
-EXTERNAL_ACTION = re.compile(
-    r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.\-/]+)?@([0-9a-f]{40})$"
-)
+EXTERNAL_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.\-/]+)?@([0-9a-f]{40})$")
 KNOWN_ACTION_PINS = {
     "actions/checkout": (CHECKOUT_SHA, "# v6"),
     "docker/login-action": (LOGIN_SHA, "# v4.6.0"),
@@ -201,9 +199,7 @@ def _assert_external_action_pin(value: str, comment: str) -> None:
     if expected is not None:
         expected_sha, expected_comment = expected
         if (sha, comment) != (expected_sha, expected_comment):
-            raise AssertionError(
-                f"已知 Action pin 不匹配：{action_name} 需要 {expected_sha} {expected_comment}"
-            )
+            raise AssertionError(f"已知 Action pin 不匹配：{action_name} 需要 {expected_sha} {expected_comment}")
         return
     if re.fullmatch(r"# v\S+", comment) is None:
         raise AssertionError(f"外部 Action 缺少版本注释：{value}")
@@ -326,9 +322,9 @@ class TestReleaseWorkflow(unittest.TestCase):
 
         finalize_names = [_step_name(step) for step in _step_blocks(finalize)]
         self.assertEqual(finalize_names.count("Push CI/CD metrics"), 1)
-        self.assertEqual(finalize_names.count("通知飞书(部署结果)"), 1)
+        self.assertEqual(finalize_names.count("通知飞书(部署结果)"), 0)
         self.assertIn("push-cicd-metrics.sh", finalize)
-        self.assertIn("FEISHU_INFRA_WEBHOOK", finalize)
+        self.assertNotIn("FEISHU_INFRA_WEBHOOK", text)
 
     def test_finalize_combines_job_results_and_uses_safe_timing_fallbacks(self) -> None:
         text = _read(RELEASE)
@@ -352,25 +348,21 @@ class TestReleaseWorkflow(unittest.TestCase):
         )
         self.assertIn("final_status=success", resolve)
         self.assertIn("final_status=failure", resolve)
-        self.assertIn('status=$final_status', resolve)
+        self.assertIn("status=$final_status", resolve)
         self.assertIn('pipeline_started_at="${PUBLISH_STARTED_AT:-$(date +%s)}"', resolve)
         self.assertIn('deploy_started_at="${DEPLOY_STARTED_AT:-$pipeline_started_at}"', resolve)
         self.assertIn('runner_name="${PUBLISH_RUNNER_NAME:-unknown}"', resolve)
 
         metrics = _step_by_name(finalize, "Push CI/CD metrics")
-        notification = _step_by_name(finalize, "通知飞书(部署结果)")
-        for name, step in (("metrics", metrics), ("notification", notification)):
-            with self.subTest(step=name):
-                self.assertRegex(step, r"(?m)^        if: always\(\)\s*$")
-                self.assertRegex(step, r"(?m)^        continue-on-error: true\s*$")
-                self.assertRegex(step, r"(?m)^        timeout-minutes: 2\s*$")
+        self.assertRegex(metrics, r"(?m)^        if: always\(\)\s*$")
+        self.assertRegex(metrics, r"(?m)^        continue-on-error: true\s*$")
+        self.assertRegex(metrics, r"(?m)^        timeout-minutes: 2\s*$")
         self.assertIn("${{ steps.final_status.outputs.status }}", metrics)
         self.assertIn("${{ steps.final_status.outputs.pipeline_started_at }}", metrics)
         self.assertIn("${{ env.IMAGE_NAME }}:${{ github.sha }}", metrics)
         self.assertGreaterEqual(metrics.count("${{ github.sha }}"), 2)
         self.assertIn("${{ steps.final_status.outputs.runner_name }}", metrics)
         self.assertIn("${{ steps.final_status.outputs.deploy_started_at }}", metrics)
-        self.assertIn("JOB_STATUS: ${{ steps.final_status.outputs.status }}", notification)
 
     def test_each_release_job_has_one_non_logout_login_action(self) -> None:
         text = _read(RELEASE)
@@ -419,12 +411,8 @@ class TestReleaseWorkflow(unittest.TestCase):
                 self.assertIn(expected_suffix, cleanup)
                 self.assertRegex(cleanup, r"(?m)^      - name: Cleanup Docker credentials\s*$")
                 self.assertRegex(cleanup, r"(?m)^        if: always\(\)\s*$")
-                expected_assignment = re.search(
-                    r"(?im)^(?!\s*#).*expected.*RUNNER_TEMP.*$", cleanup
-                )
-                config_validation = re.search(
-                    r"(?im)^(?!\s*#).*DOCKER_CONFIG.*(?:!=|-ne).*expected.*$", cleanup
-                )
+                expected_assignment = re.search(r"(?im)^(?!\s*#).*expected.*RUNNER_TEMP.*$", cleanup)
+                config_validation = re.search(r"(?im)^(?!\s*#).*DOCKER_CONFIG.*(?:!=|-ne).*expected.*$", cleanup)
                 runner_temp_validation = re.search(
                     r"(?im)^(?!\s*#).*(?:StartsWith\(\$runnerTemp|case \"\$DOCKER_CONFIG\").*$",
                     cleanup,
@@ -495,7 +483,7 @@ class TestPinnedActions(unittest.TestCase):
             f"- {{name: Checkout, uses: owner/action@{sha}}}",
             f'"uses": owner/action@{sha} # v1',
             f"'uses': owner/action@{sha} # v1",
-            f"- \"uses\": owner/action@{sha} # v1",
+            f'- "uses": owner/action@{sha} # v1',
             f"- {{'uses': owner/action@{sha}}}",
         )
         for line in forbidden:
@@ -506,7 +494,7 @@ class TestPinnedActions(unittest.TestCase):
 
         for line in (
             "# uses: owner/action@v1",
-            "  # \"uses\": owner/action@v1",
+            '  # "uses": owner/action@v1',
             "\t# - {uses: owner/action@v1}",
         ):
             with self.subTest(line=line):
