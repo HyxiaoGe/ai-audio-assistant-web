@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 PR_CI = WORKFLOWS / "pr-ci.yml"
 RELEASE = WORKFLOWS / "build-and-deploy.yml"
+DRIFT_AUDIT = WORKFLOWS / "baseline-drift-audit.yml"
 
 CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
 LOGIN_SHA = "dbcb813823bdd20940b903addbd779551569679f"
@@ -217,6 +218,32 @@ def _validate_action_files(repo_root: Path) -> list[Path]:
                 relative = path.relative_to(repo_root.resolve())
                 raise AssertionError(f"{relative}:{line_number}: {error}") from error
     return scanned
+
+
+class TestDriftAuditWorkflow(unittest.TestCase):
+    def test_scheduled_audit_uses_caller_read_only_token(self) -> None:
+        text = _read(DRIFT_AUDIT)
+        self.assertEqual(_trigger_names(text), {"schedule", "workflow_dispatch"})
+        self.assertEqual(
+            _indented_block(text, "permissions", 0).splitlines(),
+            ["permissions:", "  actions: read", "  contents: read"],
+        )
+        self.assertEqual(_job_ids(text), ["audit"])
+        job = _job_block(text, "audit")
+        self.assertRegex(job, r"(?m)^    runs-on: ubuntu-latest\s*$")
+        self.assertRegex(
+            _indented_block(text, "concurrency", 0),
+            r"(?m)^\s+cancel-in-progress: false\s*$",
+        )
+        self.assertIn(
+            "HyxiaoGe/engineering-baseline/.github/actions/audit@a87c78c4ff6594b4351678bea354ff1f171645e9",
+            job,
+        )
+        self.assertIn("# v1.1.0", job)
+        self.assertIn("repository: ${{ github.repository }}", job)
+        self.assertNotRegex(text, r"\bsecrets\s*(?:\.|\[)")
+        self.assertNotRegex(text, r"(?m)^\s*environment\s*:")
+        self.assertNotIn("self-hosted", text)
 
 
 class TestPullRequestWorkflow(unittest.TestCase):
