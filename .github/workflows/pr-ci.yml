@@ -28,6 +28,10 @@ jobs:
       - name: Build temporary Docker image
         run: docker build --build-arg GIT_SHA="${GITHUB_SHA}" -t "${PR_IMAGE}" .
 
+      - name: Run release safety contract
+        id: release_safety_contract
+        run: .github/scripts/release-safety-contract.sh
+
       - name: Ruff check
         run: >-
           docker run --rm "${PR_IMAGE}" sh -lc

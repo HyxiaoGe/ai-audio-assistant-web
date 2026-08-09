@@ -11,6 +11,15 @@ on:
       - 'LICENSE'
       - '.env.example'
   workflow_dispatch:
+    inputs:
+      rollback_sha:
+        description: 要部署的已知不可变镜像提交 SHA（40 位小写十六进制，由操作方确认目标）
+        required: false
+        type: string
+      rollback_reason:
+        description: 手动回滚原因；设置 rollback_sha 时必填
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -25,11 +34,12 @@ concurrency:
 env:
   REGISTRY: crpi-77w10wlykpqilmmb.cn-shenzhen.personal.cr.aliyuncs.com
   IMAGE_NAME: crpi-77w10wlykpqilmmb.cn-shenzhen.personal.cr.aliyuncs.com/seanfield/ai-audio-assistant-web
+  DEPLOY_TARGET_SHA: ${{ github.event.inputs.rollback_sha || github.sha }}
 
 jobs:
   publish:
     name: Publish master image on Windows runner
-    if: github.ref == 'refs/heads/master'
+    if: ${{ github.ref == 'refs/heads/master' && (github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == '') }}
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 40
     environment:
@@ -81,29 +91,35 @@ jobs:
           Invoke-WebRequest -UseBasicParsing -Method Post -Uri "http://192.168.1.11:9094/metrics/job/cicd_active/project_key/ai-audio-assistant-web/branch_key/master/environment_key/dev" -ContentType "text/plain; version=0.0.4" -Headers @{ Authorization = "Basic $env:PUSHGW_AUTH" } -Body $bytes -TimeoutSec 5
 
       - name: Checkout
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
       - name: Verify Docker access
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''
         run: |
           docker version
           docker ps
 
       - name: Build Docker image
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''
         run: |
           docker build --build-arg GIT_SHA=%GITHUB_SHA% -t "%IMAGE_NAME%:%GITHUB_SHA%" .
 
       - name: Lint in image
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''
         run: |
           docker run --rm "%IMAGE_NAME%:%GITHUB_SHA%" sh -lc "pip install --no-cache-dir ruff && ruff check app/ worker/ tests/"
 
       - name: Run tests
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''
         timeout-minutes: 8
         run: |
           docker run --rm "%IMAGE_NAME%:%GITHUB_SHA%" sh -lc "pip install --no-cache-dir pytest pytest-asyncio pytest-mock pytest-cov aiosqlite && pytest tests/ -v"
 
       - name: Login to ACR
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -112,10 +128,11 @@ jobs:
           logout: false
 
       - name: Push Docker image
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''
         run: docker push "%IMAGE_NAME%:%GITHUB_SHA%"
 
       - name: Cleanup local Docker artifacts
-        if: always()
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == '') }}
         run: |
           docker image rm "%IMAGE_NAME%:%GITHUB_SHA%" 2>NUL
           docker builder prune --filter "until=72h" -f
@@ -139,8 +156,8 @@ jobs:
 
   deploy:
     name: Deploy master on dev server
-    if: github.ref == 'refs/heads/master'
     needs: publish
+    if: ${{ always() && github.ref == 'refs/heads/master' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && github.event_name == 'workflow_dispatch' && github.event.inputs.rollback_sha != '')) }}
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
     environment: dev
@@ -151,6 +168,33 @@ jobs:
       - name: Record deploy start time
         id: deploy_start
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve deployment target
+        id: release_target
+        env:
+          ROLLBACK_SHA: ${{ github.event.inputs.rollback_sha }}
+          ROLLBACK_REASON: ${{ github.event.inputs.rollback_reason }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${DEPLOY_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "deployment target must be a 40-character lowercase commit SHA"
+            exit 1
+          fi
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${ROLLBACK_SHA}" ]; then
+            if [[ ! "${ROLLBACK_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "rollback target must be a 40-character lowercase commit SHA"
+              exit 1
+            fi
+            if [ -z "${ROLLBACK_REASON//[[:space:]]/}" ]; then
+              echo "rollback reason is required"
+              exit 1
+            fi
+            printf '手动回滚目标已验证：%s\n' "${ROLLBACK_SHA}"
+            printf '手动回滚原因：%s\n' "${ROLLBACK_REASON}"
+          elif [ -n "${ROLLBACK_REASON//[[:space:]]/}" ]; then
+            echo "rollback reason requires rollback_sha"
+            exit 1
+          fi
 
       - name: Isolate Docker credentials
         run: |
@@ -170,25 +214,73 @@ jobs:
           password: ${{ secrets.ACR_PASSWORD }}
           logout: false
 
+      - name: Capture rollback state
+        id: capture_rollback_state
+        run: |
+          set -euo pipefail
+          capture_container() {
+            local container="$1"
+            local prefix="$2"
+            local image image_id image_sha
+            image="$(docker inspect --format '{{.Config.Image}}' "${container}")"
+            image_id="$(docker inspect --format '{{.Image}}' "${container}")"
+            image_sha="${image#${IMAGE_NAME}:}"
+            if [ "${image_sha}" = "${image}" ] || [[ ! "${image_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "${container} 没有不可变 SHA 回滚镜像：${image}"
+              exit 1
+            fi
+            if [[ ! "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "${container} 的镜像内容 ID 无效：${image_id}"
+              exit 1
+            fi
+            {
+              echo "${prefix}_image=${image}"
+              echo "${prefix}_image_id=${image_id}"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          capture_container ai-audio-assistant-web-api api
+          capture_container ai-audio-assistant-web-worker worker
+          capture_container ai-audio-assistant-web-beat beat
+
+          api_image="$(docker inspect --format '{{.Config.Image}}' ai-audio-assistant-web-api)"
+          worker_image="$(docker inspect --format '{{.Config.Image}}' ai-audio-assistant-web-worker)"
+          beat_image="$(docker inspect --format '{{.Config.Image}}' ai-audio-assistant-web-beat)"
+          api_image_id="$(docker inspect --format '{{.Image}}' ai-audio-assistant-web-api)"
+          worker_image_id="$(docker inspect --format '{{.Image}}' ai-audio-assistant-web-worker)"
+          beat_image_id="$(docker inspect --format '{{.Image}}' ai-audio-assistant-web-beat)"
+          if [ "${api_image}" != "${worker_image}" ] || [ "${api_image}" != "${beat_image}" ]; then
+            echo "api/worker/beat 当前镜像引用不一致，拒绝生成不完整回滚点"
+            exit 1
+          fi
+          if [ "${api_image_id}" != "${worker_image_id}" ] || [ "${api_image_id}" != "${beat_image_id}" ]; then
+            echo "api/worker/beat 当前镜像内容 ID 不一致，拒绝生成不完整回滚点"
+            exit 1
+          fi
+
       - name: Apply alembic migrations
+        id: release_migration
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''
         run: |
           cd ~/project/ai-audio-assistant-web
-          docker pull ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker pull ${{ env.IMAGE_NAME }}:${{ env.DEPLOY_TARGET_SHA }}
+          # 数据库迁移采用 expand/contract；镜像回滚不执行 alembic downgrade，旧镜像必须兼容新 schema。
           # 用 docker --env-file 让 docker 自己解析 .env，而不是 bash source。
           # bash source 会把 YOUTUBE_OUTPUT_TEMPLATE=%(id)s.%(ext)s 这类含 ( 的值当 subshell 启动失败。
           docker run --rm \
             --network ai-audio-network \
             --env-file .env \
-            ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            ${{ env.IMAGE_NAME }}:${{ env.DEPLOY_TARGET_SHA }} \
             alembic upgrade head
 
       - name: Pull and restart api/worker/beat
+        id: deploy_candidate
         run: |
           cd ~/project/ai-audio-assistant-web
-          docker pull ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker pull ${{ env.IMAGE_NAME }}:${{ env.DEPLOY_TARGET_SHA }}
           cat > docker-compose.ai-audio-web-ghcr.yml <<'EOF'
           x-common: &common
-            image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            image: ${{ env.IMAGE_NAME }}:${{ env.DEPLOY_TARGET_SHA }}
             env_file: .env
             environment:
               TZ: UTC
@@ -240,15 +332,20 @@ jobs:
           docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d
 
       - name: Verify readiness
+        id: release_verify
         run: |
           # 探 /readiness(Postgres/Redis/Celery 全活才 200 "ready";任一挂 → 503)。
           # 先证明容器运行的正是本次 SHA 镜像,再从容器网络命名空间内探测 8000。
-          expected_image="${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          actual_image="$(docker inspect --format '{{.Config.Image}}' ai-audio-assistant-web-api)"
-          if [ "$actual_image" != "$expected_image" ]; then
-            echo "镜像身份不一致: expected=$expected_image actual=$actual_image"
-            exit 1
-          fi
+          expected_image="${{ env.IMAGE_NAME }}:${{ env.DEPLOY_TARGET_SHA }}"
+          expected_image_id="$(docker image inspect --format '{{.Id}}' "$expected_image")"
+          for container in ai-audio-assistant-web-api ai-audio-assistant-web-worker ai-audio-assistant-web-beat; do
+            actual_image="$(docker inspect --format '{{.Config.Image}}' "${container}")"
+            actual_image_id="$(docker inspect --format '{{.Image}}' "${container}")"
+            if [ "${actual_image}" != "${expected_image}" ] || [ "${actual_image_id}" != "${expected_image_id}" ]; then
+              echo "${container} 镜像身份不一致: expected=${expected_image}/${expected_image_id} actual=${actual_image}/${actual_image_id}"
+              exit 1
+            fi
+          done
 
           for attempt in $(seq 1 30); do
             if docker exec ai-audio-assistant-web-api python -c \
@@ -264,10 +361,70 @@ jobs:
           docker logs --tail=120 ai-audio-assistant-web-api || true
           exit 1
 
-      - name: Cleanup old images
-        if: always()
+      - name: Rollback failed candidate
+        id: rollback_candidate
+        if: ${{ failure() && steps.capture_rollback_state.outcome == 'success' && steps.deploy_candidate.outcome != 'skipped' }}
+        env:
+          PREVIOUS_API_IMAGE: ${{ steps.capture_rollback_state.outputs.api_image }}
+          PREVIOUS_API_IMAGE_ID: ${{ steps.capture_rollback_state.outputs.api_image_id }}
+          PREVIOUS_WORKER_IMAGE: ${{ steps.capture_rollback_state.outputs.worker_image }}
+          PREVIOUS_WORKER_IMAGE_ID: ${{ steps.capture_rollback_state.outputs.worker_image_id }}
+          PREVIOUS_BEAT_IMAGE: ${{ steps.capture_rollback_state.outputs.beat_image }}
+          PREVIOUS_BEAT_IMAGE_ID: ${{ steps.capture_rollback_state.outputs.beat_image_id }}
         run: |
-          current="${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          set -euo pipefail
+          cd ~/project/ai-audio-assistant-web
+          for image_id in "${PREVIOUS_API_IMAGE_ID}" "${PREVIOUS_WORKER_IMAGE_ID}" "${PREVIOUS_BEAT_IMAGE_ID}"; do
+            docker image inspect "${image_id}" >/dev/null
+          done
+
+          image_line_count="$(grep -c '^    image: ' docker-compose.ai-audio-web-ghcr.yml || true)"
+          if [ "${image_line_count}" != "1" ]; then
+            echo "回滚 Compose 必须恰好包含一个公共 image 行，实际 ${image_line_count}"
+            exit 1
+          fi
+          escaped_previous_image="$(printf '%s' "${PREVIOUS_API_IMAGE}" | sed 's/[&|]/\\&/g')"
+          sed -i "s|^    image: .*|    image: ${escaped_previous_image}|" docker-compose.ai-audio-web-ghcr.yml
+          docker compose -f docker-compose.ai-audio-web-ghcr.yml config --quiet
+          docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d
+
+          verify_rollback_container() {
+            local container="$1"
+            local expected_image="$2"
+            local expected_image_id="$3"
+            local actual_image actual_image_id
+            actual_image="$(docker inspect --format '{{.Config.Image}}' "${container}")"
+            actual_image_id="$(docker inspect --format '{{.Image}}' "${container}")"
+            if [ "${actual_image}" != "${expected_image}" ] || [ "${actual_image_id}" != "${expected_image_id}" ]; then
+              echo "${container} 回滚身份不一致: expected=${expected_image}/${expected_image_id} actual=${actual_image}/${actual_image_id}"
+              exit 1
+            fi
+          }
+          verify_rollback_container ai-audio-assistant-web-api "${PREVIOUS_API_IMAGE}" "${PREVIOUS_API_IMAGE_ID}"
+          verify_rollback_container ai-audio-assistant-web-worker "${PREVIOUS_WORKER_IMAGE}" "${PREVIOUS_WORKER_IMAGE_ID}"
+          verify_rollback_container ai-audio-assistant-web-beat "${PREVIOUS_BEAT_IMAGE}" "${PREVIOUS_BEAT_IMAGE_ID}"
+
+          rollback_ready=0
+          for attempt in $(seq 1 30); do
+            if docker exec ai-audio-assistant-web-api python -c \
+              'import json, urllib.request; payload = json.load(urllib.request.urlopen("http://127.0.0.1:8000/api/v1/readiness", timeout=5)); raise SystemExit(0 if payload.get("status") == "ready" else 1)'; then
+              rollback_ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "${rollback_ready}" != "1" ]; then
+            echo "回滚后 readiness 未就绪"
+            docker logs --tail=120 ai-audio-assistant-web-api || true
+            exit 1
+          fi
+          echo "已恢复上一健康镜像并通过容器内 readiness"
+
+      - name: Cleanup old images
+        id: release_cleanup
+        if: success()
+        run: |
+          current="${{ env.IMAGE_NAME }}:${{ env.DEPLOY_TARGET_SHA }}"
           docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' ${{ env.IMAGE_NAME }} \
             | awk -v current="$current" '$1 != current {print $2}' \
             | sort -u \
@@ -309,8 +466,12 @@ jobs:
           PUBLISH_STARTED_AT: ${{ needs.publish.outputs.started_at }}
           DEPLOY_STARTED_AT: ${{ needs.deploy.outputs.started_at }}
           PUBLISH_RUNNER_NAME: ${{ needs.publish.outputs.runner_name }}
+          ROLLBACK_SHA: ${{ github.event.inputs.rollback_sha }}
         run: |
-          if [ "$PUBLISH_RESULT" = "success" ] && [ "$DEPLOY_RESULT" = "success" ]; then
+          if [ "$DEPLOY_RESULT" = "success" ] && (
+            [ "$PUBLISH_RESULT" = "success" ] ||
+            { [ "$PUBLISH_RESULT" = "skipped" ] && [ -n "$ROLLBACK_SHA" ]; }
+          ); then
             final_status=success
           else
             final_status=failure
@@ -328,6 +489,7 @@ jobs:
           echo "发布最终状态: publish=$PUBLISH_RESULT deploy=$DEPLOY_RESULT final=$final_status"
 
       - name: Push CI/CD metrics
+        id: release_metrics
         if: always()
         continue-on-error: true
         timeout-minutes: 2
@@ -338,8 +500,13 @@ jobs:
             dev \
             "${{ steps.final_status.outputs.status }}" \
             "${{ steps.final_status.outputs.pipeline_started_at }}" \
-            "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
-            "${{ github.sha }}" \
+            "${{ env.IMAGE_NAME }}:${{ env.DEPLOY_TARGET_SHA }}" \
+            "${{ env.DEPLOY_TARGET_SHA }}" \
             "${{ steps.final_status.outputs.runner_name }}" \
             ai-audio-assistant-web \
             "${{ steps.final_status.outputs.deploy_started_at }}"
+
+      - name: Fail unsuccessful release
+        id: release_failure
+        if: ${{ always() && steps.final_status.outputs.status != 'success' }}
+        run: exit 1
