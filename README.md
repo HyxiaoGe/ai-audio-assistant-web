@@ -106,7 +106,19 @@ pytest tests/ -v                        # 测试 —— CI 实际门禁
 pytest tests/ -v --cov=app --cov=worker # 带覆盖率
 ```
 
-CI(`.github/workflows/build-and-deploy.yml` 的 build job)实际只跑 **ruff + pytest**;部署 job(`deploy-dev`)仅在 `master` 触发。`pyproject.toml` dev 组里仍列着 `black/isort/flake8/mypy/bandit`,但**均非门禁**,已被 ruff 取代。
+CI 的 PR 门禁在 `.github/workflows/pr-ci.yml`；`master` 发布由
+`.github/workflows/build-and-deploy.yml` 串行执行镜像构建、迁移、候选部署与验收。
+发布前会保存当前 api/worker/beat 的不可变镜像引用和内容 ID；候选部署或
+readiness 失败时恢复该镜像并重新验收，但原发布仍保持失败状态。手动回滚通过
+同一 workflow 的 `rollback_sha` 和 `rollback_reason` 输入执行，并跳过 Windows
+构建、镜像推送及 Alembic 迁移。
+
+数据库变更必须采用 expand/contract：先发布向后兼容的扩展 schema，待旧镜像
+不再需要后再删除旧结构。镜像回滚绝不自动执行 `alembic downgrade`，因此每次
+迁移都必须保证上一个已部署镜像仍能在新 schema 上运行。
+
+`pyproject.toml` dev 组里仍列着 `black/isort/flake8/mypy/bandit`，但它们均非当前
+CI 门禁，实际 lint 以 ruff 为准。
 
 ## 配置说明
 

@@ -11,10 +11,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 PR_CI = WORKFLOWS / "pr-ci.yml"
 RELEASE = WORKFLOWS / "build-and-deploy.yml"
+RELEASE_MANIFEST = ROOT / ".github" / "release-safety.yml"
+RELEASE_CONTRACT = ROOT / ".github" / "scripts" / "release-safety-contract.sh"
 
 CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
 LOGIN_SHA = "dbcb813823bdd20940b903addbd779551569679f"
@@ -35,6 +39,20 @@ KNOWN_ACTION_PINS = {
     "github/codeql-action/init": (CODEQL_SHA, "# v4"),
     "github/codeql-action/analyze": (CODEQL_SHA, "# v4"),
 }
+
+EXPECTED_PUBLISH_CONDITION = (
+    "${{ github.ref == 'refs/heads/master' && "
+    "(github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == '') }}"
+)
+EXPECTED_DEPLOY_CONDITION = (
+    "${{ always() && github.ref == 'refs/heads/master' && "
+    "(needs.publish.result == 'success' || (needs.publish.result == 'skipped' && "
+    "github.event_name == 'workflow_dispatch' && github.event.inputs.rollback_sha != '')) }}"
+)
+EXPECTED_ROLLBACK_CONDITION = (
+    "${{ failure() && steps.capture_rollback_state.outcome == 'success' && "
+    "steps.deploy_candidate.outcome != 'skipped' }}"
+)
 
 
 def _read(path: Path) -> str:
@@ -105,6 +123,243 @@ def _normalized_step_run(step: str) -> str:
     run = step[matched.start() :]
     run = re.sub(r"\\\s*\n", " ", run)
     return re.sub(r"\s+", " ", run)
+
+
+def _workflow_document() -> dict[str, object]:
+    document = yaml.load(_read(RELEASE), Loader=yaml.BaseLoader)
+    if not isinstance(document, dict):
+        raise AssertionError("release workflow 必须是 YAML mapping")
+    return document
+
+
+def _structured_job(document: dict[str, object], job_id: str) -> dict[str, object]:
+    jobs = document.get("jobs")
+    if not isinstance(jobs, dict) or not isinstance(jobs.get(job_id), dict):
+        raise AssertionError(f"缺少结构化 job：{job_id}")
+    return jobs[job_id]
+
+
+def _structured_steps(document: dict[str, object], job_id: str) -> list[dict[str, object]]:
+    steps = _structured_job(document, job_id).get("steps")
+    if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
+        raise AssertionError(f"{job_id}.steps 必须是 YAML sequence")
+    return steps
+
+
+def _active_shell_commands(run: object) -> list[str]:
+    if not isinstance(run, str):
+        return []
+    commands: list[str] = []
+    pending = ""
+    for raw_line in run.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        pending = f"{pending} {line}".strip()
+        if pending.endswith("\\"):
+            pending = pending[:-1].rstrip()
+            continue
+        commands.append(pending)
+        pending = ""
+    if pending:
+        commands.append(pending)
+    return commands
+
+
+def _release_safety_violations(document: dict[str, object]) -> list[str]:
+    violations: list[str] = []
+    publish = _structured_job(document, "publish")
+    deploy = _structured_job(document, "deploy")
+    deploy_steps = _structured_steps(document, "deploy")
+    finalize_steps = _structured_steps(document, "finalize")
+
+    if publish.get("if") != EXPECTED_PUBLISH_CONDITION:
+        violations.append("publish condition")
+    if deploy.get("if") != EXPECTED_DEPLOY_CONDITION:
+        violations.append("deploy condition")
+
+    def step_with_id(step_id: str) -> dict[str, object] | None:
+        matches = [step for step in deploy_steps if step.get("id") == step_id]
+        if len(matches) != 1:
+            violations.append(f"step id count: {step_id}")
+            return None
+        return matches[0]
+
+    def step_with_name(steps: list[dict[str, object]], name: str) -> dict[str, object] | None:
+        matches = [step for step in steps if step.get("name") == name]
+        if len(matches) != 1:
+            violations.append(f"step name count: {name}")
+            return None
+        return matches[0]
+
+    capture = step_with_id("capture_rollback_state")
+    candidate = step_with_id("deploy_candidate")
+    rollback = step_with_id("rollback_candidate")
+    if rollback is None or rollback.get("if") != EXPECTED_ROLLBACK_CONDITION:
+        violations.append("rollback condition")
+    if rollback is not None and rollback.get("continue-on-error") == "true":
+        violations.append("rollback continue-on-error")
+
+    capture_commands = _active_shell_commands(capture.get("run") if capture else None)
+    for label, required in (
+        ("capture image ref", 'image="$(docker inspect --format \'{{.Config.Image}}\' "${container}")"'),
+        ("capture image id", 'image_id="$(docker inspect --format \'{{.Image}}\' "${container}")"'),
+        ("capture managed sha", 'image_sha="${image#${IMAGE_NAME}:}"'),
+        (
+            "capture sha guard",
+            'if [ "${image_sha}" = "${image}" ] || [[ ! "${image_sha}" =~ ^[0-9a-f]{40}$ ]]; then',
+        ),
+        ("capture id guard", 'if [[ ! "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then'),
+    ):
+        if required not in capture_commands:
+            violations.append(label)
+    for container in (
+        "capture_container ai-audio-assistant-web-api api",
+        "capture_container ai-audio-assistant-web-worker worker",
+        "capture_container ai-audio-assistant-web-beat beat",
+    ):
+        if container not in capture_commands:
+            violations.append(f"capture container: {container}")
+    for label, required in (
+        (
+            "capture image ref consistency",
+            'if [ "${api_image}" != "${worker_image}" ] || [ "${api_image}" != "${beat_image}" ]; then',
+        ),
+        (
+            "capture image id consistency",
+            'if [ "${api_image_id}" != "${worker_image_id}" ] || [ "${api_image_id}" != "${beat_image_id}" ]; then',
+        ),
+    ):
+        if required not in capture_commands:
+            violations.append(label)
+
+    resolve_target = step_with_name(deploy_steps, "Resolve deployment target")
+    expected_target_env = {
+        "ROLLBACK_SHA": "${{ github.event.inputs.rollback_sha }}",
+        "ROLLBACK_REASON": "${{ github.event.inputs.rollback_reason }}",
+    }
+    if resolve_target is None or resolve_target.get("env") != expected_target_env:
+        violations.append("resolve target env")
+    expected_target_commands = [
+        "set -euo pipefail",
+        'if [[ ! "${DEPLOY_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]]; then',
+        'echo "deployment target must be a 40-character lowercase commit SHA"',
+        "exit 1",
+        "fi",
+        'if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${ROLLBACK_SHA}" ]; then',
+        'if [[ ! "${ROLLBACK_SHA}" =~ ^[0-9a-f]{40}$ ]]; then',
+        'echo "rollback target must be a 40-character lowercase commit SHA"',
+        "exit 1",
+        "fi",
+        'if [ -z "${ROLLBACK_REASON//[[:space:]]/}" ]; then',
+        'echo "rollback reason is required"',
+        "exit 1",
+        "fi",
+        "printf '手动回滚目标已验证：%s\\n' \"${ROLLBACK_SHA}\"",
+        "printf '手动回滚原因：%s\\n' \"${ROLLBACK_REASON}\"",
+        'elif [ -n "${ROLLBACK_REASON//[[:space:]]/}" ]; then',
+        'echo "rollback reason requires rollback_sha"',
+        "exit 1",
+        "fi",
+    ]
+    if _active_shell_commands(resolve_target.get("run") if resolve_target else None) != expected_target_commands:
+        violations.append("resolve target commands")
+
+    migration = step_with_name(deploy_steps, "Apply alembic migrations")
+    migration_commands = _active_shell_commands(migration.get("run") if migration else None)
+    if not any("alembic upgrade head" in command for command in migration_commands):
+        violations.append("migration upgrade")
+    if any(re.search(r"\balembic\s+downgrade\b", command) for command in migration_commands):
+        violations.append("migration downgrade")
+
+    candidate_commands = _active_shell_commands(candidate.get("run") if candidate else None)
+    for required in (
+        "docker pull ${{ env.IMAGE_NAME }}:${{ env.DEPLOY_TARGET_SHA }}",
+        "docker compose -f docker-compose.ai-audio-web-ghcr.yml config --quiet",
+        "docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d",
+    ):
+        if required not in candidate_commands:
+            violations.append(f"candidate command: {required}")
+
+    verify = step_with_name(deploy_steps, "Verify readiness")
+    verify_commands = _active_shell_commands(verify.get("run") if verify else None)
+    for required in (
+        'expected_image_id="$(docker image inspect --format \'{{.Id}}\' "$expected_image")"',
+        'actual_image_id="$(docker inspect --format \'{{.Image}}\' "${container}")"',
+        'if [ "${actual_image}" != "${expected_image}" ] || [ "${actual_image_id}" != "${expected_image_id}" ]; then',
+    ):
+        if required not in verify_commands:
+            violations.append(f"verify command: {required}")
+    if not any(
+        command.startswith("if docker exec ai-audio-assistant-web-api python -c ")
+        and "/api/v1/readiness" in command
+        and command.endswith("; then")
+        and "|| true" not in command
+        for command in verify_commands
+    ):
+        violations.append("verify container readiness")
+
+    rollback_commands = _active_shell_commands(rollback.get("run") if rollback else None)
+    for required in (
+        "docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d",
+        'if [ "${actual_image}" != "${expected_image}" ] || [ "${actual_image_id}" != "${expected_image_id}" ]; then',
+    ):
+        if required not in rollback_commands:
+            violations.append(f"rollback command: {required}")
+    if not any(
+        command.startswith("if docker exec ai-audio-assistant-web-api python -c ")
+        and "/api/v1/readiness" in command
+        and command.endswith("; then")
+        and "|| true" not in command
+        for command in rollback_commands
+    ):
+        violations.append("rollback container readiness")
+
+    cleanup = step_with_name(deploy_steps, "Cleanup old images")
+    if cleanup is None or cleanup.get("if") != "success()":
+        violations.append("cleanup condition")
+    final_status = step_with_name(finalize_steps, "Resolve final release status")
+    expected_final_status_env = {
+        "PUBLISH_RESULT": "${{ needs.publish.result }}",
+        "DEPLOY_RESULT": "${{ needs.deploy.result }}",
+        "PUBLISH_STARTED_AT": "${{ needs.publish.outputs.started_at }}",
+        "DEPLOY_STARTED_AT": "${{ needs.deploy.outputs.started_at }}",
+        "PUBLISH_RUNNER_NAME": "${{ needs.publish.outputs.runner_name }}",
+        "ROLLBACK_SHA": "${{ github.event.inputs.rollback_sha }}",
+    }
+    if final_status is None or final_status.get("env") != expected_final_status_env:
+        violations.append("finalize status env")
+    expected_final_status_commands = [
+        'if [ "$DEPLOY_RESULT" = "success" ] && (',
+        '[ "$PUBLISH_RESULT" = "success" ] ||',
+        '{ [ "$PUBLISH_RESULT" = "skipped" ] && [ -n "$ROLLBACK_SHA" ]; }',
+        "); then",
+        "final_status=success",
+        "else",
+        "final_status=failure",
+        "fi",
+        'pipeline_started_at="${PUBLISH_STARTED_AT:-$(date +%s)}"',
+        'deploy_started_at="${DEPLOY_STARTED_AT:-$pipeline_started_at}"',
+        'runner_name="${PUBLISH_RUNNER_NAME:-unknown}"',
+        "{",
+        'echo "status=$final_status"',
+        'echo "pipeline_started_at=$pipeline_started_at"',
+        'echo "deploy_started_at=$deploy_started_at"',
+        'echo "runner_name=$runner_name"',
+        '} >> "$GITHUB_OUTPUT"',
+        'echo "发布最终状态: publish=$PUBLISH_RESULT deploy=$DEPLOY_RESULT final=$final_status"',
+    ]
+    if _active_shell_commands(final_status.get("run") if final_status else None) != expected_final_status_commands:
+        violations.append("finalize status commands")
+    fail_release = step_with_name(finalize_steps, "Fail unsuccessful release")
+    if fail_release is None or fail_release.get("if") != (
+        "${{ always() && steps.final_status.outputs.status != 'success' }}"
+    ):
+        violations.append("finalize failure condition")
+    if "exit 1" not in _active_shell_commands(fail_release.get("run") if fail_release else None):
+        violations.append("finalize failure command")
+
+    return violations
 
 
 def _uses_step_block(lines: list[str], uses_index: int) -> str:
@@ -273,6 +528,111 @@ class TestPullRequestWorkflow(unittest.TestCase):
 
 
 class TestReleaseWorkflow(unittest.TestCase):
+    def test_release_safety_manifest_maps_real_workflow_roles_and_contract_step(self) -> None:
+        manifest = yaml.safe_load(_read(RELEASE_MANIFEST))
+        self.assertEqual(
+            manifest,
+            {
+                "version": "1",
+                "workflow": ".github/workflows/build-and-deploy.yml",
+                "contract_test": {
+                    "path": ".github/scripts/release-safety-contract.sh",
+                    "pr_step": "release_safety_contract",
+                },
+                "jobs": {
+                    "prepare": None,
+                    "publish": "publish",
+                    "deploy": "deploy",
+                    "finalize": "finalize",
+                },
+                "steps": {
+                    "target": "release_target",
+                    "target_job": "deploy",
+                    "capture": "capture_rollback_state",
+                    "migrations": ["release_migration"],
+                    "candidate": "deploy_candidate",
+                    "verify": ["release_verify"],
+                    "rollback": "rollback_candidate",
+                    "cleanup": "release_cleanup",
+                    "failure": None,
+                    "finalize": "release_metrics",
+                    "finalize_failure": "release_failure",
+                },
+                "needs": {
+                    "publish": [],
+                    "deploy": ["publish"],
+                    "finalize": ["publish", "deploy"],
+                },
+                "conditions": {
+                    "prepare": None,
+                    "publish": (
+                        "github.ref == 'refs/heads/master' && "
+                        "(github.event_name != 'workflow_dispatch' || "
+                        "github.event.inputs.rollback_sha == '')"
+                    ),
+                    "deploy": (
+                        "always() && github.ref == 'refs/heads/master' && "
+                        "(needs.publish.result == 'success' || "
+                        "(needs.publish.result == 'skipped' && "
+                        "github.event_name == 'workflow_dispatch' && "
+                        "github.event.inputs.rollback_sha != ''))"
+                    ),
+                    "migration": ("github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''"),
+                    "rollback": (
+                        "failure() && steps.capture_rollback_state.outcome == 'success' && "
+                        "steps.deploy_candidate.outcome != 'skipped'"
+                    ),
+                    "cleanup": "success()",
+                    "failure": None,
+                    "finalize": "always() && github.ref == 'refs/heads/master'",
+                    "finalize_failure": ("always() && steps.final_status.outputs.status != 'success'"),
+                },
+            },
+        )
+
+        release_document = _workflow_document()
+        deploy_ids = {step.get("id") for step in _structured_steps(release_document, "deploy")}
+        finalize_ids = {step.get("id") for step in _structured_steps(release_document, "finalize")}
+        self.assertTrue(
+            {
+                "release_target",
+                "capture_rollback_state",
+                "release_migration",
+                "deploy_candidate",
+                "release_verify",
+                "rollback_candidate",
+                "release_cleanup",
+            }.issubset(deploy_ids)
+        )
+        self.assertTrue({"release_metrics", "release_failure"}.issubset(finalize_ids))
+
+        pr_document = yaml.load(_read(PR_CI), Loader=yaml.BaseLoader)
+        contract_steps = [
+            step for step in pr_document["jobs"]["validate"]["steps"] if step.get("id") == "release_safety_contract"
+        ]
+        self.assertEqual(len(contract_steps), 1)
+        self.assertEqual(contract_steps[0].get("name"), "Run release safety contract")
+        self.assertEqual(
+            contract_steps[0].get("run"),
+            ".github/scripts/release-safety-contract.sh",
+        )
+        self.assertNotIn("if", contract_steps[0])
+        self.assertNotIn("continue-on-error", contract_steps[0])
+
+        self.assertNotEqual(RELEASE_CONTRACT.stat().st_mode & 0o111, 0)
+        self.assertEqual(
+            _read(RELEASE_CONTRACT),
+            "#!/usr/bin/env bash\nset -euo pipefail\n\n"
+            'exec docker run --rm "${PR_IMAGE:?PR_IMAGE is required}" '
+            "python tests/test_ci_cd_contract.py\n",
+        )
+
+        complete_suite = [
+            step for step in pr_document["jobs"]["validate"]["steps"] if step.get("name") == "Run complete pytest suite"
+        ]
+        self.assertEqual(len(complete_suite), 1)
+        self.assertNotIn("id", complete_suite[0])
+
     def test_release_has_only_master_push_and_manual_triggers(self) -> None:
         text = _read(RELEASE)
         self.assertEqual(_trigger_names(text), {"push", "workflow_dispatch"})
@@ -281,19 +641,34 @@ class TestReleaseWorkflow(unittest.TestCase):
         self.assertNotRegex(_indented_block(text, "on", 0), r"(?m)^  pull_request:")
         self.assertRegex(text, r"(?m)^  cancel-in-progress: false\s*$")
 
+        manual = _indented_block(_indented_block(text, "on", 0), "workflow_dispatch", 2)
+        self.assertRegex(manual, r"(?m)^    inputs:\s*$")
+        self.assertRegex(manual, r"(?m)^      rollback_sha:\s*$")
+        self.assertRegex(manual, r"(?m)^      rollback_reason:\s*$")
+        self.assertGreaterEqual(manual.count("required: false"), 2)
+
     def test_publish_and_deploy_jobs_have_separate_dev_environment_boundaries(self) -> None:
         text = _read(RELEASE)
         publish = _job_block(text, "publish")
         deploy = _job_block(text, "deploy")
         self.assertRegex(publish, r"(?m)^    name: Publish master image on Windows runner\s*$")
-        self.assertRegex(publish, r"(?m)^    if: github\.ref == 'refs/heads/master'\s*$")
+        self.assertRegex(
+            publish,
+            r"(?m)^    if: \$\{\{ github\.ref == 'refs/heads/master' && "
+            r"\(github\.event_name != 'workflow_dispatch' \|\| github\.event\.inputs\.rollback_sha == ''\) \}\}\s*$",
+        )
         self.assertRegex(publish, r"(?m)^    runs-on: \[self-hosted, Windows, X64\]\s*$")
         self.assertRegex(
             publish,
             r"(?ms)^    environment:\s*\n      name: dev\s*\n      deployment: false\s*$",
         )
         self.assertRegex(deploy, r"(?m)^    needs: publish\s*$")
-        self.assertRegex(deploy, r"(?m)^    if: github\.ref == 'refs/heads/master'\s*$")
+        self.assertRegex(
+            deploy,
+            r"(?m)^    if: \$\{\{ always\(\) && github\.ref == 'refs/heads/master' && "
+            r"\(needs\.publish\.result == 'success' \|\| \(needs\.publish\.result == 'skipped' && "
+            r"github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.rollback_sha != ''\)\) \}\}\s*$",
+        )
         self.assertRegex(deploy, r"(?m)^    runs-on: \[self-hosted, Linux, X64\]\s*$")
         self.assertRegex(deploy, r"(?m)^    environment: dev\s*$")
 
@@ -342,9 +717,13 @@ class TestReleaseWorkflow(unittest.TestCase):
         resolve = _step_by_name(finalize, "Resolve final release status")
         self.assertIn("PUBLISH_RESULT: ${{ needs.publish.result }}", resolve)
         self.assertIn("DEPLOY_RESULT: ${{ needs.deploy.result }}", resolve)
+        self.assertIn("ROLLBACK_SHA: ${{ github.event.inputs.rollback_sha }}", resolve)
         self.assertRegex(
             resolve,
-            r'if \[ "\$PUBLISH_RESULT" = "success" \] && \[ "\$DEPLOY_RESULT" = "success" \]; then',
+            r'if \[ "\$DEPLOY_RESULT" = "success" \] && \(\s*'
+            r'\[ "\$PUBLISH_RESULT" = "success" \] \|\|\s*'
+            r'\{ \[ "\$PUBLISH_RESULT" = "skipped" \] && \[ -n "\$ROLLBACK_SHA" \]; \}\s*'
+            r"\); then",
         )
         self.assertIn("final_status=success", resolve)
         self.assertIn("final_status=failure", resolve)
@@ -359,10 +738,17 @@ class TestReleaseWorkflow(unittest.TestCase):
         self.assertRegex(metrics, r"(?m)^        timeout-minutes: 2\s*$")
         self.assertIn("${{ steps.final_status.outputs.status }}", metrics)
         self.assertIn("${{ steps.final_status.outputs.pipeline_started_at }}", metrics)
-        self.assertIn("${{ env.IMAGE_NAME }}:${{ github.sha }}", metrics)
-        self.assertGreaterEqual(metrics.count("${{ github.sha }}"), 2)
+        self.assertIn("${{ env.IMAGE_NAME }}:${{ env.DEPLOY_TARGET_SHA }}", metrics)
+        self.assertGreaterEqual(metrics.count("${{ env.DEPLOY_TARGET_SHA }}"), 2)
         self.assertIn("${{ steps.final_status.outputs.runner_name }}", metrics)
         self.assertIn("${{ steps.final_status.outputs.deploy_started_at }}", metrics)
+
+        fail_release = _step_by_name(finalize, "Fail unsuccessful release")
+        self.assertRegex(
+            fail_release,
+            r"(?m)^        if: \$\{\{ always\(\) && steps\.final_status\.outputs\.status != 'success' \}\}\s*$",
+        )
+        self.assertRegex(_normalized_step_run(fail_release), r"(?:^| )exit 1(?: |$)")
 
     def test_each_release_job_has_one_non_logout_login_action(self) -> None:
         text = _read(RELEASE)
@@ -441,16 +827,236 @@ class TestReleaseWorkflow(unittest.TestCase):
     def test_deploy_verifies_image_identity_and_readiness_inside_container(self) -> None:
         text = _read(RELEASE)
         deploy = _job_block(text, "deploy")
-        expected_image = "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        expected_image = "${{ env.IMAGE_NAME }}:${{ env.DEPLOY_TARGET_SHA }}"
         self.assertIn("docker inspect --format '{{.Config.Image}}' ai-audio-assistant-web-api", deploy)
+        self.assertIn("docker inspect --format '{{.Image}}'", deploy)
+        self.assertIn("docker image inspect --format '{{.Id}}'", deploy)
         self.assertIn(expected_image, deploy)
         self.assertRegex(deploy, r"actual_image.*!=.*expected_image")
+        self.assertRegex(deploy, r"actual_image_id.*!=.*expected_image_id")
         self.assertRegex(
             deploy,
             r"docker exec ai-audio-assistant-web-api[^\n]*(?:\\\n[^\n]*)*"
             r"http://127\.0\.0\.1:8000/api/v1/readiness",
         )
         self.assertNotIn("127.0.0.1:8088", text)
+
+    def test_manual_rollback_validates_an_immutable_target_and_skips_publish(self) -> None:
+        text = _read(RELEASE)
+        publish = _job_block(text, "publish")
+        deploy = _job_block(text, "deploy")
+        rollback_mode = "github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''"
+
+        self.assertIn("DEPLOY_TARGET_SHA: ${{ github.event.inputs.rollback_sha || github.sha }}", text)
+        self.assertIn("github.event.inputs.rollback_sha == ''", publish)
+        self.assertIn("needs.publish.result == 'success'", deploy)
+        self.assertIn("needs.publish.result == 'skipped'", deploy)
+        self.assertIn("github.event.inputs.rollback_sha != ''", deploy)
+        for step_name in (
+            "Verify Docker access",
+            "Build Docker image",
+            "Lint in image",
+            "Run tests",
+            "Login to ACR",
+            "Push Docker image",
+        ):
+            step = _step_by_name(publish, step_name)
+            self.assertIn(rollback_mode, step)
+
+        resolve = _step_by_name(deploy, "Resolve deployment target")
+        self.assertIn("ROLLBACK_SHA: ${{ github.event.inputs.rollback_sha }}", resolve)
+        self.assertIn("ROLLBACK_REASON: ${{ github.event.inputs.rollback_reason }}", resolve)
+        self.assertRegex(resolve, r"\^\[0-9a-f\]\{40\}\$")
+        self.assertIn("rollback reason is required", resolve)
+        self.assertIn("rollback reason requires rollback_sha", resolve)
+        self.assertIn("printf '手动回滚原因：%s\\n'", resolve)
+        self.assertNotIn("${{ github.event.inputs.rollback_reason }}", _normalized_step_run(resolve))
+
+        migration = _step_by_name(deploy, "Apply alembic migrations")
+        self.assertIn(rollback_mode, migration)
+        self.assertIn("${{ env.DEPLOY_TARGET_SHA }}", migration)
+        self.assertNotRegex(deploy, r"(?m)^\s*alembic\s+downgrade\b")
+
+    def test_deploy_captures_previous_release_before_migration_and_candidate(self) -> None:
+        deploy = _job_block(_read(RELEASE), "deploy")
+        steps = _step_blocks(deploy)
+        names = [_step_name(step) for step in steps]
+        capture = _step_by_name(deploy, "Capture rollback state")
+        candidate = _step_by_name(deploy, "Pull and restart api/worker/beat")
+
+        self.assertLess(names.index("Capture rollback state"), names.index("Apply alembic migrations"))
+        self.assertLess(names.index("Capture rollback state"), names.index("Pull and restart api/worker/beat"))
+        self.assertRegex(capture, r"(?m)^        id: capture_rollback_state\s*$")
+        for container in (
+            "ai-audio-assistant-web-api",
+            "ai-audio-assistant-web-worker",
+            "ai-audio-assistant-web-beat",
+        ):
+            self.assertIn(container, capture)
+        self.assertIn("{{.Config.Image}}", capture)
+        self.assertIn("{{.Image}}", capture)
+        self.assertIn("$GITHUB_OUTPUT", capture)
+        self.assertRegex(candidate, r"(?m)^        id: deploy_candidate\s*$")
+
+    def test_failed_candidate_rolls_back_and_rechecks_identity_and_readiness(self) -> None:
+        deploy = _job_block(_read(RELEASE), "deploy")
+        rollback = _step_by_name(deploy, "Rollback failed candidate")
+
+        self.assertRegex(
+            rollback,
+            r"(?m)^        if: \$\{\{ failure\(\) && "
+            r"steps\.capture_rollback_state\.outcome == 'success' && "
+            r"steps\.deploy_candidate\.outcome != 'skipped' \}\}\s*$",
+        )
+        self.assertNotIn("continue-on-error", rollback)
+        for output in (
+            "api_image",
+            "api_image_id",
+            "worker_image",
+            "worker_image_id",
+            "beat_image",
+            "beat_image_id",
+        ):
+            self.assertIn(f"steps.capture_rollback_state.outputs.{output}", rollback)
+        self.assertIn("docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d", rollback)
+        self.assertIn("{{.Config.Image}}", rollback)
+        self.assertIn("{{.Image}}", rollback)
+        self.assertRegex(
+            rollback,
+            r"docker exec ai-audio-assistant-web-api[^\n]*(?:\\\n[^\n]*)*"
+            r"http://127\.0\.0\.1:8000/api/v1/readiness",
+        )
+
+    def test_old_images_are_cleaned_only_after_successful_acceptance(self) -> None:
+        deploy = _job_block(_read(RELEASE), "deploy")
+        cleanup = _step_by_name(deploy, "Cleanup old images")
+        self.assertRegex(cleanup, r"(?m)^        if: success\(\)\s*$")
+        self.assertIn("${{ env.DEPLOY_TARGET_SHA }}", cleanup)
+
+    def test_release_safety_comes_from_structured_jobs_steps_and_active_commands(self) -> None:
+        self.assertEqual(_release_safety_violations(_workflow_document()), [])
+
+    def test_manual_rollback_requires_publish_to_be_skipped(self) -> None:
+        document = _workflow_document()
+        deploy = _structured_job(document, "deploy")
+        deploy["if"] = EXPECTED_DEPLOY_CONDITION.replace("needs.publish.result == 'skipped' && ", "")
+        self.assertIn("deploy condition", _release_safety_violations(document))
+
+    def test_success_comments_echo_and_tolerated_commands_cannot_fake_release_safety(self) -> None:
+        document = _workflow_document()
+        publish = _structured_job(document, "publish")
+        deploy = _structured_job(document, "deploy")
+        publish["if"] = f"{EXPECTED_PUBLISH_CONDITION} || success()"
+        deploy["if"] = f"{EXPECTED_DEPLOY_CONDITION} || success()"
+        deploy_steps = _structured_steps(document, "deploy")
+        finalize_steps = _structured_steps(document, "finalize")
+
+        def by_id(step_id: str) -> dict[str, object]:
+            matches = [step for step in deploy_steps if step.get("id") == step_id]
+            self.assertEqual(len(matches), 1)
+            return matches[0]
+
+        def by_name(steps: list[dict[str, object]], name: str) -> dict[str, object]:
+            matches = [step for step in steps if step.get("name") == name]
+            self.assertEqual(len(matches), 1)
+            return matches[0]
+
+        capture = by_id("capture_rollback_state")
+        candidate = by_id("deploy_candidate")
+        rollback = by_id("rollback_candidate")
+        migration = by_name(deploy_steps, "Apply alembic migrations")
+        verify = by_name(deploy_steps, "Verify readiness")
+        resolve_target = by_name(deploy_steps, "Resolve deployment target")
+        final_status = by_name(finalize_steps, "Resolve final release status")
+        fail_release = by_name(finalize_steps, "Fail unsuccessful release")
+        for step in (
+            capture,
+            candidate,
+            rollback,
+            migration,
+            verify,
+            resolve_target,
+            final_status,
+            fail_release,
+        ):
+            self.assertIsInstance(step.get("run"), str)
+
+        rollback["if"] = f"{EXPECTED_ROLLBACK_CONDITION} || success()"
+        capture["run"] = str(capture["run"]).replace(
+            'if [[ ! "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then',
+            '# if [[ ! "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then\n'
+            "echo 'if [[ ! \"${image_id}\" =~ ^sha256:[0-9a-f]{64}$ ]]; then'",
+        )
+        capture["run"] = str(capture["run"]).replace(
+            'if [ "${api_image}" != "${worker_image}" ] || [ "${api_image}" != "${beat_image}" ]; then',
+            'echo \'if [ "${api_image}" != "${worker_image}" ] || [ "${api_image}" != "${beat_image}" ]; then\'',
+        )
+        capture["run"] = str(capture["run"]).replace(
+            'if [ "${api_image_id}" != "${worker_image_id}" ] || [ "${api_image_id}" != "${beat_image_id}" ]; then',
+            'echo \'if [ "${api_image_id}" != "${worker_image_id}" ] || [ "${api_image_id}" != "${beat_image_id}" ]; then\'',
+        )
+        candidate["run"] = str(candidate["run"]).replace(
+            "docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d",
+            "docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d || true",
+        )
+        migration["run"] = str(migration["run"]).replace("alembic upgrade head", "alembic downgrade -1")
+        verify["run"] = str(verify["run"]).replace(
+            'if [ "${actual_image}" != "${expected_image}" ] || [ "${actual_image_id}" != "${expected_image_id}" ]; then',
+            'echo \'if [ "${actual_image}" != "${expected_image}" ] || [ "${actual_image_id}" != "${expected_image_id}" ]; then\'',
+        )
+        verify["run"] = str(verify["run"]).replace(")'; then", ")' || true; then", 1)
+        rollback["run"] = str(rollback["run"]).replace(
+            "docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d",
+            'echo "docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d"',
+        )
+        rollback["run"] = str(rollback["run"]).replace(")'; then", ")' || true; then", 1)
+        resolve_target["run"] = "echo unsafe"
+        final_status["run"] = 'echo "status=success" >> "$GITHUB_OUTPUT"'
+        fail_release["run"] = 'echo "exit 1"'
+
+        self.assertCountEqual(
+            [
+                violation
+                for violation in _release_safety_violations(document)
+                if violation
+                in {
+                    "publish condition",
+                    "deploy condition",
+                    "rollback condition",
+                    "capture id guard",
+                    "candidate command: docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d",
+                    "migration upgrade",
+                    "migration downgrade",
+                    'verify command: if [ "${actual_image}" != "${expected_image}" ] || [ "${actual_image_id}" != "${expected_image_id}" ]; then',
+                    "verify container readiness",
+                    "rollback command: docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d",
+                    "rollback container readiness",
+                    "resolve target commands",
+                    "finalize status commands",
+                    "capture image ref consistency",
+                    "capture image id consistency",
+                    "finalize failure command",
+                }
+            ],
+            [
+                "publish condition",
+                "deploy condition",
+                "rollback condition",
+                "capture id guard",
+                "candidate command: docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d",
+                "migration upgrade",
+                "migration downgrade",
+                'verify command: if [ "${actual_image}" != "${expected_image}" ] || [ "${actual_image_id}" != "${expected_image_id}" ]; then',
+                "verify container readiness",
+                "rollback command: docker compose -f docker-compose.ai-audio-web-ghcr.yml up -d",
+                "rollback container readiness",
+                "resolve target commands",
+                "finalize status commands",
+                "capture image ref consistency",
+                "capture image id consistency",
+                "finalize failure command",
+            ],
+        )
 
     def test_legacy_deploy_is_archived_not_enabled(self) -> None:
         self.assertFalse((WORKFLOWS / "deploy.yml").exists())
