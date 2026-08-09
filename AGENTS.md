@@ -39,6 +39,12 @@
 - PRs should include: concise summary, testing performed, and any migration or config notes.
 - For API changes, mention updated endpoints and any docs updates in `docs/`.
 
+## Code Review Rules
+
+- 只报告本 PR 引入且有具体触发路径和实际影响的正确性、安全、兼容或发布风险；核对失败/回滚路径与测试能否拒绝错误实现，忽略风格、既有问题和猜测。
+- 共享能力必须同时检查 FastAPI、Celery Worker 和 Beat；重点验证消息重投、幂等、队列路由、终态和失败恢复。
+- 保持统一响应信封与 `BusinessError` 语义；数据库变更必须保持 Alembic 单 head 和滚动发布兼容性。
+
 ## Configuration & Safety
 - Configure secrets and providers via `.env.example` keys; never commit real secrets.
 - Respect backend conventions (unified response helpers, `BusinessError`, DI with `Depends`).
