@@ -41,9 +41,20 @@
 
 ## Code Review Rules
 
-- 只报告本 PR 引入且有具体触发路径和实际影响的问题，尤其关注正确性、性能、安全、兼容、可维护性与发布风险；核对失败/回滚路径与测试能否拒绝错误实现，忽略风格、既有问题和无影响猜测。
-- 共享能力必须同时检查 FastAPI、Celery Worker 和 Beat；重点验证消息重投、幂等、队列路由、终态和失败恢复。
-- 保持统一响应信封与 `BusinessError` 语义；数据库变更必须保持 Alembic 单 head 和滚动发布兼容性。
+### 阻塞边界
+
+- 只提交 P0/P1 finding：问题必须由当前 PR 引入、存在当前可达的触发路径，并会造成明确的正确性、安全、权限、数据、兼容性或发布后果；评论必须说明触发条件、实际影响和最小安全路径，证据不足则不报告。
+- P2/P3、纯防御性加固、需要未来维护者同时修改规则与测试才成立的假设、测试还可增加更多 fixture、lint/格式/措辞/命名或无当前影响的重构默认不报告，也不得仅因建议有价值就阻塞合并。
+
+### 项目重点
+
+- 重点同时检查 FastAPI、Celery Worker 与 Beat 的消息重投、幂等、队列路由、终态和失败恢复，并保护统一响应信封、`BusinessError`、Alembic 单 head 与滚动发布兼容性；机械一致性继续交给确定性 CI。
+
+### Few-shot
+
+正例：Celery 任务在外部计费成功后重试，却没有幂等键，导致同一个音频任务被重复扣费并生成两份结果；这是当前可达的数据与成本后果，应提交 P1。
+
+反例：还可以为一个已覆盖的队列路由增加更多参数化 fixture，但当前重投、终态和失败恢复没有错误；这属于 P2/P3 加固，不提交 finding。
 
 ## Configuration & Safety
 - Configure secrets and providers via `.env.example` keys; never commit real secrets.
