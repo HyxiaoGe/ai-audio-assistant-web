@@ -55,8 +55,9 @@ async def get_available_models(request: Request) -> JSONResponse:
     """返回 LiteLLM 中已配置的业务模型别名。
 
     数据来源：
-    - LiteLLM Proxy 的 `/model/info`（模型清单 + metadata，同步拉）
-    - app.core.litellm_health 的内存缓存（健康状态，后台 5min 轮询）
+    - LiteLLM Proxy 的 `/model/info`（模型清单 + metadata，同步拉，只读元数据不产生费用）
+    - app.core.litellm_health 的健康缓存（默认关闭；开启后为后台轮询 + Redis 共享快照，
+      多 worker/多服务每周期最多一轮 `/health`——`/health` 会对每个模型打真实 completion）
     """
     base_url = settings.LITELLM_BASE_URL.rstrip("/")
     headers = {"Authorization": f"Bearer {settings.LITELLM_API_KEY}"} if settings.LITELLM_API_KEY else {}

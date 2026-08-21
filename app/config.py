@@ -124,6 +124,10 @@ class Settings(BaseSettings):
     LITELLM_API_KEY: str | None = Field(default=None)
     LITELLM_MODEL: str = Field(default="chat-default")
     LITELLM_MAX_TOKENS: int = Field(default=4096)
+    # 全模型 /health 探测开关（默认 false）：/health 会对每个模型打真实 completion
+    # 产生费用，且多 worker/多服务会重复探测。关闭时模型列表照常返回、健康状态回退
+    # unknown；开启时经 Redis round-claim 协调，每周期全集群最多一轮。
+    LITELLM_HEALTH_ENABLED: bool = Field(default=False)
     # 管理员成本看板用:读 LiteLLM 的 end-user spend(GET /customer/info)需要 master key(代理管理员)。
     # 不配则成本看板的「LLM($)」列优雅降级为「未配置」,不影响 ASR/配图(¥)两列。由 secret manager 注入。
     LITELLM_MASTER_KEY: str | None = Field(default=None)

@@ -287,6 +287,9 @@ jobs:
               # 与前端 NEXT_PUBLIC_AUTH_CLIENT_ID 对应；缺失时 Compose 在替换阶段直接失败，
               # 不能让 auth-client 退化为不校验 audience。
               AUTH_SERVICE_CLIENT_ID: ${AUTH_SERVICE_CLIENT_ID:?AUTH_SERVICE_CLIENT_ID must be set}
+              # LiteLLM 全模型 /health 探测默认关闭（每模型真实 completion 产生费用）。
+              # 开启：GitHub Actions secrets/vars 设 LITELLM_HEALTH_ENABLED=true（此值优先于 env_file）。
+              LITELLM_HEALTH_ENABLED: ${LITELLM_HEALTH_ENABLED:-false}
             restart: unless-stopped
             volumes:
               - ./data:/app/data
