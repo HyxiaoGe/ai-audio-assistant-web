@@ -141,7 +141,7 @@ pydantic 层所有项都有默认值;但当 `APP_ENV=production` 时,校验器�
 | 鉴权 | `AUTH_SERVICE_URL`、`AUTH_SERVICE_CLIENT_ID`、`AUTH_SERVICE_INTERNAL_URL`、`AUTH_SERVICE_JWKS_URL` | 强制校验 issuer、audience 和 `type=access`；JWKS 优先走内网基址避公网隧道尾延 |
 | 对象存储(四选一) | `MINIO_*` / `COS_*` / `OSS_*` / `TOS_*` | 选用哪家配哪组 |
 | ASR(三厂商) | `TENCENT_*` / `ALIYUN_*` / `VOLC_ASR_*` | 按凭证自动发现;另有引擎/说话人分离调参 |
-| 文本 LLM | `LITELLM_BASE_URL`、`LITELLM_API_KEY`、`LITELLM_MODEL` | 所有 chat/completion 统一经 LiteLLM Proxy |
+| 文本 LLM | `LITELLM_BASE_URL`、`LITELLM_API_KEY`、`LITELLM_MODEL`、`LITELLM_HEALTH_ENABLED` | 所有 chat/completion 统一经 LiteLLM Proxy；健康探测默认关闭（见下） |
 | 生图 | `IMAGE_SERVICE_BASE_URL`、`IMAGE_SERVICE_API_KEY` | 配图功能必需 |
 | 提示词 | `PROMPTHUB_BASE_URL`、`PROMPTHUB_API_KEY` | 摘要/配图提示词唯一活源,无本地回落;未配则相关任务运行时失败(非启动校验强制) |
 | 内容审核 | `MODERATION_*_MODE`、`MODERATION_API_KEY` | 三场景三态,**默认全 `off`**;`enforce` 时需 key |
@@ -149,6 +149,20 @@ pydantic 层所有项都有默认值;但当 `APP_ENV=production` 时,校验器�
 | 限流 / 开关 | `RATE_LIMIT_*`、`DEAD_TASK_SWEEP_ENABLED`、`CONFIG_CENTER_DB_ENABLED` | 各端点每分钟限流、巡检与配置中心开关 |
 
 > 注:部分变量(`JWT_SECRET`、`DB_POOL_SIZE`/`DB_MAX_OVERFLOW`、`COS_*`、`MODERATION_*`、`RATE_LIMIT_*` 等)未写入 `.env.example`,以 `app/config.py` 为准;`ENABLE_DOCS` 由 `app/main.py` 直接读取。
+
+### LiteLLM 健康探测（默认关闭，成本治理）
+
+模型选择器展示的健康状态来自 `app/core/litellm_health.py` 的后台缓存。LiteLLM
+`/health` 会对**每个模型**打真实 completion（qwen reasoning 模型每次数百
+reasoning token），多 worker（`--workers 2`）与 fusion-api 等共享同一 LiteLLM 的
+服务各自探测会重复烧钱（历史上 dev 约 432 次 Qwen 推理/天）。
+
+- `LITELLM_HEALTH_ENABLED=false`（**默认**）：startup 不启动 `/health` 后台循环，
+  模型列表照常返回，健康状态回退 `unknown`（前端按可用处理）。
+- `LITELLM_HEALTH_ENABLED=true`：开启后台探测，并用 Redis round-claim
+  （`litellm:health:probe:claim:v1`）+ 共享快照（`litellm:health:snapshot:v1`）
+  跨 worker/跨服务协调，每周期全集群**最多一轮** `/health`。
+- 与 fusion-api 的实现共用同一组 Redis key，改 key 必须两边同步。
 
 ## API 概览
 

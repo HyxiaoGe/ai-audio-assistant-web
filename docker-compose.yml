@@ -11,6 +11,8 @@ services:
     environment:
       TZ: UTC
       ENABLE_DOCS: "false"
+      # 全模型 /health 探测默认关闭（每模型真实 completion 产生费用）；开启会覆盖为 true
+      LITELLM_HEALTH_ENABLED: "false"
       DATABASE_URL: postgresql+asyncpg://user:pass@192.168.1.10:5432/audio_assistant
       REDIS_URL: redis://192.168.1.10:6379/0
       MINIO_ENDPOINT: 192.168.1.10:9000
