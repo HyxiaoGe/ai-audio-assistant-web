@@ -77,7 +77,9 @@ def _isolate(monkeypatch):
     litellm_health._refresh_task = None
     litellm_health._last_redis_sync_at = 0.0
     litellm_health._sync_redis_client = None
-    monkeypatch.delenv("LITELLM_HEALTH_ENABLED", raising=False)
+    # 开关走 pydantic Settings（.env / os.environ 都会进 settings，但 settings 是单例，
+    # 测试里直接 patch 字段，与「cp .env.example .env 可配置」的仓库约定一致）
+    monkeypatch.setattr(litellm_health.settings, "LITELLM_HEALTH_ENABLED", False)
     monkeypatch.delenv("LITELLM_HEALTH_INTERVAL_SECONDS", raising=False)
     monkeypatch.setattr(litellm_health, "_get_async_redis", lambda: None)
     monkeypatch.setattr(litellm_health, "_get_sync_redis", lambda: None)
@@ -97,7 +99,7 @@ def test_disabled_by_default():
 
 
 def test_enabled_flag_parsing(monkeypatch):
-    monkeypatch.setenv("LITELLM_HEALTH_ENABLED", "true")
+    monkeypatch.setattr(litellm_health.settings, "LITELLM_HEALTH_ENABLED", True)
     assert litellm_health._is_enabled() is True
 
 
@@ -111,7 +113,7 @@ async def test_start_disabled_does_not_start_loop():
 @pytest.mark.asyncio
 async def test_start_enabled_starts_loop(monkeypatch):
     """enabled 时启动一个后台循环。"""
-    monkeypatch.setenv("LITELLM_HEALTH_ENABLED", "true")
+    monkeypatch.setattr(litellm_health.settings, "LITELLM_HEALTH_ENABLED", True)
     await litellm_health.start()
     assert litellm_health._refresh_task is not None
     await litellm_health.stop()
@@ -237,7 +239,7 @@ async def test_probe_writes_shared_snapshot(monkeypatch):
 @pytest.mark.asyncio
 async def test_reader_syncs_from_shared_snapshot(monkeypatch):
     """另一个实例（worker/服务）启动后，能从 Redis 快照恢复健康状态。"""
-    monkeypatch.setenv("LITELLM_HEALTH_ENABLED", "true")
+    monkeypatch.setattr(litellm_health.settings, "LITELLM_HEALTH_ENABLED", True)
     fake = _FakeAsyncRedis()
     fake._data[litellm_health._SNAPSHOT_KEY] = json.dumps(
         {
@@ -286,3 +288,50 @@ async def test_probe_failure_keeps_stale_state(monkeypatch):
     await litellm_health._fetch_once()
     assert litellm_health.get_health("qwen3.7-max")["status"] == "healthy"
     assert litellm_health.has_data() is True
+
+
+@pytest.mark.asyncio
+async def test_snapshot_removes_aliases_absent_from_new_snapshot(monkeypatch):
+    """更新快照里消失的 alias 应收敛为 unknown，不残留本地旧值。"""
+    monkeypatch.setattr(litellm_health.settings, "LITELLM_HEALTH_ENABLED", True)
+    fake = _FakeAsyncRedis()
+    # 先同步一份含 qwen-vl-max 的旧快照（checked_at=456）
+    fake._data[litellm_health._SNAPSHOT_KEY] = json.dumps(
+        {
+            "checked_at": 456.0,
+            "by_alias": {
+                "qwen-vl-max": {"status": "unhealthy", "error": "服务商暂时不可用"},
+            },
+        }
+    )
+    monkeypatch.setattr(litellm_health, "_get_sync_redis", lambda: _SyncFake(fake))
+    assert litellm_health.get_health("qwen-vl-max")["status"] == "unhealthy"
+
+    # 新快照（checked_at=789）不再包含该 alias → 读取后收敛为 unknown
+    fake._data[litellm_health._SNAPSHOT_KEY] = json.dumps(
+        {
+            "checked_at": 789.0,
+            "by_alias": {"qwen3.7-max": {"status": "healthy", "error": None}},
+        }
+    )
+    litellm_health._last_redis_sync_at = 0.0
+    assert litellm_health.get_health("qwen-vl-max")["status"] == "unknown"
+    assert litellm_health.get_health("qwen3.7-max")["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_older_than_local_does_not_overwrite(monkeypatch):
+    """快照不比本地新时不覆盖：本地刚探测完成（快照写入未落盘）不能被旧快照回退。"""
+    monkeypatch.setattr(litellm_health.settings, "LITELLM_HEALTH_ENABLED", True)
+    fake = _FakeAsyncRedis()
+    with litellm_health._lock:
+        litellm_health._by_alias["qwen3.7-max"] = {"status": "healthy", "error": None}
+        litellm_health._last_checked_at = 1000.0
+    fake._data[litellm_health._SNAPSHOT_KEY] = json.dumps(
+        {
+            "checked_at": 456.0,
+            "by_alias": {"qwen3.7-max": {"status": "unhealthy", "error": "服务商暂时不可用"}},
+        }
+    )
+    monkeypatch.setattr(litellm_health, "_get_sync_redis", lambda: _SyncFake(fake))
+    assert litellm_health.get_health("qwen3.7-max")["status"] == "healthy"

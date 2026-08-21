@@ -86,16 +86,13 @@ _last_redis_sync_at: float = 0.0
 
 
 def _is_enabled() -> bool:
-    """总开关：LITELLM_HEALTH_ENABLED，默认 false。
+    """总开关：LITELLM_HEALTH_ENABLED（app/config.py Settings 字段），默认 false。
 
-    默认关闭是为了避免 dev 环境继续产生全模型探活费用；需要模型健康灰度时再显式开启。
+    走 pydantic Settings 读取，保证「cp .env.example .env 后改配置」这条仓库标准路径
+    生效（Settings 从 .env 加载，但不会回写 os.environ）。默认关闭是为了避免 dev
+    环境继续产生全模型探活费用；需要模型健康灰度时再显式开启。
     """
-    return os.environ.get("LITELLM_HEALTH_ENABLED", "false").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return settings.LITELLM_HEALTH_ENABLED
 
 
 def _resolve_refresh_interval() -> float:
@@ -310,17 +307,18 @@ def _sync_from_redis() -> None:
 
     with _lock:
         global _last_checked_at
-        merged: dict[str, dict[str, Any]] = {}
+        # 快照不晚于本地时保持本地（本地可能是刚完成的探测，快照写入可能还没落盘）；
+        # 否则以快照为准整体替换——audio 无 record_success，本地没有快照之外的
+        # 权威状态源，快照里消失的 alias 应收敛为 unknown，而不是残留旧值。
+        if checked_at <= _last_checked_at:
+            return
+        new_state: dict[str, dict[str, Any]] = {}
         for alias, entry in by_alias.items():
             if isinstance(entry, dict):
-                merged[alias] = {"status": entry.get("status", "unknown"), "error": entry.get("error")}
-        for alias, entry in _by_alias.items():
-            if alias not in merged:
-                merged[alias] = entry
+                new_state[alias] = {"status": entry.get("status", "unknown"), "error": entry.get("error")}
         _by_alias.clear()
-        _by_alias.update(merged)
-        if checked_at > _last_checked_at:
-            _last_checked_at = checked_at
+        _by_alias.update(new_state)
+        _last_checked_at = checked_at
 
 
 async def _refresh_loop() -> None:
