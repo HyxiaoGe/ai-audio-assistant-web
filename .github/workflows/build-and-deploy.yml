@@ -105,7 +105,10 @@ jobs:
       - name: Build Docker image
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''
         run: |
-          docker build --build-arg GIT_SHA=%GITHUB_SHA% -t "%IMAGE_NAME%:%GITHUB_SHA%" .
+          # --provenance=false：Docker 26+ 的 buildx 默认生成 provenance attestation
+          # （application/vnd.oci.empty.v1+json），阿里云 ACR 个人版不支持，推送报
+          # "unknown manifest class"，与 fusion-api 的 windows-build-and-test.ps1 对齐。
+          docker build --build-arg GIT_SHA=%GITHUB_SHA% --provenance=false -t "%IMAGE_NAME%:%GITHUB_SHA%" .
 
       - name: Lint in image
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_sha == ''
